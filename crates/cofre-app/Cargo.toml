@@ -9,4 +9,16 @@ name = "cofre"
 path = "src/main.rs"
 
 [dependencies]
+cofre-core = { version = "0.1.0", path = "../cofre-core" }
 gpui-kit = "0.9"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "time"] }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+gpui-kit = { version = "0.9", features = ["test-support"] }
+# O gpui-kit com `test-support` puxa o gpui-fast, que fixa versões exatas
+# destas dependências; fixá-las aqui faz o resolvedor do Cargo convergir.
+taffy = "=0.15.0"
+unicode-properties = "=0.1.3"

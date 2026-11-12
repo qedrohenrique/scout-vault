@@ -49,22 +49,36 @@ Meta: um teste de integração que loga no Vaultwarden local e lista os nomes do
 independente), um cofre sintético completo — KDFs, user key, RSA, organização, chave de item,
 PascalCase, item adulterado. `tests/fixtures.rs` precisa abrir tudo e bater cada valor.
 
-## Fase 2 — MVP de leitura (`cofre-app`)
+## Fase 2 — MVP de leitura (`cofre-app`) 🟡 (funcional e testado; falta revisão visual)
 Meta: usar no dia a dia para **consultar** senhas.
 
-- Tela de **configuração do servidor** (URL; padrão `https://vault.bitwarden.com`, ou self-hosted).
-- Tela de **login** (e-mail, senha, 2FA) e de **desbloqueio** (só senha mestra, reaproveitando o refresh token).
-- **Lista do cofre** virtualizada com busca instantânea (nome, usuário, URI), filtros por tipo/pasta/organização.
-- **Detalhe do item** com campos mascarados e botão de revelar.
-- **Copiar para a área de transferência** com limpeza automática após N segundos (`arboard`).
-- **Bloqueio automático** por inatividade e ao minimizar/suspender.
-- Async: rede/cripto em background (`tokio` ou o executor do GPUI), UI nunca trava — Argon2 é lento de propósito.
+- [x] **Login**: bitwarden.com / bitwarden.eu / servidor próprio, e-mail, senha mestra (com mostrar/ocultar)
+  - [x] 2FA por autenticador, e-mail (botão "enviar código") e YubiKey; "lembrar este dispositivo"
+  - [x] Código de verificação de novo dispositivo
+  - [x] Identidade do dispositivo, servidor e último e-mail salvos em `%APPDATA%\Cofre\settings.json` (nada secreto)
+- [x] **Desbloqueio offline** com a senha mestra (o sync cifrado fica em memória; o decifrado é descartado ao bloquear)
+- [x] **Lista virtualizada** com busca (nome, usuário, URI) e navegação por teclado (`List` do gpui-kit)
+- [x] **Filtros**: todos, favoritos, por tipo, por organização, por pasta, sem pasta, lixeira — com contagem
+- [x] **Detalhe do item**: todos os tipos, campos customizados, notas; segredos mascarados com mostrar/ocultar
+- [x] **Copiar** com limpeza automática da área de transferência em 30 s (só se o conteúdo não mudou; sobrevive ao bloqueio)
+- [x] **Bloqueio manual** e **automático** após 5 min sem teclado/mouse
+- [x] **Sincronizar** (renova o token e baixa de novo, mantendo o item aberto)
+- [x] Rede e KDF fora da thread de UI (Tokio + `spawn_blocking`); a UI nunca trava
+- [x] **Testes de UI headless** (`crates/cofre-app/tests/ui.rs`): validação do login, filtros, busca, revelar,
+      copiar + limpeza, bloquear, senha errada/certa, bloqueio por inatividade; e login completo pela UI
+      contra o Vaultwarden local (`--ignored`)
+- [ ] **Revisão visual em janela real** — os testes não renderizam pixels (o Windows não tem renderizador headless no GPUI)
+- [ ] Sessão expirada no "Sincronizar" → voltar para o login automaticamente
+- [ ] Atalhos: `Ctrl+L` bloquear, `Ctrl+F` focar a busca, `Ctrl+C` copiar senha do item selecionado
 
 ## Fase 3 — Persistência segura e conveniência
+- **Re-prompt** da senha mestra em itens marcados (hoje só mostra um aviso).
+- Excluir o que é copiado do **histórico da área de transferência do Windows** (Win+V) e da nuvem.
+- Bloquear ao **suspender/bloquear a sessão do Windows** e ao minimizar (opcional).
 - **Refresh token** no cofre do SO via `keyring` (Windows Credential Manager).
 - **Cache local cifrado** do sync (os dados já vêm cifrados do servidor — guardar o JSON cru, decifrar só na memória) → abrir offline.
 - **Sync incremental**/periódico e via notificações (`/notifications/hub`, SignalR) — opcional.
-- **Gerador de TOTP** para itens com chave de autenticador (`totp-rs`), com contador visual.
+- **Código TOTP ao vivo** para itens com chave de autenticador (`totp-rs`), com contador visual (hoje o detalhe mostra só a chave).
 - **Gerador de senhas e passphrases**.
 - **Atalho global** (ex.: `Ctrl+Shift+L`) abrindo uma janela de busca rápida estilo launcher.
 - Desbloqueio com **Windows Hello** (pesquisa: chave protegida por TPM/DPAPI).

@@ -1,0 +1,181 @@
+//! Tela de desbloqueio: o cofre continua sincronizado (cifrado) em memória;
+//! basta a senha mestra para abri-lo de novo, sem rede.
+
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{button::*, *};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+use zeroize::Zeroizing;
+
+use crate::flow::{self, Handoff, Session, Unlocked};
+use crate::io;
+
+pub enum UnlockEvent {
+    Unlocked(Handoff),
+    LogOut,
+}
+
+pub struct UnlockView {
+    session: Session,
+    password: Entity<InputState>,
+    busy: bool,
+    error: Option<SharedString>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl EventEmitter<UnlockEvent> for UnlockView {}
+
+impl UnlockView {
+    pub fn new(session: Session, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("Senha mestra")
+        });
+        let sub = cx.subscribe_in(
+            &password,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.submit(window, cx);
+                }
+            },
+        );
+        Self {
+            session,
+            password,
+            busy: false,
+            error: None,
+            _subscriptions: vec![sub],
+        }
+    }
+
+    pub fn error(&self) -> Option<&SharedString> {
+        self.error.as_ref()
+    }
+
+    pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let password = Zeroizing::new(self.password.read(cx).value().to_string());
+        if password.is_empty() {
+            self.error = Some("Informe a senha mestra.".into());
+            cx.notify();
+            return;
+        }
+        self.password
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+
+        let session = self.session.clone();
+        cx.spawn(async move |this, cx| {
+            let result = io::blocking(move || {
+                flow::unlock(&session, &password).map(|(keys, vault)| Unlocked {
+                    session,
+                    keys,
+                    vault,
+                })
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match result {
+                    Ok(unlocked) => {
+                        cx.emit(UnlockEvent::Unlocked(Handoff::new(Box::new(unlocked))))
+                    }
+                    Err(e) => this.error = Some(e.into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+impl Render for UnlockView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status: SharedString = match (&self.error, self.busy) {
+            (Some(e), _) => e.clone(),
+            (None, true) => "Abrindo o cofre…".into(),
+            (None, false) => "".into(),
+        };
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .child(
+                v_flex()
+                    .w(px(380.))
+                    .gap_4()
+                    .p_6()
+                    .rounded(cx.theme().radius_lg)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().secondary)
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Icon::new(gpui_kit::assets::IconName::Lock))
+                            .child(div().text_lg().font_semibold().child("Cofre bloqueado")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.session.email.clone()),
+                    )
+                    .child(
+                        Input::new(&self.password)
+                            .id("unlock-password")
+                            .mask_toggle()
+                            .disabled(self.busy),
+                    )
+                    .child(
+                        div()
+                            .id("unlock-status")
+                            .role(Role::Status)
+                            .test_support()
+                            .aria_label(status.clone())
+                            .min_h(px(20.))
+                            .text_sm()
+                            .text_color(if self.error.is_some() {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(status),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("unlock-logout")
+                                    .ghost()
+                                    .label("Sair da conta")
+                                    .disabled(self.busy)
+                                    .on_click(
+                                        cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::LogOut)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("unlock-submit")
+                                    .primary()
+                                    .label("Desbloquear")
+                                    .loading(self.busy)
+                                    .disabled(self.busy)
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.submit(window, cx)),
+                                    ),
+                            ),
+                    ),
+            )
+    }
+}
