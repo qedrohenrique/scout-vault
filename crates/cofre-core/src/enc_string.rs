@@ -152,9 +152,6 @@ mod tests {
             STANDARD.encode(b"x"),
             STANDARD.encode([0u8; 32])
         );
-        assert_eq!(
-            short_iv.parse::<EncString>(),
-            Err(ParseError::Length("iv"))
-        );
+        assert_eq!(short_iv.parse::<EncString>(), Err(ParseError::Length("iv")));
     }
 }

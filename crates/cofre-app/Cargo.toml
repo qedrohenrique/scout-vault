@@ -9,5 +9,4 @@ name = "cofre"
 path = "src/main.rs"
 
 [dependencies]
-cofre-core.workspace = true
 gpui-kit = "0.9"
