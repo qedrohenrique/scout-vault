@@ -26,10 +26,23 @@ cargo run                  # abre o app
 ```
 
 ## Servidor de desenvolvimento
+Vaultwarden local em `http://localhost:8000`. Funciona com Docker Desktop ou com o Docker
+instalado dentro do WSL (sem Docker Desktop):
 ```bash
-docker compose -f dev/docker-compose.yml up -d
+wsl -d Ubuntu -u root -- bash -c "service docker start; cd /mnt/d/Repositories/cofre/dev && docker compose up -d"
 ```
-Abra http://localhost:8000, crie uma conta de teste e use `http://localhost:8000` como URL do servidor no app.
+O WSL desliga quando fica ocioso; mantenha um terminal do WSL aberto enquanto testa.
+
+Crie uma conta de teste já populada (sem navegador; credenciais vão para `dev/test-account.env`, ignorado pelo git):
+```bash
+python tools/dev_seed.py
+```
+
+Teste ao vivo (login, sync e decifragem):
+```bash
+set -a; . dev/test-account.env; set +a
+cargo test -p cofre-core --test live_server -- --ignored --nocapture
+```
 
 ## Roadmap
 Veja [docs/ROADMAP.md](docs/ROADMAP.md).

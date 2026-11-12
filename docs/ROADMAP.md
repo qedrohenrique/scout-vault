@@ -21,7 +21,7 @@ o desktop Electron no uso diário — buscar, copiar e editar itens do cofre.
 - [x] CI (Windows): fmt, clippy, test
 - [x] Instalar toolchain e validar `cargo run` localmente
 
-## Fase 1 — Núcleo: login e leitura do cofre (`cofre-core`) 🟡 (código pronto, falta validar em servidor real)
+## Fase 1 — Núcleo: login e leitura do cofre (`cofre-core`) ✅ (validado no Vaultwarden local)
 Meta: um teste de integração que loga no Vaultwarden local e lista os nomes dos itens decifrados.
 
 - [x] **Prelogin** — `POST /identity/accounts/prelogin` → `Kdf` (`api::Client::prelogin`)
@@ -41,8 +41,9 @@ Meta: um teste de integração que loga no Vaultwarden local e lista os nomes do
 - [x] **Modelo decifrado** — login, nota, cartão, identidade, chave SSH, campos customizados, lixeira, busca
 - [x] Falhas isoladas: item ou organização corrompidos não derrubam o resto do cofre
 - [x] Segredos em `Secret`/`Zeroizing`, `Debug` sem material de chave
-- [ ] **Validar contra o Vaultwarden local** (`tests/live_server.rs`) — precisa do Docker
-- [ ] Validar contra o Bitwarden oficial com uma conta de teste (2FA, novo dispositivo)
+- [x] **Validar contra o Vaultwarden local** (`tests/live_server.rs` + `tools/dev_seed.py`) — login, refresh, sync e 4 itens decifrados sem erro
+- [ ] Validar contra o Bitwarden oficial com uma conta de teste (2FA, novo dispositivo — o Vaultwarden não implementa essa verificação)
+- [ ] Novos tipos de item do servidor: 6 = conta bancária, 7 = CNH, 8 = passaporte (hoje aparecem como `Unknown`)
 
 **Testes:** `tools/gen_fixtures.py` gera, com a biblioteca `cryptography` do Python (implementação
 independente), um cofre sintético completo — KDFs, user key, RSA, organização, chave de item,
