@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cofre_app::app::{CofreApp, ScreenKind};
+use cofre_app::appearance::{Accent, Appearance, ThemeChoice};
 use cofre_app::clipboard::CLEAR_AFTER;
 use cofre_app::flow::{Session, Unlocked};
 use cofre_app::settings::SettingsStore;
@@ -13,6 +14,7 @@ use cofre_core::crypto::MasterKey;
 use cofre_core::sync::SyncResponse;
 use cofre_core::vault::{Keys, Vault};
 use cofre_core::Kdf;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     px, size, AnyWindowHandle, AppContext, Bounds, Entity, TestAppContext, WindowBounds,
@@ -359,4 +361,95 @@ fn logs_in_through_the_ui_against_a_real_server(cx: &mut TestAppContext) {
             .collect()
     });
     assert!(!names.is_empty(), "o cofre de teste deveria ter itens");
+}
+
+/// A cor do tema bate com a amostra (tolerância para arredondamento HSL).
+fn same_color(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> bool {
+    let (a, b) = (a.to_rgb(), b.to_rgb());
+    (a.r - b.r).abs() < 0.01 && (a.g - b.g).abs() < 0.01 && (a.b - b.b).abs() < 0.01
+}
+
+#[gpui_kit::test]
+fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+
+    // Começa com a cor padrão (jade) aplicada.
+    cx.update(|cx| {
+        let dark = cx.theme().is_dark();
+        assert!(same_color(cx.theme().primary, Accent::Jade.swatch(dark)));
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    // O pedido sai por evento, tratado depois do clique.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("settings-close").is_some());
+
+        window.click("theme-dark", cx);
+        assert!(cx.theme().is_dark());
+        window.click("accent-coral", cx);
+        assert!(same_color(cx.theme().primary, Accent::Coral.swatch(true)));
+
+        window.click("theme-light", cx);
+        assert!(!cx.theme().is_dark());
+        // A cor escolhida sobrevive à troca de modo.
+        assert!(same_color(cx.theme().primary, Accent::Coral.swatch(false)));
+
+        window.click("text-large", cx);
+        assert_eq!(cx.theme().font_size, gpui_kit::px(17.));
+        window.click("corners-round", cx);
+        assert_eq!(cx.theme().radius, gpui_kit::px(10.));
+    })
+    .unwrap();
+
+    cx.update(|cx| {
+        let view = app.read(cx).settings_view().unwrap();
+        assert_eq!(
+            view.read(cx).appearance(),
+            Appearance {
+                theme: ThemeChoice::Light,
+                accent: Accent::Coral,
+                text_size: cofre_app::appearance::TextSize::Large,
+                corners: cofre_app::appearance::Corners::Round,
+            }
+        );
+    });
+
+    // Fechar volta para o cofre, que continuou aberto por baixo.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("settings-close", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("settings-close").is_none());
+        assert!(window.try_find("vault-lock").is_some());
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(app.read(cx).screen_kind(), ScreenKind::Vault));
+}
+
+#[gpui_kit::test]
+fn appearance_is_saved_and_restored(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("cofre-ui-appearance-{}", std::process::id()));
+    let store = SettingsStore::at(dir.join("settings.json"));
+    let mut settings = store.load();
+    settings.appearance.theme = ThemeChoice::Dark;
+    settings.appearance.accent = Accent::Indigo;
+    store.save(&settings);
+
+    cx.update(gpui_kit::init);
+    cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |window, cx| {
+            cx.new(|cx| CofreApp::new(store.clone(), window, cx))
+        })
+        .unwrap();
+        assert!(cx.theme().is_dark());
+        assert!(same_color(cx.theme().primary, Accent::Indigo.swatch(true)));
+    });
+    let _ = std::fs::remove_dir_all(dir);
 }

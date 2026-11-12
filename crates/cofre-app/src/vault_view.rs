@@ -11,13 +11,15 @@ use gpui_kit::component::{button::*, *};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::clipboard;
 use crate::flow::{self, Session, Unlocked};
 use crate::item_list::{kind_icon, Filter, ItemList, KindFilter};
+use crate::{appearance, clipboard, ui};
+use gpui_kit::assets::IconName;
 
 pub enum VaultEvent {
     /// Pede para bloquear; leva a sessão (com tokens possivelmente renovados).
     Lock(Session),
+    OpenSettings,
 }
 
 /// Um campo exibível do item selecionado.
@@ -431,118 +433,176 @@ impl VaultView {
         .detach();
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = self.list.read(cx).delegate();
-        let current = list.filter().clone();
+    fn filter_title(&self, filter: &Filter, cx: &App) -> String {
+        let vault = self.list.read(cx).delegate().vault();
+        match filter {
+            Filter::All => "Todos os itens".into(),
+            Filter::Favorites => "Favoritos".into(),
+            Filter::Kind(k) => k.label().into(),
+            Filter::Organization(id) => vault
+                .organizations
+                .iter()
+                .find(|o| &o.id == id)
+                .map(|o| o.name.clone())
+                .unwrap_or_default(),
+            Filter::Folder(Some(id)) => vault
+                .folders
+                .iter()
+                .find(|f| &f.id == id)
+                .map(|f| f.name.clone())
+                .unwrap_or_default(),
+            Filter::Folder(None) => "Sem pasta".into(),
+            Filter::Trash => "Lixeira".into(),
+        }
+    }
 
-        let mut entries: Vec<(SharedString, Filter, gpui_kit::assets::IconName, String)> = vec![
-            (
+    fn filter_row(
+        &self,
+        id: SharedString,
+        filter: Filter,
+        icon: IconName,
+        label: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let list = self.list.read(cx).delegate();
+        let count = list.count(&filter);
+        let selected = *list.filter() == filter;
+        let accent = appearance::accent(cx);
+        let tint = appearance::accent_tint(cx, 0.13);
+        let theme = cx.theme();
+        let (fg, muted, hover) = (
+            theme.foreground.opacity(0.85),
+            theme.muted_foreground,
+            theme.secondary_hover,
+        );
+        h_flex()
+            .id(id)
+            .test_support()
+            .role(Role::Button)
+            .aria_label(SharedString::from(label.clone()))
+            .w_full()
+            .gap_2p5()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .text_sm()
+            .cursor_pointer()
+            .when(selected, |el| el.bg(tint).text_color(accent).font_medium())
+            .when(!selected, |el| el.text_color(fg).hover(|el| el.bg(hover)))
+            .child(
+                Icon::new(icon)
+                    .small()
+                    .when(!selected, |i| i.text_color(muted)),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .child(
+                div()
+                    .text_xs()
+                    .when(!selected, |d| d.text_color(muted))
+                    .child(count.to_string()),
+            )
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.set_filter(filter.clone(), window, cx)),
+            )
+    }
+
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let vault = self.list.read(cx).delegate().vault();
+        let orgs: Vec<_> = vault
+            .organizations
+            .iter()
+            .map(|o| (o.id.clone(), o.name.clone()))
+            .collect();
+        let folders: Vec<_> = vault
+            .folders
+            .iter()
+            .map(|f| (f.id.clone(), f.name.clone()))
+            .collect();
+
+        let mut nav = v_flex()
+            .id("vault-filters")
+            .flex_1()
+            .min_h_0()
+            .px_2()
+            .gap_px()
+            .overflow_y_scroll()
+            .child(self.filter_row(
                 "filter-all".into(),
                 Filter::All,
-                gpui_kit::assets::IconName::LayoutGrid,
+                IconName::LayoutGrid,
                 "Todos os itens".into(),
-            ),
-            (
+                cx,
+            ))
+            .child(self.filter_row(
                 "filter-favorites".into(),
                 Filter::Favorites,
-                gpui_kit::assets::IconName::Star,
+                IconName::Star,
                 "Favoritos".into(),
-            ),
-        ];
+                cx,
+            ))
+            .child(ui::section_label("Tipos", cx));
         for k in KindFilter::ALL {
             let icon = match k {
-                KindFilter::Login => gpui_kit::assets::IconName::Globe,
-                KindFilter::Card => gpui_kit::assets::IconName::CreditCard,
-                KindFilter::Identity => gpui_kit::assets::IconName::IdCard,
-                KindFilter::Note => gpui_kit::assets::IconName::StickyNote,
-                KindFilter::SshKey => gpui_kit::assets::IconName::KeyRound,
+                KindFilter::Login => IconName::Globe,
+                KindFilter::Card => IconName::CreditCard,
+                KindFilter::Identity => IconName::IdCard,
+                KindFilter::Note => IconName::StickyNote,
+                KindFilter::SshKey => IconName::KeyRound,
             };
-            entries.push((
+            nav = nav.child(self.filter_row(
                 format!("filter-{}", k.id()).into(),
                 Filter::Kind(k),
                 icon,
                 k.label().into(),
+                cx,
             ));
         }
-        let vault = list.vault();
-        for org in &vault.organizations {
-            entries.push((
-                format!("filter-org-{}", org.id).into(),
-                Filter::Organization(org.id.clone()),
-                gpui_kit::assets::IconName::Building2,
-                org.name.clone(),
+        if !orgs.is_empty() {
+            nav = nav.child(ui::section_label("Organizações", cx));
+            for (id, name) in orgs {
+                nav = nav.child(self.filter_row(
+                    format!("filter-org-{id}").into(),
+                    Filter::Organization(id),
+                    IconName::Building2,
+                    name,
+                    cx,
+                ));
+            }
+        }
+        nav = nav.child(ui::section_label("Pastas", cx));
+        for (id, name) in folders {
+            nav = nav.child(self.filter_row(
+                format!("filter-folder-{id}").into(),
+                Filter::Folder(Some(id)),
+                IconName::Folder,
+                name,
+                cx,
             ));
         }
-        for folder in &vault.folders {
-            entries.push((
-                format!("filter-folder-{}", folder.id).into(),
-                Filter::Folder(Some(folder.id.clone())),
-                gpui_kit::assets::IconName::Folder,
-                folder.name.clone(),
-            ));
-        }
-        entries.push((
-            "filter-no-folder".into(),
-            Filter::Folder(None),
-            gpui_kit::assets::IconName::FolderOpen,
-            "Sem pasta".into(),
-        ));
-        entries.push((
-            "filter-trash".into(),
-            Filter::Trash,
-            gpui_kit::assets::IconName::Trash,
-            "Lixeira".into(),
-        ));
+        nav = nav
+            .child(self.filter_row(
+                "filter-no-folder".into(),
+                Filter::Folder(None),
+                IconName::FolderOpen,
+                "Sem pasta".into(),
+                cx,
+            ))
+            .child(div().h_3())
+            .child(self.filter_row(
+                "filter-trash".into(),
+                Filter::Trash,
+                IconName::Trash,
+                "Lixeira".into(),
+                cx,
+            ))
+            .child(div().h_3());
 
-        let rows: Vec<_> = entries
-            .into_iter()
-            .map(|(id, filter, icon, label)| {
-                let count = list.count(&filter);
-                let selected = filter == current;
-                // O Button centraliza o conteúdo; um filho de largura total
-                // alinha ícone e nome à esquerda e a contagem à direita.
-                Button::new(id)
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .selected(selected)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(Icon::new(icon).small())
-                            .child(div().flex_1().min_w_0().truncate().child(label))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(count.to_string()),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_filter(filter.clone(), window, cx)
-                    }))
-            })
-            .collect();
-
-        v_flex()
-            .w(px(230.))
-            .h_full()
-            .flex_shrink_0()
-            .p_2()
-            .gap_1()
-            .border_r_1()
+        let footer = v_flex()
+            .gap_2()
+            .px_3()
+            .py_3()
+            .border_t_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().sidebar)
-            .child(
-                v_flex()
-                    .id("vault-filters")
-                    .flex_1()
-                    .min_h_0()
-                    .gap_0p5()
-                    .overflow_y_scroll()
-                    .children(rows),
-            )
             .child(
                 div()
                     .id("vault-status")
@@ -557,6 +617,15 @@ impl VaultView {
                 h_flex()
                     .gap_1()
                     .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.session.email.clone()),
+                    )
+                    .child(
                         Button::new("vault-sync")
                             .ghost()
                             .small()
@@ -567,14 +636,73 @@ impl VaultView {
                             .on_click(cx.listener(|this, _, _, cx| this.sync(cx))),
                     )
                     .child(
+                        Button::new("vault-settings")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Settings)
+                            .tooltip("Configurações (Ctrl+,)")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings))),
+                    )
+                    .child(
                         Button::new("vault-lock")
                             .ghost()
                             .small()
-                            .icon(gpui_kit::assets::IconName::Lock)
-                            .label("Bloquear")
+                            .icon(IconName::Lock)
+                            .tooltip("Bloquear")
                             .on_click(cx.listener(|this, _, _, cx| this.request_lock(cx))),
                     ),
+            );
+
+        v_flex()
+            .w(px(240.))
+            .h_full()
+            .flex_shrink_0()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().sidebar)
+            .child(div().px_4().pt_4().pb_3().child(ui::wordmark(cx)))
+            .child(nav)
+            .child(footer)
+    }
+
+    fn render_list_column(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let list = self.list.read(cx).delegate();
+        let filter = list.filter().clone();
+        let count = list.count(&filter);
+        let title = self.filter_title(&filter, cx);
+        v_flex()
+            .w(px(330.))
+            .h_full()
+            .flex_shrink_0()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .px_4()
+                    .pt_4()
+                    .pb_1()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_lg()
+                            .font_semibold()
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if count == 1 {
+                                "1 item".to_owned()
+                            } else {
+                                format!("{count} itens")
+                            }),
+                    ),
             )
+            .child(div().flex_1().min_h_0().child(List::new(&self.list)))
     }
 
     fn render_detail(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -583,8 +711,20 @@ impl VaultView {
                 .flex_1()
                 .items_center()
                 .justify_center()
+                .gap_3()
                 .text_color(cx.theme().muted_foreground)
-                .child("Selecione um item.")
+                .child(ui::icon_chip(IconName::LockKeyhole, px(48.), false, cx))
+                .child(
+                    div()
+                        .text_sm()
+                        .child("Selecione um item para ver os detalhes."),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground.opacity(0.75))
+                        .child("Use as setas na lista; Enter abre o item."),
+                )
                 .into_any_element();
         };
 
@@ -594,39 +734,55 @@ impl VaultView {
                 .organizations
                 .iter()
                 .find(|o| &o.id == org)
-                .map(|o| o.name.clone()),
+                .map(|o| (IconName::Building2, o.name.clone())),
             (None, Some(folder)) => vault
                 .folders
                 .iter()
                 .find(|f| &f.id == folder)
-                .map(|f| f.name.clone()),
+                .map(|f| (IconName::Folder, f.name.clone())),
             (None, None) => None,
         };
 
         let header = h_flex()
-            .gap_3()
-            .child(Icon::new(kind_icon(&item.kind)).large())
+            .gap_4()
+            .child(ui::icon_chip(kind_icon(&item.kind), px(48.), true, cx))
             .child(
                 v_flex()
                     .min_w_0()
+                    .flex_1()
+                    .gap_0p5()
                     .child(
-                        div()
-                            .id("detail-name")
-                            .test_support()
-                            .aria_label(SharedString::from(item.name.clone()))
-                            .text_xl()
-                            .font_semibold()
-                            .truncate()
-                            .child(item.name.clone()),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("detail-name")
+                                    .test_support()
+                                    .aria_label(SharedString::from(item.name.clone()))
+                                    .text_2xl()
+                                    .font_semibold()
+                                    .truncate()
+                                    .child(item.name.clone()),
+                            )
+                            .when(item.favorite, |el| {
+                                el.child(
+                                    Icon::new(IconName::StarFill)
+                                        .small()
+                                        .text_color(appearance::accent(cx)),
+                                )
+                            }),
                     )
-                    .children(place.map(|p| {
-                        div()
+                    .children(place.map(|(icon, name)| {
+                        h_flex()
+                            .gap_1p5()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(p)
+                            .child(Icon::new(icon).xsmall())
+                            .child(name)
                     })),
             );
 
+        let has_badges = item.deleted || item.reprompt || matches!(item.kind, ItemKind::Unknown(_));
         let mut badges = h_flex().gap_2();
         if item.deleted {
             badges = badges.child(Tag::danger().small().child("Na lixeira"));
@@ -646,7 +802,9 @@ impl VaultView {
             );
         }
 
-        let rows = field_rows(item).into_iter().map(|row| {
+        let rows = field_rows(item);
+        let total = rows.len();
+        let rows = rows.into_iter().enumerate().map(|(ix, row)| {
             let revealed = !row.secret || self.revealed.contains(&row.key);
             let shown: SharedString = if revealed {
                 row.value.to_string().into()
@@ -655,73 +813,90 @@ impl VaultView {
             };
             let copy_key = row.key.clone();
             let reveal_key = row.key.clone();
-            v_flex()
-                .gap_1()
-                .py_2()
-                .border_b_1()
-                .border_color(cx.theme().border)
+            h_flex()
+                .gap_3()
+                .px_4()
+                .py_3()
+                .when(ix + 1 < total, |el| {
+                    el.border_b_1().border_color(cx.theme().border)
+                })
                 .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(row.label.clone()),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_start()
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(row.label.clone()),
+                        )
                         .child(
                             div()
                                 .id(SharedString::from(format!("value-{}", row.key)))
                                 .test_support()
                                 .aria_label(shown.clone())
-                                .flex_1()
                                 .min_w_0()
-                                .font_family(if row.secret { "monospace" } else { "" })
+                                .when(row.secret, |d| {
+                                    d.font_family(cx.theme().mono_font_family.clone())
+                                })
                                 .when(!row.multiline, |d| d.truncate())
                                 .when(row.multiline && revealed, |d| d.whitespace_normal())
                                 .child(shown),
-                        )
-                        .when(row.secret, |el| {
-                            el.child(
-                                Button::new(SharedString::from(format!("reveal-{}", row.key)))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(if revealed {
-                                        IconName::EyeOff
-                                    } else {
-                                        IconName::Eye
-                                    })
-                                    .tooltip(if revealed { "Ocultar" } else { "Mostrar" })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.toggle_reveal(&reveal_key, cx)
-                                    })),
-                            )
-                        })
-                        .child(
-                            Button::new(SharedString::from(format!("copy-{}", row.key)))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Copy)
-                                .tooltip("Copiar")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.copy_field(&copy_key, window, cx)
-                                })),
                         ),
                 )
+                .when(row.secret, |el| {
+                    el.child(
+                        Button::new(SharedString::from(format!("reveal-{}", row.key)))
+                            .ghost()
+                            .small()
+                            .icon(if revealed {
+                                IconName::EyeOff
+                            } else {
+                                IconName::Eye
+                            })
+                            .tooltip(if revealed { "Ocultar" } else { "Mostrar" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_reveal(&reveal_key, cx)
+                            })),
+                    )
+                })
+                .child(
+                    Button::new(SharedString::from(format!("copy-{}", row.key)))
+                        .ghost()
+                        .small()
+                        .icon(IconName::Copy)
+                        .tooltip("Copiar")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.copy_field(&copy_key, window, cx)
+                        })),
+                )
         });
+
+        let fields = v_flex()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().popover)
+            .children(rows);
 
         v_flex()
             .id("vault-detail")
             .flex_1()
             .min_w_0()
             .h_full()
-            .p_6()
-            .gap_4()
             .overflow_y_scroll()
-            .child(header)
-            .child(badges)
-            .child(v_flex().children(rows))
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(px(720.))
+                    .px_8()
+                    .py_8()
+                    .gap_6()
+                    .child(header)
+                    .when(has_badges, |el| el.child(badges))
+                    .when(total > 0, |el| el.child(fields)),
+            )
             .into_any_element()
     }
 }
@@ -734,15 +909,7 @@ impl Render for VaultView {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.render_sidebar(cx))
-            .child(
-                v_flex()
-                    .w(px(340.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .border_r_1()
-                    .border_color(cx.theme().border)
-                    .child(List::new(&self.list)),
-            )
+            .child(self.render_list_column(cx))
             .child(self.render_detail(cx))
     }
 }

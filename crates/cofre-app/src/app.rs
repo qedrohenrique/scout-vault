@@ -5,9 +5,11 @@ use std::time::{Duration, Instant};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use crate::appearance::{self, ThemeChoice};
 use crate::flow::{Handoff, Session, Unlocked};
 use crate::login::{LoginEvent, LoginView};
 use crate::settings::SettingsStore;
+use crate::settings_view::{SettingsEvent, SettingsView};
 use crate::unlock::{UnlockEvent, UnlockView};
 use crate::vault_view::{VaultEvent, VaultView};
 
@@ -32,12 +34,16 @@ pub struct CofreApp {
     screen: Screen,
     last_activity: Instant,
     auto_lock_after: Duration,
+    /// Configurações abertas por cima da tela atual (que segue viva por baixo).
+    settings: Option<(Entity<SettingsView>, Subscription)>,
     _screen_subscription: Subscription,
+    _appearance_subscription: Subscription,
     _idle_task: Task<()>,
 }
 
 impl CofreApp {
     pub fn new(store: SettingsStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        appearance::apply(&store.load().appearance, Some(window), cx);
         let (screen, sub) = Self::login_screen(&store, window, cx);
         Self::build(store, screen, sub, window, cx)
     }
@@ -49,6 +55,7 @@ impl CofreApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        appearance::apply(&store.load().appearance, Some(window), cx);
         let (screen, sub) = Self::vault_screen(unlocked, window, cx);
         Self::build(store, screen, sub, window, cx)
     }
@@ -69,13 +76,62 @@ impl CofreApp {
                 break;
             }
         });
+        // Tema "Sistema": acompanha a troca de claro/escuro do Windows ao vivo.
+        let appearance_sub = cx.observe_window_appearance(window, |this, window, cx| {
+            let current = this.store.load().appearance;
+            if current.theme == ThemeChoice::System {
+                appearance::apply(&current, Some(window), cx);
+            }
+        });
         Self {
             store,
             screen,
             last_activity: Instant::now(),
             auto_lock_after: DEFAULT_AUTO_LOCK,
+            settings: None,
             _screen_subscription: sub,
+            _appearance_subscription: appearance_sub,
             _idle_task: idle_task,
+        }
+    }
+
+    pub fn settings_view(&self) -> Option<&Entity<SettingsView>> {
+        self.settings.as_ref().map(|(v, _)| v)
+    }
+
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() {
+            return;
+        }
+        let view = cx.new(|_| SettingsView::new(self.store.clone()));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &SettingsEvent, _, cx| match event {
+                SettingsEvent::Close => this.close_settings(cx),
+            },
+        );
+        self.settings = Some((view, sub));
+        cx.notify();
+    }
+
+    pub fn close_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.record_activity();
+        let k = &event.keystroke;
+        if k.key == "," && k.modifiers.secondary(cx) {
+            if self.settings.is_some() {
+                self.close_settings(cx);
+            } else {
+                self.open_settings(window, cx);
+            }
+        } else if k.key == "escape" && self.settings.is_some() {
+            self.close_settings(cx);
         }
     }
 
@@ -138,6 +194,7 @@ impl CofreApp {
                 |this, _, event: &UnlockEvent, window, cx| match event {
                     UnlockEvent::Unlocked(unlocked) => this.show_vault_from(unlocked, window, cx),
                     UnlockEvent::LogOut => this.show_login(window, cx),
+                    UnlockEvent::OpenSettings => this.open_settings(window, cx),
                 },
             );
         self.set_screen((Screen::Locked(view), sub), cx);
@@ -160,10 +217,15 @@ impl CofreApp {
         if std::env::var_os("COFRE_DEV_AUTOLOGIN").is_some() {
             view.update(cx, |v, cx| v.dev_autologin(window, cx));
         }
-        let sub = cx.subscribe_in(&view, window, |this, _, event: &LoginEvent, window, cx| {
-            let LoginEvent::Unlocked(unlocked) = event;
-            this.show_vault_from(unlocked, window, cx);
-        });
+        let sub =
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, event: &LoginEvent, window, cx| match event {
+                    LoginEvent::Unlocked(unlocked) => this.show_vault_from(unlocked, window, cx),
+                    LoginEvent::OpenSettings => this.open_settings(window, cx),
+                },
+            );
         (Screen::Login(view), sub)
     }
 
@@ -173,25 +235,32 @@ impl CofreApp {
         cx: &mut Context<Self>,
     ) -> (Screen, Subscription) {
         let view = cx.new(|cx| VaultView::new(unlocked, window, cx));
-        let sub = cx.subscribe_in(&view, window, |this, _, event: &VaultEvent, window, cx| {
-            let VaultEvent::Lock(session) = event;
-            this.show_locked(session.clone(), window, cx);
-        });
+        let sub =
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, event: &VaultEvent, window, cx| match event {
+                    VaultEvent::Lock(session) => this.show_locked(session.clone(), window, cx),
+                    VaultEvent::OpenSettings => this.open_settings(window, cx),
+                },
+            );
         (Screen::Vault(view), sub)
     }
 }
 
 impl Render for CofreApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let content: AnyView = match &self.screen {
-            Screen::Login(v) => v.clone().into(),
-            Screen::Locked(v) => v.clone().into(),
-            Screen::Vault(v) => v.clone().into(),
+        let content: AnyView = match (&self.settings, &self.screen) {
+            (Some((v, _)), _) => v.clone().into(),
+            (None, Screen::Login(v)) => v.clone().into(),
+            (None, Screen::Locked(v)) => v.clone().into(),
+            (None, Screen::Vault(v)) => v.clone().into(),
         };
         div()
             .size_full()
             // Qualquer tecla ou movimento do mouse adia o bloqueio automático.
-            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, _| this.record_activity()))
+            // Ctrl+, abre/fecha as configurações; Esc fecha.
+            .capture_key_down(cx.listener(Self::on_key))
             .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, _| this.record_activity()))
             .child(content)
     }

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use cofre_core::api::{DeviceInfo, ServerUrls};
 use serde::{Deserialize, Serialize};
 
+use crate::appearance::Appearance;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ServerChoice {
     #[default]
@@ -39,6 +41,9 @@ pub struct Settings {
     pub last_email: String,
     /// Mesmo identificador em todos os logins: evita alertas de "novo dispositivo".
     pub device: DeviceInfo,
+    /// Tema, cor de destaque e afins.
+    #[serde(default)]
+    pub appearance: Appearance,
 }
 
 impl Default for Settings {
@@ -48,6 +53,7 @@ impl Default for Settings {
             self_hosted_url: String::new(),
             last_email: String::new(),
             device: DeviceInfo::new(&device_name()),
+            appearance: Appearance::default(),
         }
     }
 }

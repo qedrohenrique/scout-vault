@@ -240,17 +240,29 @@ impl ListDelegate for ItemList {
     ) -> Option<Self::Item> {
         let item = self.item_at(ix)?;
         let sub = subtitle(item);
+        let selected = self.selected == Some(ix);
         Some(
-            ListItem::new(ix).selected(self.selected == Some(ix)).child(
+            ListItem::new(ix).selected(selected).py_2().child(
                 h_flex()
                     .gap_3()
                     .w_full()
-                    .child(Icon::new(kind_icon(&item.kind)).text_color(cx.theme().muted_foreground))
+                    .child(crate::ui::icon_chip(
+                        kind_icon(&item.kind),
+                        px(32.),
+                        selected,
+                        cx,
+                    ))
                     .child(
                         v_flex()
                             .min_w_0()
                             .flex_1()
-                            .child(div().truncate().child(item.name.clone()))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_medium()
+                                    .child(item.name.clone()),
+                            )
                             .child(
                                 div()
                                     .truncate()
@@ -263,8 +275,8 @@ impl ListDelegate for ItemList {
                     .when(item.favorite, |el| {
                         el.child(
                             Icon::new(IconName::StarFill)
-                                .small()
-                                .text_color(cx.theme().warning),
+                                .xsmall()
+                                .text_color(crate::appearance::accent(cx)),
                         )
                     }),
             ),

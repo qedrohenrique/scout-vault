@@ -7,8 +7,11 @@
 //! - [`item_list`]  — dados da lista: filtro e busca
 //! - [`flow`]       — fluxos de login/sync sem UI
 //! - [`settings`]   — preferências não sensíveis em disco
+//! - [`settings_view`] — tela de configurações (aparência)
+//! - [`appearance`] — temas claro/escuro, cor de destaque, texto e cantos
 
 pub mod app;
+pub mod appearance;
 mod assets;
 pub mod clipboard;
 pub mod flow;
@@ -16,6 +19,8 @@ mod io;
 pub mod item_list;
 pub mod login;
 pub mod settings;
+pub mod settings_view;
+mod ui;
 pub mod unlock;
 pub mod vault_view;
 

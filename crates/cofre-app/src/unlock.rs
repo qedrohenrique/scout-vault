@@ -13,6 +13,7 @@ use crate::io;
 pub enum UnlockEvent {
     Unlocked(Handoff),
     LogOut,
+    OpenSettings,
 }
 
 pub struct UnlockView {
@@ -103,79 +104,49 @@ impl Render for UnlockView {
             (None, true) => "Abrindo o cofre…".into(),
             (None, false) => "".into(),
         };
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
+        let body = v_flex()
+            .gap_4()
+            .child(
+                Input::new(&self.password)
+                    .id("unlock-password")
+                    .mask_toggle()
+                    .disabled(self.busy),
+            )
+            .child(crate::ui::status_line(
+                "unlock-status",
+                status,
+                self.error.is_some(),
+                cx,
+            ))
             .child(
                 v_flex()
-                    .w(px(380.))
-                    .gap_4()
-                    .p_6()
-                    .rounded(cx.theme().radius_lg)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().secondary)
+                    .gap_2()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Icon::new(gpui_kit::assets::IconName::Lock))
-                            .child(div().text_lg().font_semibold().child("Cofre bloqueado")),
+                        Button::new("unlock-submit")
+                            .primary()
+                            .w_full()
+                            .label("Desbloquear")
+                            .loading(self.busy)
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     )
                     .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.session.email.clone()),
-                    )
-                    .child(
-                        Input::new(&self.password)
-                            .id("unlock-password")
-                            .mask_toggle()
-                            .disabled(self.busy),
-                    )
-                    .child(
-                        div()
-                            .id("unlock-status")
-                            .role(Role::Status)
-                            .test_support()
-                            .aria_label(status.clone())
-                            .min_h(px(20.))
-                            .text_sm()
-                            .text_color(if self.error.is_some() {
-                                cx.theme().danger
-                            } else {
-                                cx.theme().muted_foreground
-                            })
-                            .child(status),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .justify_end()
-                            .child(
-                                Button::new("unlock-logout")
-                                    .ghost()
-                                    .label("Sair da conta")
-                                    .disabled(self.busy)
-                                    .on_click(
-                                        cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::LogOut)),
-                                    ),
-                            )
-                            .child(
-                                Button::new("unlock-submit")
-                                    .primary()
-                                    .label("Desbloquear")
-                                    .loading(self.busy)
-                                    .disabled(self.busy)
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.submit(window, cx)),
-                                    ),
-                            ),
+                        Button::new("unlock-logout")
+                            .ghost()
+                            .w_full()
+                            .label("Sair da conta")
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::LogOut))),
                     ),
-            )
+            );
+        crate::ui::entry_screen(
+            "unlock-settings",
+            "Cofre bloqueado",
+            self.session.email.clone(),
+            px(380.),
+            body,
+            cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::OpenSettings)),
+            cx,
+        )
     }
 }

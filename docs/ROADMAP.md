@@ -67,7 +67,11 @@ Meta: usar no dia a dia para **consultar** senhas.
 - [x] **Testes de UI headless** (`crates/cofre-app/tests/ui.rs`): validação do login, filtros, busca, revelar,
       copiar + limpeza, bloquear, senha errada/certa, bloqueio por inatividade; e login completo pela UI
       contra o Vaultwarden local (`--ignored`)
-- [ ] **Revisão visual em janela real** — os testes não renderizam pixels (o Windows não tem renderizador headless no GPUI)
+- [x] **Revisão visual em janela real** — capturas da janela de verdade (claro/escuro, detalhe, login, configurações)
+- [x] **Identidade visual própria**: neutros quentes, uma cor de destaque, ícones Lucide em "chips", seções na barra lateral
+- [x] **Tela de configurações** (`Ctrl+,`, Esc fecha): tema Sistema/Claro/Escuro (segue o Windows ao vivo), 6 cores de
+      destaque, tamanho do texto e cantos — aplicados na hora e salvos em `settings.json`
+- [ ] Barra de título própria — a nativa do Windows não acompanha o tema do app
 - [ ] Sessão expirada no "Sincronizar" → voltar para o login automaticamente
 - [ ] Atalhos: `Ctrl+L` bloquear, `Ctrl+F` focar a busca, `Ctrl+C` copiar senha do item selecionado
 

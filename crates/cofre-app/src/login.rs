@@ -18,6 +18,7 @@ use crate::settings::{ServerChoice, Settings, SettingsStore};
 
 pub enum LoginEvent {
     Unlocked(Handoff),
+    OpenSettings,
 }
 
 enum Step {
@@ -441,7 +442,7 @@ impl Render for LoginView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.busy.is_some();
         let (title, form) = match self.step {
-            Step::Credentials => ("Entrar no Cofre", self.render_credentials(cx)),
+            Step::Credentials => ("Entrar", self.render_credentials(cx)),
             Step::TwoFactor { .. } => ("Verificação em duas etapas", self.render_code_step(cx)),
             Step::NewDevice { .. } => ("Verificar este dispositivo", self.render_code_step(cx)),
         };
@@ -451,54 +452,37 @@ impl Render for LoginView {
             .or_else(|| self.busy.clone())
             .or_else(|| self.info.clone())
             .unwrap_or_default();
-        let status_color = if self.error.is_some() {
-            cx.theme().danger
-        } else {
-            cx.theme().muted_foreground
+        let subtitle = match self.step {
+            Step::Credentials => "Use uma conta Bitwarden ou de um servidor compatível.",
+            Step::TwoFactor { .. } => "Confirme que é você com o segundo fator.",
+            Step::NewDevice { .. } => "Enviamos um código para o seu e-mail.",
         };
-
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
+        let body = v_flex()
+            .gap_4()
+            .child(form)
+            .child(crate::ui::status_line(
+                "login-status",
+                status,
+                self.error.is_some(),
+                cx,
+            ))
             .child(
-                v_flex()
-                    .w(px(420.))
-                    .gap_4()
-                    .p_6()
-                    .rounded(cx.theme().radius_lg)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().secondary)
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Icon::new(gpui_kit::assets::IconName::LockKeyhole))
-                            .child(div().text_lg().font_semibold().child(title)),
-                    )
-                    .child(form)
-                    .child(
-                        div()
-                            .id("login-status")
-                            .role(Role::Status)
-                            .test_support()
-                            .aria_label(status.clone())
-                            .min_h(px(20.))
-                            .text_sm()
-                            .text_color(status_color)
-                            .child(status),
-                    )
-                    .child(
-                        Button::new("login-submit")
-                            .primary()
-                            .label("Continuar")
-                            .loading(busy)
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
-                    ),
-            )
+                Button::new("login-submit")
+                    .primary()
+                    .w_full()
+                    .label("Continuar")
+                    .loading(busy)
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+            );
+        crate::ui::entry_screen(
+            "login-settings",
+            title,
+            subtitle,
+            px(420.),
+            body,
+            cx.listener(|_, _, _, cx| cx.emit(LoginEvent::OpenSettings)),
+            cx,
+        )
     }
 }

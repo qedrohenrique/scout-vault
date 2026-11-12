@@ -17,6 +17,7 @@ gpui_kit::assets::icon_assets!(
         LayoutGrid,
         Lock,
         LockKeyhole,
+        Monitor,
         StickyNote,
         Trash
     ]
@@ -70,6 +71,11 @@ mod tests {
         IconName::Copy,
         IconName::Eye,
         IconName::EyeOff,
+        IconName::Settings,
+        IconName::Monitor,
+        IconName::Sun,
+        IconName::Moon,
+        IconName::Close,
     ];
 
     #[test]
