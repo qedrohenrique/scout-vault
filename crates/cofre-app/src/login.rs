@@ -99,6 +99,34 @@ impl LoginView {
         }
     }
 
+    /// Só em builds de debug: preenche e envia o login a partir de
+    /// `COFRE_TEST_URL/EMAIL/PASSWORD` (ver `dev/test-account.env`) quando
+    /// `COFRE_DEV_AUTOLOGIN` está definido. Recusa servidores fora do localhost.
+    #[cfg(debug_assertions)]
+    pub fn dev_autologin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Ok(url), Ok(email), Ok(password)) = (
+            std::env::var("COFRE_TEST_URL"),
+            std::env::var("COFRE_TEST_EMAIL"),
+            std::env::var("COFRE_TEST_PASSWORD"),
+        ) else {
+            return;
+        };
+        let local = ["http://localhost", "http://127.0.0.1"]
+            .iter()
+            .any(|prefix| url.starts_with(prefix));
+        if !local {
+            return;
+        }
+        self.settings.server = ServerChoice::SelfHosted;
+        self.server_url
+            .update(cx, |i, cx| i.set_value(url, window, cx));
+        self.email
+            .update(cx, |i, cx| i.set_value(email, window, cx));
+        self.password
+            .update(cx, |i, cx| i.set_value(password, window, cx));
+        self.submit(window, cx);
+    }
+
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
     }

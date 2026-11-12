@@ -156,6 +156,10 @@ impl CofreApp {
         cx: &mut Context<Self>,
     ) -> (Screen, Subscription) {
         let view = cx.new(|cx| LoginView::new(store.clone(), window, cx));
+        #[cfg(debug_assertions)]
+        if std::env::var_os("COFRE_DEV_AUTOLOGIN").is_some() {
+            view.update(cx, |v, cx| v.dev_autologin(window, cx));
+        }
         let sub = cx.subscribe_in(&view, window, |this, _, event: &LoginEvent, window, cx| {
             let LoginEvent::Unlocked(unlocked) = event;
             this.show_vault_from(unlocked, window, cx);

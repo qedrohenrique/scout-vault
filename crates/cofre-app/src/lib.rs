@@ -9,6 +9,7 @@
 //! - [`settings`]   — preferências não sensíveis em disco
 
 pub mod app;
+mod assets;
 pub mod clipboard;
 pub mod flow;
 mod io;
@@ -23,9 +24,11 @@ use gpui_kit::*;
 /// Abre a janela principal.
 pub fn run() {
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(assets::AppAssets)
         .run(|cx| {
             gpui_kit::init(cx);
+            // Textos internos dos componentes (busca, menus) em português.
+            gpui_kit::component::set_locale("pt-BR");
             let options = WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Cofre".into()),

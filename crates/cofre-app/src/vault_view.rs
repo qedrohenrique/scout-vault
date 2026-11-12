@@ -499,14 +499,26 @@ impl VaultView {
             .map(|(id, filter, icon, label)| {
                 let count = list.count(&filter);
                 let selected = filter == current;
+                // O Button centraliza o conteúdo; um filho de largura total
+                // alinha ícone e nome à esquerda e a contagem à direita.
                 Button::new(id)
                     .ghost()
                     .small()
                     .w_full()
-                    .justify_start()
-                    .icon(icon)
-                    .label(format!("{label}  {count}"))
                     .selected(selected)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(Icon::new(icon).small())
+                            .child(div().flex_1().min_w_0().truncate().child(label))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(count.to_string()),
+                            ),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_filter(filter.clone(), window, cx)
                     }))
