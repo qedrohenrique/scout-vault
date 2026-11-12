@@ -1,0 +1,13 @@
+[package]
+name = "cofre-core"
+description = "Protocolo, criptografia e modelo do cofre — sem dependência de UI."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

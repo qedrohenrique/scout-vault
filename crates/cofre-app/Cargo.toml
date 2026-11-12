@@ -1,0 +1,13 @@
+[package]
+name = "cofre-app"
+description = "Interface desktop do Cofre, em GPUI (via gpui-kit)."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "cofre"
+path = "src/main.rs"
+
+[dependencies]
+cofre-core.workspace = true
+gpui-kit = "0.9"

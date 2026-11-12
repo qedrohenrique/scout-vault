@@ -1,0 +1,14 @@
+# Vaultwarden local SÓ para desenvolvimento. Não exponha na rede.
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: cofre-dev-vaultwarden
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:80"
+    environment:
+      DOMAIN: "http://localhost:8000"
+      SIGNUPS_ALLOWED: "true"
+      LOG_LEVEL: "info"
+    volumes:
+      - ./vw-data:/data
