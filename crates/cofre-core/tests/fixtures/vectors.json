@@ -1,0 +1,14 @@
+{
+  "email": "  Pessoa.Teste@Example.COM ",
+  "password": "cavalo correto bateria grampo ção 🔐",
+  "pbkdf2": {
+    "iterations": 5000,
+    "server_hash": "K0ZDqjeQADJ3kDd5mdjIh3hQnU3bM5Zbuj+64tAvyqY="
+  },
+  "argon2id": {
+    "iterations": 3,
+    "memory_mib": 16,
+    "parallelism": 2,
+    "server_hash": "VVwDwUTNvR5gUXB22MNcaNyQ0bM/Msr/WuYFCgKp/3U="
+  }
+}

@@ -19,37 +19,34 @@ o desktop Electron no uso diário — buscar, copiar e editar itens do cofre.
 - [x] Parse de `EncString` (tipos 2 e 4) e parâmetros de KDF, com testes
 - [x] Vaultwarden local via Docker
 - [x] CI (Windows): fmt, clippy, test
-- [ ] Instalar toolchain e validar `cargo run` localmente
+- [x] Instalar toolchain e validar `cargo run` localmente
 
-## Fase 1 — Núcleo: login e leitura do cofre (`cofre-core`)
+## Fase 1 — Núcleo: login e leitura do cofre (`cofre-core`) 🟡 (código pronto, falta validar em servidor real)
 Meta: um teste de integração que loga no Vaultwarden local e lista os nomes dos itens decifrados.
 
-1. **Prelogin** — `POST /identity/accounts/prelogin {email}` → `Kdf`.
-2. **Master key** — PBKDF2-SHA256 (salt = e-mail minúsculo) ou Argon2id (salt = SHA-256 do e-mail).
-   Crates: `pbkdf2`, `argon2`, `sha2`.
-3. **Hash de autenticação** — PBKDF2-SHA256(master key, salt = senha, 1 iteração) em base64.
-   É isso que vai para o servidor; a senha nunca sai da máquina.
-4. **Login** — `POST /identity/connect/token` (form, `grant_type=password`, `scope=api offline_access`,
-   dados do dispositivo: `deviceType`, `deviceIdentifier` UUID persistente, `deviceName`).
-   - Tratar resposta de **2FA** (`TwoFactorProviders`): TOTP e e-mail primeiro.
-   - Tratar **verificação de novo dispositivo** (OTP por e-mail).
-   - Alternativa: login por **API key pessoal** (`grant_type=client_credentials`).
-   - Conferir os detalhes de cabeçalhos/campos exigidos pela versão atual do servidor no `rbw`.
-5. **Stretch** — HKDF-Expand-SHA256 da master key → `enc` (32 B) + `mac` (32 B). Crate: `hkdf`.
-6. **Decifrar** `EncString` tipo 2 — verificar HMAC-SHA256(iv ‖ ct) em tempo constante, depois AES-256-CBC + PKCS7.
-   Crates: `aes`, `cbc`, `hmac`, `subtle`.
-7. **User key** — decifrar o campo `Key` da resposta de login (64 B = enc + mac).
-8. **Chave privada RSA** — decifrar `PrivateKey` (PKCS#8 DER) → decifrar chaves de organização
-   (`EncString` tipo 4, RSA-OAEP-SHA1). Crate: `rsa`.
-9. **Sync** — `GET /api/sync` → perfil, pastas, itens, organizações, coleções.
-   - Itens com chave própria (`cipher.key`) — decifrar a chave do item antes dos campos.
-10. **Refresh token** — renovar `access_token` antes de expirar.
-11. **Modelo decifrado** — `Login`, `Card`, `Identity`, `SecureNote`, `SshKey`; campos customizados; URIs.
+- [x] **Prelogin** — `POST /identity/accounts/prelogin` → `Kdf` (`api::Client::prelogin`)
+- [x] **Master key** — PBKDF2-SHA256 (salt = e-mail aparado e minúsculo) ou Argon2id (salt = SHA-256 do e-mail) (`crypto::MasterKey::derive`)
+- [x] **Hash de autenticação** — PBKDF2-SHA256(master key, salt = senha, 1 iteração); a senha nunca sai da máquina
+- [x] **Login** — `POST /identity/connect/token` com `grant_type=password`, dados do dispositivo e `Auth-Email`
+  - [x] 2FA: detecta `TwoFactorProviders` (números ou strings) e reenvia com `twoFactorProvider/Token/Remember`
+  - [x] Pedido de código de 2FA por e-mail (`send_email_login_code`)
+  - [x] Verificação de novo dispositivo: detectada e reenviada com `newDeviceOtp` — ⚠️ nome do campo **não confirmado** em servidor real
+  - [ ] Login por API key pessoal (`client_credentials`) — opcional
+- [x] **Stretch** — HKDF-Expand-SHA256 → `enc` + `mac`
+- [x] **Decifrar/cifrar `EncString` tipo 2** — HMAC verificado em tempo constante antes do AES-256-CBC
+- [x] **User key**, **chave privada RSA** (PKCS#8) e **chaves de organização** (RSA-OAEP-SHA1)
+- [x] **Sync** — `GET /api/sync`; JSON normalizado para camelCase (aceita servidor antigo em PascalCase)
+- [x] **Chave própria por item** (`cipher.key`)
+- [x] **Refresh token**
+- [x] **Modelo decifrado** — login, nota, cartão, identidade, chave SSH, campos customizados, lixeira, busca
+- [x] Falhas isoladas: item ou organização corrompidos não derrubam o resto do cofre
+- [x] Segredos em `Secret`/`Zeroizing`, `Debug` sem material de chave
+- [ ] **Validar contra o Vaultwarden local** (`tests/live_server.rs`) — precisa do Docker
+- [ ] Validar contra o Bitwarden oficial com uma conta de teste (2FA, novo dispositivo)
 
-Segurança desta fase: tipos de segredo com `secrecy`/`zeroize`; nunca `Debug`-imprimir chave ou texto claro.
-
-**Testes:** vetores conhecidos (gerar com a CLI oficial ou com `rbw` contra o Vaultwarden local)
-para KDF, stretch, decifrar `EncString`; teste de integração `#[ignore]` que roda contra o Docker.
+**Testes:** `tools/gen_fixtures.py` gera, com a biblioteca `cryptography` do Python (implementação
+independente), um cofre sintético completo — KDFs, user key, RSA, organização, chave de item,
+PascalCase, item adulterado. `tests/fixtures.rs` precisa abrir tudo e bater cada valor.
 
 ## Fase 2 — MVP de leitura (`cofre-app`)
 Meta: usar no dia a dia para **consultar** senhas.
