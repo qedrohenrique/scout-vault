@@ -1,7 +1,7 @@
 // Preenche usuário e senha na página. Injetada pelo popup com
-// chrome.scripting.executeScript({ func: cofreFillPage, args: [...] }):
+// chrome.scripting.executeScript({ func: scoutVaultFillPage, args: [...] }):
 // precisa ser autocontida (o navegador serializa só o corpo da função).
-function cofreFillPage(username, password) {
+function scoutVaultFillPage(username, password) {
   const visible = (el) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);

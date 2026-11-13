@@ -1,6 +1,6 @@
-<p align="center"><img src="docs/imagens/logo.png" width="112" alt="Logo do Cofre: um cadeado de chapéu de explorador"></p>
+<p align="center"><img src="docs/imagens/logo.png" width="112" alt="Logo do Scout Vault: um cadeado de chapéu de explorador"></p>
 
-# Cofre
+# Scout Vault
 
 Cliente desktop nativo, em **Rust + GPUI**, para servidores compatíveis com Bitwarden
 (Bitwarden oficial e Vaultwarden). A ideia é ter um app leve e rápido para o dia a dia:
@@ -8,7 +8,7 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 
 > Projeto não oficial, sem afiliação com a Bitwarden Inc. **Em desenvolvimento — não use com seu cofre real ainda.**
 
-![Cofre no tema escuro, com um item aberto](docs/imagens/cofre-escuro.png)
+![Scout Vault no tema escuro, com um item aberto](docs/imagens/scout-vault-escuro.png)
 
 ---
 
@@ -49,11 +49,11 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 - **Código do autenticador (TOTP) ao vivo**, com os segundos restantes. Aceita chave base32,
   URI `otpauth://` (SHA-1/256/512, dígitos e período próprios) e `steam://` (Steam Guard).
 - Ao copiar um segredo, a área de transferência é limpa sozinha em 30 s. Ela só é limpa se você
-  não tiver copiado outra coisa depois. No Windows, o que o Cofre copia **não entra no histórico
+  não tiver copiado outra coisa depois. No Windows, o que o Scout Vault copia **não entra no histórico
   (Win+V) nem na área de transferência na nuvem**.
 - **Gerador de senhas** (`Ctrl+G` ou o ícone de dados): tamanho, conjuntos de caracteres e opção
   de evitar caracteres parecidos. As opções ficam salvas; a senha gerada, não.
-- **Preencher em outros apps** (`Ctrl+Alt+A`, em qualquer janela): o Cofre escolhe o login pelo
+- **Preencher em outros apps** (`Ctrl+Alt+A`, em qualquer janela): o Scout Vault escolhe o login pelo
   título da janela (nome do item ou site) e **digita** `usuário ⇥ senha ↵` nela, sem passar pela
   área de transferência. Se o título não decidir, mostra a lista para escolher; com o cofre
   bloqueado, pede a senha e digita depois. Liga/desliga (e o Enter final) nas configurações.
@@ -65,18 +65,18 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
   (`Ctrl+E`) qualquer item, inclusive chaves SSH: nome, campos, sites, campos personalizados,
   notas, pasta e favorito. Botão para gerar a senha ali mesmo.
 - Ao trocar a senha, a antiga vai para o **histórico de senhas** do item (como nos apps oficiais).
-- O Cofre só troca o que você editou: passkeys, regras de URI, campos vinculados e outros dados
+- O Scout Vault só troca o que você editou: passkeys, regras de URI, campos vinculados e outros dados
   criados por outros clientes voltam intactos ao servidor.
 - **Lixeira**: mover, restaurar e **apagar de vez** (pede confirmação).
 - **Anexos**: anexar arquivos (até 500 MB), abrir com o programa padrão e salvar onde quiser.
-  Cada anexo tem chave própria. A cópia aberta fica em `%TEMP%\Cofre-anexos` e é apagada ao
+  Cada anexo tem chave própria. A cópia aberta fica em `%TEMP%\ScoutVault-anexos` e é apagada ao
   bloquear.
 - Itens de organização em que você só tem leitura não mostram Editar.
 
 **Preencher no navegador** (Chrome, Edge, Brave)
 - Extensão própria na pasta [`extension/`](extension/). Ligue em Configurações → Navegador e
   siga as instruções que aparecem (carregar a extensão sem compactação).
-- Num site, clique no ícone do Cofre ou use `Ctrl+Shift+L`: aparecem os logins daquele site
+- Num site, clique no ícone do Scout Vault ou use `Ctrl+Shift+L`: aparecem os logins daquele site
   (domínio base, como no Bitwarden). Clique num para preencher usuário e senha.
 - A senha só sai do app quando você clica, e só para um item com endereço do mesmo site.
   A extensão fala com o app por *native messaging* e um canal local que só o seu usuário do
@@ -85,21 +85,21 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 **Sessão e bloqueio**
 - **Lembrar sessão** (ligado por padrão): ao abrir o app, ele vai direto para o desbloqueio, só
   com a senha mestra, e **abre mesmo sem internet**. Guarda o cofre **cifrado** como veio do
-  servidor em `%APPDATA%\Cofre\sessao.json` e o refresh token no Gerenciador de Credenciais do
+  servidor em `%APPDATA%\Scout Vault\sessao.json` e o refresh token no Gerenciador de Credenciais do
   Windows. "Sair da conta" ou desligar a opção apagam os dois.
 - Bloqueia pelo botão de cadeado, por `Ctrl+L` ou sozinho, depois de 5 min sem teclado nem mouse.
 - Ao bloquear, o cofre decifrado sai da memória. Para desbloquear basta a senha mestra, sem rede.
 
 ## Aparência e configurações
 
-O Cofre tem um visual próprio e minimalista. Os fundos são neutros quentes (um tom de papel no
+O Scout Vault tem um visual próprio e minimalista. Os fundos são neutros quentes (um tom de papel no
 claro, grafite profundo no escuro), e há **uma única cor de destaque**, usada só onde importa:
 seleção, foco, botão principal, favoritos e a marca. Os ícones são do [Lucide](https://lucide.dev)
 e aparecem dentro de quadradinhos suaves.
 
 | Claro | Escuro |
 |---|---|
-| ![Tema claro](docs/imagens/cofre-claro.png) | ![Tema escuro](docs/imagens/cofre-escuro.png) |
+| ![Tema claro](docs/imagens/scout-vault-claro.png) | ![Tema escuro](docs/imagens/scout-vault-escuro.png) |
 
 As telas de **login e desbloqueio** têm uma arte vetorial animada ao fundo: faixas onduladas nas
 laterais que balançam devagar e pequenas formas fechadas (bolinhas, círculos, triângulos,
@@ -112,7 +112,7 @@ ficar parada em Configurações → Movimento.
 A **logo** é um cadeado usando um chapéu de explorador. Ela é o ícone do executável (barra de
 tarefas, Alt+Tab, Explorer) e aparece como glifo dentro do app, na cor de destaque escolhida. Tudo
 sai de uma geometria só, em `tools/gen_logo.py`:
-`python tools/gen_logo.py crates/cofre-app/assets/brand` gera de novo o SVG, os PNGs e o `.ico`.
+`python tools/gen_logo.py crates/scout-vault-app/assets/brand` gera de novo o SVG, os PNGs e o `.ico`.
 
 A tela de **Configurações** abre com `Ctrl+,` ou pela engrenagem. A engrenagem fica na barra
 lateral do cofre e também nas telas de login e desbloqueio.
@@ -157,7 +157,7 @@ copiando o texto selecionado na busca.
 
 - **Nada decifrado vai para o disco.** Os segredos vivem em memória dentro de `Secret`/`Zeroizing`
   e são apagados quando liberados. O `Debug` deles nunca mostra o conteúdo.
-- O `settings.json` (`%APPDATA%\Cofre\settings.json` no Windows e `~/.config/cofre/settings.json` nos
+- O `settings.json` (`%APPDATA%\Scout Vault\settings.json` no Windows e `~/.config/scout-vault/settings.json` nos
   demais) guarda **só** o servidor, o último e-mail, a identidade do dispositivo e a aparência.
 - A criptografia segue o esquema do Bitwarden. O HMAC é conferido em tempo constante **antes** de
   decifrar com AES-256-CBC. As chaves de organização usam RSA-OAEP, e cada item pode ter chave própria.
@@ -170,13 +170,13 @@ copiando o texto selecionado na busca.
 
 ```
 crates/
-  cofre-core/      protocolo, criptografia e modelo do cofre — sem UI, testável sozinho
+  scout-vault-core/      protocolo, criptografia e modelo do cofre — sem UI, testável sozinho
     api.rs         cliente HTTP: prelogin, login (2FA, novo dispositivo), refresh, sync
     crypto.rs      master key (PBKDF2/Argon2id), HKDF, AES-CBC + HMAC, RSA-OAEP
     enc_string.rs  formato EncString (2.iv|ct|mac, 4.data)
     sync.rs        resposta do sync, ainda cifrada
     vault.rs       cofre decifrado: itens, pastas, organizações, busca
-  cofre-app/       interface GPUI (binário `cofre`), via gpui-kit
+  scout-vault-app/       interface GPUI (binário `cofre`), via gpui-kit
     app.rs         raiz da janela: troca de telas, bloqueio automático, configurações
     login.rs       login, 2FA, novo dispositivo
     unlock.rs      desbloqueio offline
@@ -185,7 +185,7 @@ crates/
     appearance.rs  paleta, temas claro/escuro, cor de destaque, texto e cantos
     settings_view.rs  tela de configurações
     ui.rs          peças visuais compartilhadas (marca, chips, controle segmentado)
-    build.rs       embute o ícone (assets/brand/cofre.ico) no executável do Windows
+    build.rs       embute o ícone (assets/brand/scout-vault.ico) no executável do Windows
     assets/brand/  logo colorida (SVG/PNG/ICO) e o glifo monocromático da marca
     settings.rs    preferências não sensíveis em disco
     flow.rs        fluxos de login/sync sem UI
@@ -195,9 +195,9 @@ docs/ROADMAP.md    plano por fases
 ```
 
 **Como o tema funciona:** `appearance.rs` parte dos temas padrão do gpui-kit e troca as cores pela
-paleta do Cofre (neutros de cada modo mais a cor de destaque). Depois ajusta tamanho da fonte e
+paleta do Scout Vault (neutros de cada modo mais a cor de destaque). Depois ajusta tamanho da fonte e
 raios e registra o resultado como os temas claro e escuro. `appearance::apply` faz isso e escolhe
-o modo. O `CofreApp` chama essa função ao abrir e quando o Windows troca de claro para escuro (se
+o modo. O `ScoutVaultApp` chama essa função ao abrir e quando o Windows troca de claro para escuro (se
 o tema for "Sistema"). A tela de configurações também chama a cada mudança.
 
 ## Pré-requisitos (Windows)
@@ -216,7 +216,7 @@ Em builds de debug, o app pode entrar sozinho no Vaultwarden local com a conta d
 funciona com servidores em `localhost`:
 ```bash
 set -a; . dev/test-account.env; set +a
-COFRE_DEV_AUTOLOGIN=1 cargo run
+SCOUT_VAULT_DEV_AUTOLOGIN=1 cargo run
 ```
 
 ## Servidor de desenvolvimento
@@ -236,8 +236,8 @@ python tools/dev_seed.py
 ## Testes
 ```bash
 cargo test --workspace                 # tudo (núcleo + UI headless)
-cargo test -p cofre-core               # só o núcleo
-cargo test -p cofre-app --test ui      # só a UI
+cargo test -p scout-vault-core               # só o núcleo
+cargo test -p scout-vault-app --test ui      # só a UI
 ```
 
 - **Núcleo:** `tools/gen_fixtures.py` gera um cofre sintético completo usando a biblioteca
@@ -250,11 +250,11 @@ cargo test -p cofre-app --test ui      # só a UI
 - **Ao vivo** (precisa do Vaultwarden local):
   ```bash
   set -a; . dev/test-account.env; set +a
-  cargo test -p cofre-core --test live_server -- --ignored --nocapture
-  cargo test -p cofre-app --test ui -- --ignored
+  cargo test -p scout-vault-core --test live_server -- --ignored --nocapture
+  cargo test -p scout-vault-app --test ui -- --ignored
   ```
 - **2FA ao vivo:** `python tools/dev_seed.py --totp` cria uma conta com autenticador
-  (credenciais em `dev/test-account-2fa.env`) para `cargo test -p cofre-app --test live_2fa -- --ignored`.
+  (credenciais em `dev/test-account-2fa.env`) para `cargo test -p scout-vault-app --test live_2fa -- --ignored`.
 
 A CI (Windows) roda `cargo fmt --check`, `cargo clippy -D warnings` e `cargo test --workspace`.
 Os testes headless não desenham pixels. Por isso, mudanças visuais precisam ser conferidas numa

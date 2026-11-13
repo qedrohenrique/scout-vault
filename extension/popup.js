@@ -1,6 +1,6 @@
-// Popup da extensão: pede ao app Cofre os logins do site aberto e preenche
+// Popup da extensão: pede ao app Scout Vault os logins do site aberto e preenche
 // o escolhido. Senhas só saem do app quando a pessoa clica num login.
-const HOST = "com.cofre.desktop";
+const HOST = "com.scoutvault.desktop";
 
 const $ = (s) => document.querySelector(s);
 
@@ -23,13 +23,13 @@ function ask(message) {
 
 function explain(response) {
   if (response.error === "app") {
-    return 'O Cofre não respondeu. Abra o app e ative "Preencher no navegador" nas configurações.';
+    return 'O Scout Vault não respondeu. Abra o app e ative "Preencher no navegador" nas configurações.';
   }
   if (response.error === "closed") {
-    return "O Cofre está fechado. Abra o app e tente de novo.";
+    return "O Scout Vault está fechado. Abra o app e tente de novo.";
   }
   if (response.locked) {
-    return "O Cofre está bloqueado. Desbloqueie no app e tente de novo.";
+    return "O Scout Vault está bloqueado. Desbloqueie no app e tente de novo.";
   }
   return response.error || "Algo deu errado.";
 }
@@ -42,7 +42,7 @@ async function fill(tab, url, id) {
   }
   const [result] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: cofreFillPage,
+    func: scoutVaultFillPage,
     args: [creds.username || "", creds.password || ""],
   });
   const filled = result && result.result;

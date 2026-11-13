@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cofre-core", "crates/cofre-app"]
+members = ["crates/scout-vault-core", "crates/scout-vault-app"]
 
 [workspace.package]
 version = "0.1.0"

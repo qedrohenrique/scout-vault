@@ -1,7 +1,7 @@
-"""Logo do Cofre: um cadeado usando um chapéu de explorador.
+"""Logo do Scout Vault: um cadeado usando um chapéu de explorador.
 
 Uma única geometria (em coordenadas 256x256) gera:
-- logo.svg / logo-NNN.png / cofre.ico — o ícone colorido do app
+- logo.svg / logo-NNN.png / scout-vault.ico — o ícone colorido do app
 - mark.svg — o glifo monocromático usado dentro do app (pintado pelo tema)
 """
 import sys
@@ -157,6 +157,6 @@ for s in sizes:
     if s in (32, 64, 128, 256, 512):
         im.save(OUT / f"logo-{s}.png")
 ico_sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
-imgs[256].save(OUT / "cofre.ico", format="ICO", sizes=[(s, s) for s in ico_sizes],
+imgs[256].save(OUT / "scout-vault.ico", format="ICO", sizes=[(s, s) for s in ico_sizes],
                append_images=[imgs[s] for s in ico_sizes if s != 256])
 print("ok", OUT)

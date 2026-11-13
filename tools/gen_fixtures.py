@@ -1,11 +1,11 @@
-"""Gera um cofre sintético para testar o `cofre-core` contra uma implementação
+"""Gera um cofre sintético para testar o `scout-vault-core` contra uma implementação
 independente (biblioteca `cryptography` do Python), sem servidor nem conta real.
 
 Uso:  python tools/gen_fixtures.py
-Saída: crates/cofre-core/tests/fixtures/{sync.json,vectors.json}
+Saída: crates/scout-vault-core/tests/fixtures/{sync.json,vectors.json}
 
 Os IVs e chaves são aleatórios a cada execução; os textos claros e as
-expectativas do teste Rust (crates/cofre-core/tests/fixtures.rs) não mudam.
+expectativas do teste Rust (crates/scout-vault-core/tests/fixtures.rs) não mudam.
 """
 
 import base64
@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 
-OUT = Path(__file__).resolve().parent.parent / "crates" / "cofre-core" / "tests" / "fixtures"
+OUT = Path(__file__).resolve().parent.parent / "crates" / "scout-vault-core" / "tests" / "fixtures"
 
 EMAIL = "  Pessoa.Teste@Example.COM "  # o cliente deve aparar e pôr em minúsculas
 PASSWORD = "cavalo correto bateria grampo ção 🔐"

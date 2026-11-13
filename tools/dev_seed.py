@@ -90,7 +90,7 @@ def main() -> None:
     # Fluxo atual: sem SMTP configurado, o servidor devolve direto o token de verificação.
     verification_token = request(
         f"{base}/identity/accounts/register/send-verification-email",
-        json_body={"email": email, "name": "Conta de teste do Cofre"},
+        json_body={"email": email, "name": "Conta de teste do Scout Vault"},
         headers={"Accept": "application/json"},
     )
     if not isinstance(verification_token, str):
@@ -101,7 +101,7 @@ def main() -> None:
         json_body={
             "email": email,
             "emailVerificationToken": verification_token,
-            "name": "Conta de teste do Cofre",
+            "name": "Conta de teste do Scout Vault",
             "masterPasswordHash": server_hash(mk, password),
             "masterPasswordHint": None,
             "key": encrypt(stretch(mk), user_key),
@@ -121,7 +121,7 @@ def main() -> None:
             "client_id": "web",
             "deviceType": 9,
             "deviceIdentifier": str(uuid.uuid4()),
-            "deviceName": "cofre-dev-seed",
+            "deviceName": "scout-vault-dev-seed",
         },
         headers={"Auth-Email": base64.urlsafe_b64encode(email.encode()).decode().rstrip("=")},
     )
@@ -192,15 +192,15 @@ def main() -> None:
             token=token,
         )
         ENV_FILE_2FA.write_text(
-            f"COFRE_TEST_2FA_URL={base}\nCOFRE_TEST_2FA_EMAIL={email}\n"
-            f"COFRE_TEST_2FA_PASSWORD={password}\nCOFRE_TEST_2FA_TOTP_SECRET={secret}\n",
+            f"SCOUT_VAULT_TEST_2FA_URL={base}\nSCOUT_VAULT_TEST_2FA_EMAIL={email}\n"
+            f"SCOUT_VAULT_TEST_2FA_PASSWORD={password}\nSCOUT_VAULT_TEST_2FA_TOTP_SECRET={secret}\n",
             encoding="utf-8",
         )
         print(f"conta {email} criada com 2FA por autenticador; credenciais em {ENV_FILE_2FA}")
         return
 
     ENV_FILE.write_text(
-        f"COFRE_TEST_URL={base}\nCOFRE_TEST_EMAIL={email}\nCOFRE_TEST_PASSWORD={password}\n",
+        f"SCOUT_VAULT_TEST_URL={base}\nSCOUT_VAULT_TEST_EMAIL={email}\nSCOUT_VAULT_TEST_PASSWORD={password}\n",
         encoding="utf-8",
     )
     print(f"conta {email} criada com 1 pasta e {len(items)} itens; credenciais em {ENV_FILE}")

@@ -1,0 +1,37 @@
+[package]
+name = "scout-vault-app"
+description = "Interface desktop do Scout Vault, em GPUI (via gpui-kit)."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "scout-vault"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+scout-vault-core = { version = "0.1.0", path = "../scout-vault-core" }
+getrandom = "0.4"
+gpui-kit = "0.9"
+keyring = "4.2.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2 = "0.11"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "time", "net", "io-util"] }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+gpui-kit = { version = "0.9", features = ["test-support"] }
+hmac = "0.13"
+sha1 = "0.11"
+# O gpui-kit com `test-support` puxa o gpui-fast, que fixa versões exatas
+# destas dependências; fixá-las aqui faz o resolvedor do Cargo convergir.
+taffy = "=0.15.0"
+unicode-properties = "=0.1.3"
+zeroize = "1.9.1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_Security", "Win32_Security_Authorization", "Win32_System_DataExchange", "Win32_System_Registry", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

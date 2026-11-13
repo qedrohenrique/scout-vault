@@ -1,4 +1,4 @@
-# Roadmap — Cofre
+# Roadmap — Scout Vault
 
 Cliente desktop nativo (Rust + GPUI) para servidores compatíveis com Bitwarden
 (Bitwarden oficial e Vaultwarden). Objetivo: um app leve e rápido que substitua
@@ -6,7 +6,7 @@ o desktop Electron no uso diário — buscar, copiar e editar itens do cofre.
 
 **Princípios**
 - Nada decifrado vai para o disco. Segredos vivem em memória com `zeroize`.
-- `cofre-core` não conhece UI: todo o protocolo e a criptografia são testáveis sozinhos.
+- `scout-vault-core` não conhece UI: todo o protocolo e a criptografia são testáveis sozinhos.
 - Desenvolvimento sempre contra um **Vaultwarden local** (`dev/docker-compose.yml`), nunca contra o cofre real.
 - Referências de implementação: [`rbw`](https://github.com/doy/rbw) (MIT) e a documentação de segurança do Bitwarden.
   Não copiar código do SDK oficial (licença restritiva).
@@ -14,14 +14,14 @@ o desktop Electron no uso diário — buscar, copiar e editar itens do cofre.
 ---
 
 ## Fase 0 — Fundação ✅ (esqueleto pronto)
-- [x] Workspace `cofre-core` + `cofre-app`
+- [x] Workspace `scout-vault-core` + `scout-vault-app`
 - [x] Janela GPUI abrindo (gpui-kit)
 - [x] Parse de `EncString` (tipos 2 e 4) e parâmetros de KDF, com testes
 - [x] Vaultwarden local via Docker
 - [x] CI (Windows): fmt, clippy, test
 - [x] Instalar toolchain e validar `cargo run` localmente
 
-## Fase 1 — Núcleo: login e leitura do cofre (`cofre-core`) ✅ (validado no Vaultwarden local)
+## Fase 1 — Núcleo: login e leitura do cofre (`scout-vault-core`) ✅ (validado no Vaultwarden local)
 Meta: um teste de integração que loga no Vaultwarden local e lista os nomes dos itens decifrados.
 
 - [x] **Prelogin** — `POST /identity/accounts/prelogin` → `Kdf` (`api::Client::prelogin`)
@@ -54,13 +54,13 @@ Meta: um teste de integração que loga no Vaultwarden local e lista os nomes do
 independente), um cofre sintético completo — KDFs, user key, RSA, organização, chave de item,
 PascalCase, item adulterado. `tests/fixtures.rs` precisa abrir tudo e bater cada valor.
 
-## Fase 2 — MVP de leitura (`cofre-app`) 🟡 (funcional e testado; falta revisão visual)
+## Fase 2 — MVP de leitura (`scout-vault-app`) 🟡 (funcional e testado; falta revisão visual)
 Meta: usar no dia a dia para **consultar** senhas.
 
 - [x] **Login**: bitwarden.com / bitwarden.eu / servidor próprio, e-mail, senha mestra (com mostrar/ocultar)
   - [x] 2FA por autenticador, e-mail (botão "enviar código") e YubiKey; "lembrar este dispositivo"
   - [x] Código de verificação de novo dispositivo
-  - [x] Identidade do dispositivo, servidor e último e-mail salvos em `%APPDATA%\Cofre\settings.json` (nada secreto)
+  - [x] Identidade do dispositivo, servidor e último e-mail salvos em `%APPDATA%\Scout Vault\settings.json` (nada secreto)
 - [x] **Desbloqueio offline** com a senha mestra (o sync cifrado fica em memória; o decifrado é descartado ao bloquear)
 - [x] **Lista virtualizada** com busca (nome, usuário, URI) e navegação por teclado (`List` do gpui-kit)
 - [x] **Filtros**: todos, favoritos, por tipo, por organização, por pasta, sem pasta, lixeira — com contagem
@@ -69,7 +69,7 @@ Meta: usar no dia a dia para **consultar** senhas.
 - [x] **Bloqueio manual** e **automático** após 5 min sem teclado/mouse
 - [x] **Sincronizar** (renova o token e baixa de novo, mantendo o item aberto)
 - [x] Rede e KDF fora da thread de UI (Tokio + `spawn_blocking`); a UI nunca trava
-- [x] **Testes de UI headless** (`crates/cofre-app/tests/ui.rs`): validação do login, filtros, busca, revelar,
+- [x] **Testes de UI headless** (`crates/scout-vault-app/tests/ui.rs`): validação do login, filtros, busca, revelar,
       copiar + limpeza, bloquear, senha errada/certa, bloqueio por inatividade; e login completo pela UI
       contra o Vaultwarden local (`--ignored`)
 - [x] **Revisão visual em janela real** — capturas da janela de verdade (claro/escuro, detalhe, login, configurações)
@@ -89,7 +89,7 @@ Meta: usar no dia a dia para **consultar** senhas.
 - [x] **Cache local cifrado** do sync (`sessao.json`, o JSON cru do servidor) → abrir offline e
       ir direto ao desbloqueio ("Lembrar sessão").
 - **Sync incremental**/periódico e via notificações (`/notifications/hub`, SignalR) — opcional.
-- [x] **Código TOTP ao vivo** (RFC 6238 implementada no `cofre-core`, validada com os vetores da RFC;
+- [x] **Código TOTP ao vivo** (RFC 6238 implementada no `scout-vault-core`, validada com os vetores da RFC;
       `otpauth://`, base32 e Steam Guard), com segundos restantes.
 - [x] **Gerador de senhas** (`Ctrl+G`).
 - **Gerador de passphrases** — precisa de uma lista de palavras (ex.: EFF, CC BY 3.0).
@@ -100,13 +100,13 @@ Meta: usar no dia a dia para **consultar** senhas.
 - [x] Cifrar: AES-256-CBC + HMAC com IV aleatório e, em contas v2, COSE XChaCha20-Poly1305 (com `kid`).
 - [x] Criar / editar / lixeira / restaurar / apagar de vez (`POST/PUT /api/ciphers`, `…/delete`,
       `…/restore`, `DELETE`), com `encryptedFor` e `lastKnownRevisionDate`.
-- [x] Edição **preserva o que o Cofre não conhece** (passkeys, regras de URI, campos vinculados…)
+- [x] Edição **preserva o que o Scout Vault não conhece** (passkeys, regras de URI, campos vinculados…)
       e recalcula o `uriChecksum` das URIs.
 - [x] Histórico de senhas do item (até 5).
 - [x] Testes ao vivo no Vaultwarden (núcleo e interface).
 - Pastas: criar, renomear, apagar.
 - Criar itens direto numa organização (precisa escolher coleções).
-- Testes de ida e volta com o cofre web oficial (ler no web vault o que o Cofre gravou).
+- Testes de ida e volta com o cofre web oficial (ler no web vault o que o Scout Vault gravou).
 
 ## Fase 4½ — Integração com o Windows e o navegador
 - [x] **Preencher em apps do Windows** ("auto-type", como no KeePass): `Ctrl+Alt+A` digita
@@ -115,11 +115,11 @@ Meta: usar no dia a dia para **consultar** senhas.
   foco mudar. Pendências: sequência personalizada por item (`{USERNAME}{TAB}…`), `{TOTP}`,
   janelas que rodam como administrador (o Windows bloqueia a digitação vinda de app comum).
 - [x] **Preencher no navegador**: extensão MV3 própria (`extension/`) para Chrome/Edge/Brave,
-  *native messaging* com o próprio `cofre.exe` como ponte e pipe local com ACL do usuário.
+  *native messaging* com o próprio `scout-vault.exe` como ponte e pipe local com ACL do usuário.
   Pendências: Firefox, salvar login novo pela extensão, preencher sozinho ao abrir a página,
   publicar na loja (hoje carrega sem compactação).
 - **Login social (Google etc.)**: o Bitwarden não oferece "entrar com Google" para contas
-  pessoais; só existe via **SSO de organização** (Google Workspace como provedor), que o Cofre
+  pessoais; só existe via **SSO de organização** (Google Workspace como provedor), que o Scout Vault
   já suporta. Nada a fazer até o servidor oferecer.
 
 ## Fase 5 — Recursos avançados

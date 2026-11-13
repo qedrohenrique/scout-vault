@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Cofre",
-  "short_name": "Cofre",
-  "description": "Preenche logins do app Cofre (compatível com Bitwarden) nos sites.",
+  "name": "Scout Vault",
+  "short_name": "Scout Vault",
+  "description": "Preenche logins do app Scout Vault (compatível com Bitwarden) nos sites.",
   "version": "0.1.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs3jjsCgWmVEJr1XURAtdHZH3toyiT8t6xkkm82byyr1NNBuj/xAMCNgJR+K7esOr0ylTaI0lHBfPCsZStYhYMpbNlKJgDMGGxA1n1KKwYWP4fSYSQr/XkDdrWVTsO+xAgfoBPseOQ9xhRFb9LklbSshCevnBb7kDPGjv8mzjNADNHSWxystK+g/TALJWPfXZdtnT0CJz7AoDmzKSlqvgWCwdwuYKD8m9fhE+VnZyUj5yZTf+XZAX9QbIEjgX7r00yx6j6w63ylPvvWo+vGMYO7xDzPl6SRq+SNBBcjGm/1BJvIz9oR2aF0K+huP611lhWrgSWowrgXmS4x2+47qiwQIDAQAB",
   "permissions": [
@@ -11,7 +11,7 @@
     "scripting"
   ],
   "action": {
-    "default_title": "Cofre",
+    "default_title": "Scout Vault",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -29,7 +29,7 @@
       "suggested_key": {
         "default": "Ctrl+Shift+L"
       },
-      "description": "Abrir o Cofre"
+      "description": "Abrir o Scout Vault"
     }
   }
 }
