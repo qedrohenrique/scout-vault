@@ -3,6 +3,7 @@
 //! - Tipo 2: `2.<iv b64>|<ciphertext b64>|<mac b64>` — AES-256-CBC + HMAC-SHA256
 //!   (praticamente todos os campos do cofre e a chave do usuário).
 //! - Tipo 4: `4.<data b64>` — RSA-2048-OAEP-SHA1 (chaves de organização).
+//! - Tipo 7: `7.<COSE_Encrypt0 b64>` — criptografia "v2" (veja [`crate::cose`]).
 //!
 //! Este módulo só faz parse/serialização; decifrar fica em `crypto` (fase 1).
 
@@ -20,6 +21,10 @@ pub enum EncString {
         mac: [u8; 32],
     },
     Rsa2048OaepSha1 {
+        data: Vec<u8>,
+    },
+    /// COSE_Encrypt0 em CBOR, ainda não interpretado.
+    Cose {
         data: Vec<u8>,
     },
 }
@@ -77,6 +82,17 @@ impl FromStr for EncString {
                     data: decode(parts[0])?,
                 })
             }
+            "7" => {
+                if parts.len() != 1 {
+                    return Err(ParseError::WrongParts {
+                        expected: 1,
+                        got: parts.len(),
+                    });
+                }
+                Ok(EncString::Cose {
+                    data: decode(parts[0])?,
+                })
+            }
             other => Err(ParseError::UnsupportedType(other.to_string())),
         }
     }
@@ -93,6 +109,7 @@ impl fmt::Display for EncString {
                 STANDARD.encode(mac)
             ),
             EncString::Rsa2048OaepSha1 { data } => write!(f, "4.{}", STANDARD.encode(data)),
+            EncString::Cose { data } => write!(f, "7.{}", STANDARD.encode(data)),
         }
     }
 }

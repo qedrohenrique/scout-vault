@@ -23,10 +23,17 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
+/// Glifo da marca (cadeado de chapéu), pintado com a cor do tema.
+pub const BRAND_MARK: &str = "brand/mark.svg";
+const BRAND_MARK_SVG: &[u8] = include_bytes!("../assets/brand/mark.svg");
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == BRAND_MARK {
+            return Ok(Some(Cow::Borrowed(BRAND_MARK_SVG)));
+        }
         if let Some(bytes) = ExtraIcons.load(path)? {
             return Ok(Some(bytes));
         }
@@ -36,6 +43,9 @@ impl AssetSource for AppAssets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(ExtraIcons.list(path)?);
+        if BRAND_MARK.starts_with(path) {
+            paths.push(BRAND_MARK.into());
+        }
         paths.sort();
         paths.dedup();
         Ok(paths)
@@ -84,6 +94,12 @@ mod tests {
         let path = IconName::LockKeyhole.path();
         // `load` devolve erro (não `None`) para ícone ausente.
         assert!(!matches!(gpui_kit::assets::Assets.load(&path), Ok(Some(_))));
+    }
+
+    #[test]
+    fn brand_mark_is_embedded() {
+        let svg = AppAssets.load(super::BRAND_MARK).unwrap().unwrap();
+        assert!(std::str::from_utf8(&svg).unwrap().starts_with("<svg"));
     }
 
     #[test]

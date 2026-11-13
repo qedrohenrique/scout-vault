@@ -42,7 +42,12 @@ Meta: um teste de integração que loga no Vaultwarden local e lista os nomes do
 - [x] Falhas isoladas: item ou organização corrompidos não derrubam o resto do cofre
 - [x] Segredos em `Secret`/`Zeroizing`, `Debug` sem material de chave
 - [x] **Validar contra o Vaultwarden local** (`tests/live_server.rs` + `tools/dev_seed.py`) — login, refresh, sync e 4 itens decifrados sem erro
-- [ ] Validar contra o Bitwarden oficial com uma conta de teste (2FA, novo dispositivo — o Vaultwarden não implementa essa verificação)
+- [x] Validar contra o Bitwarden oficial com uma conta real — roteiro em [TESTE-CONTA-REAL.md](TESTE-CONTA-REAL.md)
+  - [x] O servidor oficial recusa clientes antigos ("Please update your app"): a versão anunciada
+        (`Bitwarden-Client-Version`) precisa acompanhar a do app desktop oficial
+  - [x] Protocolo revisado contra o código do servidor oficial e do rbw: token de sessão do 2FA por e-mail, `Device-Identifier`, `device_error`, captcha, código de 2FA inválido
+  - [x] Guardar o token de "lembrar dispositivo" no Gerenciador de Credenciais do Windows
+  - [x] SSO da empresa (com senha mestra), FIDO2/Windows Hello, Duo e criptografia v2 (COSE)
 - [ ] Novos tipos de item do servidor: 6 = conta bancária, 7 = CNH, 8 = passaporte (hoje aparecem como `Unknown`)
 
 **Testes:** `tools/gen_fixtures.py` gera, com a biblioteca `cryptography` do Python (implementação
@@ -72,31 +77,55 @@ Meta: usar no dia a dia para **consultar** senhas.
 - [x] **Tela de configurações** (`Ctrl+,`, Esc fecha): tema Sistema/Claro/Escuro (segue o Windows ao vivo), 6 cores de
       destaque, tamanho do texto e cantos — aplicados na hora e salvos em `settings.json`
 - [ ] Barra de título própria — a nativa do Windows não acompanha o tema do app
-- [ ] Sessão expirada no "Sincronizar" → voltar para o login automaticamente
-- [ ] Atalhos: `Ctrl+L` bloquear, `Ctrl+F` focar a busca, `Ctrl+C` copiar senha do item selecionado
+- [x] Sessão expirada no "Sincronizar" → voltar para o login automaticamente
+- [x] Atalhos: `Ctrl+L` bloquear, `Ctrl+F` focar a busca, `Ctrl+U`/`Ctrl+P`/`Ctrl+T` copiar
+      usuário/senha/código (no lugar de `Ctrl+C`, que segue copiando texto selecionado)
 
 ## Fase 3 — Persistência segura e conveniência
 - **Re-prompt** da senha mestra em itens marcados (hoje só mostra um aviso).
-- Excluir o que é copiado do **histórico da área de transferência do Windows** (Win+V) e da nuvem.
+- [x] Excluir o que é copiado do **histórico da área de transferência do Windows** (Win+V) e da nuvem.
 - Bloquear ao **suspender/bloquear a sessão do Windows** e ao minimizar (opcional).
-- **Refresh token** no cofre do SO via `keyring` (Windows Credential Manager).
-- **Cache local cifrado** do sync (os dados já vêm cifrados do servidor — guardar o JSON cru, decifrar só na memória) → abrir offline.
+- [x] **Refresh token** no cofre do SO via `keyring` (Windows Credential Manager).
+- [x] **Cache local cifrado** do sync (`sessao.json`, o JSON cru do servidor) → abrir offline e
+      ir direto ao desbloqueio ("Lembrar sessão").
 - **Sync incremental**/periódico e via notificações (`/notifications/hub`, SignalR) — opcional.
-- **Código TOTP ao vivo** para itens com chave de autenticador (`totp-rs`), com contador visual (hoje o detalhe mostra só a chave).
-- **Gerador de senhas e passphrases**.
+- [x] **Código TOTP ao vivo** (RFC 6238 implementada no `cofre-core`, validada com os vetores da RFC;
+      `otpauth://`, base32 e Steam Guard), com segundos restantes.
+- [x] **Gerador de senhas** (`Ctrl+G`).
+- **Gerador de passphrases** — precisa de uma lista de palavras (ex.: EFF, CC BY 3.0).
 - **Atalho global** (ex.: `Ctrl+Shift+L`) abrindo uma janela de busca rápida estilo launcher.
 - Desbloqueio com **Windows Hello** (pesquisa: chave protegida por TPM/DPAPI).
 
 ## Fase 4 — Escrita
-- Cifrar: AES-256-CBC + HMAC com IV aleatório (`rand`/`getrandom`), gerar `EncString`.
-- Criar / editar / mover para lixeira / restaurar itens (`POST/PUT /api/ciphers`, `PUT /api/ciphers/{id}/delete`).
+- [x] Cifrar: AES-256-CBC + HMAC com IV aleatório e, em contas v2, COSE XChaCha20-Poly1305 (com `kid`).
+- [x] Criar / editar / lixeira / restaurar / apagar de vez (`POST/PUT /api/ciphers`, `…/delete`,
+      `…/restore`, `DELETE`), com `encryptedFor` e `lastKnownRevisionDate`.
+- [x] Edição **preserva o que o Cofre não conhece** (passkeys, regras de URI, campos vinculados…)
+      e recalcula o `uriChecksum` das URIs.
+- [x] Histórico de senhas do item (até 5).
+- [x] Testes ao vivo no Vaultwarden (núcleo e interface).
 - Pastas: criar, renomear, apagar.
-- Histórico de senhas do item.
-- Testes de ida e volta: cifrar no Cofre → ler na CLI oficial/web vault (e vice-versa).
+- Criar itens direto numa organização (precisa escolher coleções).
+- Testes de ida e volta com o cofre web oficial (ler no web vault o que o Cofre gravou).
+
+## Fase 4½ — Integração com o Windows e o navegador
+- [x] **Preencher em apps do Windows** ("auto-type", como no KeePass): `Ctrl+Alt+A` digita
+  usuário ⇥ senha ↵ na janela em foco (`SendInput` Unicode), escolhendo o item pelo título;
+  lista para escolher quando há dúvida; pedido guardado até desbloquear; para de digitar se o
+  foco mudar. Pendências: sequência personalizada por item (`{USERNAME}{TAB}…`), `{TOTP}`,
+  janelas que rodam como administrador (o Windows bloqueia a digitação vinda de app comum).
+- [x] **Preencher no navegador**: extensão MV3 própria (`extension/`) para Chrome/Edge/Brave,
+  *native messaging* com o próprio `cofre.exe` como ponte e pipe local com ACL do usuário.
+  Pendências: Firefox, salvar login novo pela extensão, preencher sozinho ao abrir a página,
+  publicar na loja (hoje carrega sem compactação).
+- **Login social (Google etc.)**: o Bitwarden não oferece "entrar com Google" para contas
+  pessoais; só existe via **SSO de organização** (Google Workspace como provedor), que o Cofre
+  já suporta. Nada a fazer até o servidor oferecer.
 
 ## Fase 5 — Recursos avançados
 - Organizações e coleções (escrita), compartilhamento de item.
-- Anexos (download/upload, cifrados com chave própria).
+- [x] Anexos: anexar, abrir, salvar e remover (chave própria por anexo; envio direto ou Azure).
+      O envio pela nuvem oficial (Azure) ainda não foi testado com uma conta real.
 - Bitwarden **Send**.
 - Relatórios locais: senhas reutilizadas/fracas; senhas vazadas via k-anonymity da API do HIBP.
 - Importar/exportar (JSON do Bitwarden, cifrado).

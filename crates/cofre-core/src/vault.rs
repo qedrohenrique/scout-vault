@@ -19,6 +19,8 @@ pub enum VaultError {
     Crypto(#[from] CryptoError),
     #[error("sem chave para a organização {0}")]
     MissingOrgKey(String),
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// Chaves da sessão desbloqueada.
@@ -59,7 +61,14 @@ impl Keys {
             return Ok(keys);
         }
 
-        let private_key = match profile.private_key.as_deref() {
+        let wrapped_private_key = profile.private_key.as_deref().or_else(|| {
+            profile
+                .account_keys
+                .as_ref()
+                .and_then(|a| a.public_key_encryption_key_pair.as_ref())
+                .and_then(|p| p.wrapped_private_key.as_deref())
+        });
+        let private_key = match wrapped_private_key {
             Some(pk) => keys.open_private_key(pk),
             None => Err(VaultError::Crypto(CryptoError::RsaKey)),
         };
@@ -111,6 +120,14 @@ pub struct Organization {
     pub name: String,
 }
 
+/// Arquivo anexado ao item (o conteúdo fica no servidor, cifrado).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub id: String,
+    pub file_name: String,
+    pub size: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: String,
@@ -126,6 +143,7 @@ pub struct Item {
     pub revision_date: Option<String>,
     pub fields: Vec<Field>,
     pub kind: ItemKind,
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +319,7 @@ fn decrypt_item(c: &CipherRaw, keys: &Keys) -> Result<Item, VaultError> {
                 password: None,
                 totp: None,
                 uris: None,
+                extra: Default::default(),
             });
             let mut uris = Vec::new();
             for u in l.uris.iter().flatten() {
@@ -379,7 +398,20 @@ fn decrypt_item(c: &CipherRaw, keys: &Keys) -> Result<Item, VaultError> {
         });
     }
 
+    let attachments = crate::attachment::raw_attachments(c)
+        .into_iter()
+        .map(|a| Attachment {
+            file_name: plain(key, &a.file_name)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "(nome ilegível)".into()),
+            size: a.size_bytes(),
+            id: a.id,
+        })
+        .collect();
+
     Ok(Item {
+        attachments,
         id: c.id.clone(),
         organization_id: c.organization_id.clone(),
         folder_id: c.folder_id.clone(),

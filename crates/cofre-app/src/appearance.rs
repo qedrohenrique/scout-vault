@@ -189,6 +189,32 @@ impl Corners {
     }
 }
 
+/// Animações da arte de fundo nas telas de entrada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Motion {
+    #[default]
+    On,
+    Off,
+}
+
+impl Motion {
+    pub const ALL: [Motion; 2] = [Self::On, Self::Off];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::On => "Animado",
+            Self::Off => "Parado",
+        }
+    }
+}
+
 /// Preferências de aparência. Ficam no `settings.json` (nada sensível).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -197,6 +223,7 @@ pub struct Appearance {
     pub accent: Accent,
     pub text_size: TextSize,
     pub corners: Corners,
+    pub motion: Motion,
 }
 
 /// Neutros de cada modo.
@@ -367,6 +394,7 @@ pub fn apply(appearance: &Appearance, window: Option<&Window>, cx: &mut App) {
     });
     // `change` recarrega o tema do modo mesmo se o modo não mudou.
     Theme::change(mode, None, cx);
+    crate::backdrop::set_motion(appearance.motion == Motion::On, cx);
 }
 
 /// A cor de destaque em uso (para detalhes desenhados à mão).

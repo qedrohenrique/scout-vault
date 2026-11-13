@@ -25,6 +25,20 @@ impl SyncResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountKeys {
+    #[serde(default)]
+    pub public_key_encryption_key_pair: Option<KeyPair>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPair {
+    #[serde(default)]
+    pub wrapped_private_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub id: String,
     #[serde(default)]
@@ -35,6 +49,10 @@ pub struct Profile {
     /// Chave privada RSA (PKCS#8) cifrada com a user key.
     #[serde(default)]
     pub private_key: Option<String>,
+    /// Formato novo das chaves da conta (contas v2). Só usado como reserva
+    /// quando `private_key` não vem.
+    #[serde(default)]
+    pub account_keys: Option<AccountKeys>,
     #[serde(default)]
     pub organizations: Vec<OrganizationRaw>,
 }
@@ -95,6 +113,10 @@ pub struct CipherRaw {
     pub ssh_key: Option<SshKeyRaw>,
     #[serde(default)]
     pub fields: Option<Vec<FieldRaw>>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +130,10 @@ pub struct LoginRaw {
     pub totp: Option<String>,
     #[serde(default)]
     pub uris: Option<Vec<UriRaw>>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +144,10 @@ pub struct UriRaw {
     /// Regra de correspondência (domínio, host, exata...). Texto claro.
     #[serde(default, rename = "match")]
     pub match_type: Option<u8>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +165,10 @@ pub struct CardRaw {
     pub exp_year: Option<String>,
     #[serde(default)]
     pub code: Option<String>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -158,6 +192,10 @@ pub struct IdentityRaw {
     pub username: Option<String>,
     pub passport_number: Option<String>,
     pub license_number: Option<String>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +208,10 @@ pub struct SshKeyRaw {
     /// O servidor oficial chama de `keyFingerprint`; servidores antigos, de `fingerprint`.
     #[serde(default, alias = "fingerprint")]
     pub key_fingerprint: Option<String>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,4 +224,8 @@ pub struct FieldRaw {
     pub name: Option<String>,
     #[serde(default)]
     pub value: Option<String>,
+    /// Campos que o Cofre não usa (passkeys, histórico de senhas, anexos…),
+    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }

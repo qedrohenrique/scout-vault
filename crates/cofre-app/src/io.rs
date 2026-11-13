@@ -31,6 +31,23 @@ where
     }
 }
 
+/// Tarefa de fundo que para quando o valor é solto.
+pub struct Background(tokio::task::JoinHandle<()>);
+
+impl Drop for Background {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Roda `fut` no runtime de rede até terminar ou o [`Background`] ser solto.
+pub fn spawn<F>(fut: F) -> Background
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    Background(runtime().spawn(fut))
+}
+
 /// Executa trabalho de CPU pesado (KDF, decifrar o cofre) fora da thread de UI.
 pub async fn blocking<F, T>(f: F) -> T
 where

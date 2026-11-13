@@ -2,13 +2,20 @@
 popula alguns itens, sem abrir navegador. Grava as credenciais em
 dev/test-account.env (ignorado pelo git) para o teste ao vivo.
 
-Uso:  python tools/dev_seed.py [--url http://localhost:8000]
+Uso:  python tools/dev_seed.py [--url http://localhost:8000] [--totp]
+
+Com --totp, a conta ganha 2FA por autenticador e as credenciais (com o segredo
+TOTP) vão para dev/test-account-2fa.env.
 
 Só aceita servidores em localhost — nunca aponte para um servidor real.
 """
 
 import argparse
 import base64
+import hashlib
+import hmac
+import struct
+import time
 import json
 import secrets
 import sys
@@ -26,6 +33,7 @@ from gen_fixtures import b64, encrypt, master_key_pbkdf2, server_hash, stretch
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / "dev" / "test-account.env"
+ENV_FILE_2FA = ROOT / "dev" / "test-account-2fa.env"
 ITERATIONS = 600_000
 
 
@@ -48,10 +56,21 @@ def request(url: str, *, json_body=None, form=None, token=None, headers=None):
         sys.exit(f"{url} -> {e.code}: {e.read().decode(errors='replace')}")
 
 
+def totp(secret_b32: str, at: float | None = None) -> str:
+    key = base64.b32decode(secret_b32 + "=" * (-len(secret_b32) % 8))
+    counter = int((time.time() if at is None else at) // 30)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = (struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF) % 1_000_000
+    return f"{code:06d}"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8000")
-    base = ap.parse_args().url.rstrip("/")
+    ap.add_argument("--totp", action="store_true", help="ativa 2FA por autenticador")
+    args = ap.parse_args()
+    base = args.url.rstrip("/")
     if urlparse(base).hostname not in {"localhost", "127.0.0.1", "::1"}:
         sys.exit("recusado: dev_seed só roda contra servidor local")
 
@@ -154,6 +173,31 @@ def main() -> None:
     for item in items:
         item["encryptedFor"] = user_id  # exigido desde web-v2025.6.0
         request(f"{base}/api/ciphers", json_body=item, token=token)
+
+    if args.totp:
+        # O servidor sugere a chave e devolve um token de verificação que a ativação exige.
+        setup = request(
+            f"{base}/api/two-factor/get-authenticator",
+            json_body={"masterPasswordHash": server_hash(mk, password)},
+            token=token,
+        )
+        secret = setup["authenticator"]["key"]
+        request(
+            f"{base}/api/two-factor/authenticator",
+            json_body={
+                "key": secret,
+                "token": totp(secret),
+                "userVerificationToken": setup["userVerificationToken"],
+            },
+            token=token,
+        )
+        ENV_FILE_2FA.write_text(
+            f"COFRE_TEST_2FA_URL={base}\nCOFRE_TEST_2FA_EMAIL={email}\n"
+            f"COFRE_TEST_2FA_PASSWORD={password}\nCOFRE_TEST_2FA_TOTP_SECRET={secret}\n",
+            encoding="utf-8",
+        )
+        print(f"conta {email} criada com 2FA por autenticador; credenciais em {ENV_FILE_2FA}")
+        return
 
     ENV_FILE.write_text(
         f"COFRE_TEST_URL={base}\nCOFRE_TEST_EMAIL={email}\nCOFRE_TEST_PASSWORD={password}\n",

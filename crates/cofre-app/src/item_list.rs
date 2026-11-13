@@ -331,6 +331,7 @@ mod tests {
             reprompt: false,
             deleted: false,
             revision_date: None,
+            attachments: Vec::new(),
             fields: Vec::new(),
             kind,
         }

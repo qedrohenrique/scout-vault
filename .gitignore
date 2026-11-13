@@ -3,3 +3,4 @@ dev/vw-data/
 *.pdb
 .env
 dev/test-account.env
+dev/test-account-2fa.env

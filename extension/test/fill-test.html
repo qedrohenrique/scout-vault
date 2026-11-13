@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Teste do preenchimento do Cofre</title>
+    <style>
+      body { font: 14px system-ui; margin: 24px; }
+      section { border: 1px solid #ccc; padding: 12px; margin: 12px 0; }
+      .hidden { display: none; }
+      pre { background: #f4f4f4; padding: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Teste do preenchimento</h1>
+    <p>Abre <code>fill.js</code> e roda <code>cofreFillPage</code> em cada cenário, isolado num iframe.</p>
+    <pre id="result">rodando…</pre>
+    <script>
+      // Cada cenário: HTML do formulário e o que esperar depois de preencher.
+      const scenarios = [
+        {
+          name: "form comum: usuário + senha",
+          html: `<form><input name="search" type="search"><input id="u" name="user"><input id="p" type="password"></form>`,
+          expect: { u: "eu", p: "s3nh@" },
+        },
+        {
+          name: "autocomplete=username tem prioridade e campo de busca é ignorado",
+          html: `<input id="q" placeholder="buscar"><form><input id="e" type="email" autocomplete="username"><input id="x" name="cupom"><input id="p" type="password"></form>`,
+          expect: { e: "eu", p: "s3nh@", x: "" },
+        },
+        {
+          name: "campos escondidos e desabilitados são pulados",
+          html: `<form><input id="h" class="hidden"><input id="d" disabled><input id="u" type="text"><input id="p2" type="password" class="hidden"><input id="p" type="password"></form>`,
+          expect: { h: "", d: "", u: "eu", p: "s3nh@", p2: "" },
+        },
+        {
+          name: "duas etapas: só o e-mail na primeira página",
+          html: `<form><input id="m" name="login_email" type="email"></form>`,
+          expect: { m: "eu" },
+        },
+        {
+          name: "sem form, campos soltos",
+          html: `<div><input id="u" name="usuario"><input id="p" type="password"></div>`,
+          expect: { u: "eu", p: "s3nh@" },
+        },
+        {
+          name: "React escuta o evento input",
+          html: `<form><input id="u"><input id="p" type="password"></form><span id="log"></span>`,
+          setup: (doc) => {
+            doc.getElementById("p").addEventListener("input", (e) => {
+              doc.getElementById("log").textContent = "input:" + e.target.value.length;
+            });
+          },
+          check: (doc) => doc.getElementById("log").textContent === "input:5",
+          expect: { u: "eu", p: "s3nh@" },
+        },
+      ];
+
+      async function run() {
+        const source = await (await fetch("../fill.js")).text();
+        const lines = [];
+        let ok = true;
+        for (const sc of scenarios) {
+          const frame = document.createElement("iframe");
+          frame.style.width = "600px";
+          frame.style.height = "120px";
+          document.body.append(frame);
+          const doc = frame.contentDocument;
+          doc.open();
+          doc.write(`<style>.hidden{display:none}</style>${sc.html}<script>${source}<\/script>`);
+          doc.close();
+          if (sc.setup) sc.setup(doc);
+          const filled = frame.contentWindow.cofreFillPage("eu", "s3nh@");
+          let pass = true;
+          for (const [id, want] of Object.entries(sc.expect)) {
+            const got = doc.getElementById(id).value;
+            if (got !== want) {
+              pass = false;
+              lines.push(`  ${id}: esperado "${want}", veio "${got}"`);
+            }
+          }
+          if (sc.check && !sc.check(doc)) pass = false;
+          ok = ok && pass;
+          lines.unshift(`${pass ? "OK  " : "FALHA"} ${sc.name} ${JSON.stringify(filled)}`);
+        }
+        document.getElementById("result").textContent =
+          (ok ? "TODOS PASSARAM\n" : "HÁ FALHAS\n") + lines.join("\n");
+        document.title = ok ? "ok" : "falha";
+      }
+      run();
+    </script>
+  </body>

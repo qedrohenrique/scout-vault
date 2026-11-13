@@ -8,7 +8,8 @@ use gpui_kit::*;
 
 use crate::appearance;
 
-/// A marca do Cofre: um quadrado na cor de destaque com a fechadura.
+/// A marca do Cofre: o cadeado de chapéu (`assets/brand/mark.svg`) sobre um
+/// quadrado na cor de destaque — acompanha o tema, ao contrário do ícone do `.exe`.
 pub fn brand_mark(size: Pixels, cx: &App) -> Div {
     div()
         .size(size)
@@ -19,7 +20,12 @@ pub fn brand_mark(size: Pixels, cx: &App) -> Div {
         .rounded(cx.theme().radius_lg)
         .bg(appearance::accent(cx))
         .text_color(cx.theme().primary_foreground)
-        .child(Icon::new(IconName::LockKeyhole).size(size * 0.5))
+        .child(
+            svg()
+                .path(crate::assets::BRAND_MARK)
+                .size(size * 0.72)
+                .text_color(cx.theme().primary_foreground),
+        )
 }
 
 /// Marca + nome, para o topo da barra lateral e das telas de entrada.
@@ -28,6 +34,22 @@ pub fn wordmark(cx: &App) -> Div {
         .gap_2()
         .child(brand_mark(px(22.), cx))
         .child(div().text_sm().font_semibold().child("cofre"))
+}
+
+/// Marca grande, centralizada sobre o formulário das telas de entrada.
+pub fn hero_wordmark(cx: &App) -> Div {
+    h_flex()
+        .gap_3()
+        .items_center()
+        .justify_center()
+        .child(brand_mark(px(52.), cx))
+        .child(
+            div()
+                .text_size(px(38.))
+                .font_semibold()
+                .line_height(px(44.))
+                .child("cofre"),
+        )
 }
 
 /// Título pequeno de grupo ("TIPOS", "PASTAS"…).
@@ -118,8 +140,8 @@ pub fn segmented(
         .children(items)
 }
 
-/// Moldura das telas de entrada (login e desbloqueio): marca no topo,
-/// engrenagem de configurações no canto e um cartão central.
+/// Moldura das telas de entrada (login e desbloqueio): engrenagem de
+/// configurações no canto e, no centro, a marca grande sobre o cartão.
 pub fn entry_screen(
     settings_id: &'static str,
     title: impl Into<SharedString>,
@@ -129,20 +151,14 @@ pub fn entry_screen(
     on_settings: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Div {
-    let top = h_flex()
-        .w_full()
-        .px_5()
-        .py_4()
-        .justify_between()
-        .child(wordmark(cx))
-        .child(
-            Button::new(settings_id)
-                .ghost()
-                .small()
-                .icon(IconName::Settings)
-                .tooltip("Configurações (Ctrl+,)")
-                .on_click(on_settings),
-        );
+    let top = h_flex().w_full().px_5().py_4().justify_end().child(
+        Button::new(settings_id)
+            .ghost()
+            .small()
+            .icon(IconName::Settings)
+            .tooltip("Configurações (Ctrl+,)")
+            .on_click(on_settings),
+    );
     let card = v_flex()
         .w(width)
         .gap_6()
@@ -164,9 +180,12 @@ pub fn entry_screen(
         )
         .child(body);
     v_flex()
+        .relative()
         .size_full()
         .bg(cx.theme().background)
         .text_color(cx.theme().foreground)
+        // A arte fica atrás de tudo; o cartão (opaco) passa por cima.
+        .child(crate::backdrop::backdrop(crate::appearance::accent(cx), cx))
         .child(top)
         .child(
             div()
@@ -175,7 +194,13 @@ pub fn entry_screen(
                 .items_center()
                 .justify_center()
                 .pb_16()
-                .child(card),
+                .child(
+                    v_flex()
+                        .items_center()
+                        .gap_6()
+                        .child(hero_wordmark(cx).id("entry-brand"))
+                        .child(card),
+                ),
         )
 }
 

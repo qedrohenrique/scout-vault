@@ -6,9 +6,11 @@ use gpui_kit::component::{button::*, *};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::appearance::{self, Accent, Appearance, Corners, TextSize, ThemeChoice};
-use crate::settings::SettingsStore;
+use crate::appearance::{self, Accent, Appearance, Corners, Motion, TextSize, ThemeChoice};
+use crate::autotype;
+use crate::settings::{AutoTypeSettings, SettingsStore};
 use crate::ui::{self, Segment};
+use gpui_kit::component::switch::Switch;
 
 pub enum SettingsEvent {
     Close,
@@ -17,14 +19,25 @@ pub enum SettingsEvent {
 pub struct SettingsView {
     store: SettingsStore,
     appearance: Appearance,
+    autotype: AutoTypeSettings,
+    remember_session: bool,
+    browser_fill: bool,
+    browser_error: Option<SharedString>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
     pub fn new(store: SettingsStore) -> Self {
-        let appearance = store.load().appearance;
-        Self { store, appearance }
+        let loaded = store.load();
+        Self {
+            store,
+            appearance: loaded.appearance,
+            autotype: loaded.autotype,
+            remember_session: loaded.remember_session,
+            browser_fill: loaded.browser_fill,
+            browser_error: None,
+        }
     }
 
     pub fn appearance(&self) -> Appearance {
@@ -41,6 +54,54 @@ impl SettingsView {
         settings.appearance = next;
         self.store.save(&settings);
         appearance::apply(&next, Some(window), cx);
+        cx.notify();
+    }
+
+    /// Liga/desliga a sessão lembrada; desligar apaga o que estava guardado.
+    pub fn set_remember_session(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.remember_session = on;
+        let mut settings = self.store.load();
+        settings.remember_session = on;
+        self.store.save(&settings);
+        if !on {
+            crate::saved_session::clear(&self.store);
+        }
+        cx.notify();
+    }
+
+    /// Liga/desliga a extensão do navegador. No app real, registra o Cofre
+    /// no Chrome/Edge/Brave (só no usuário atual) ou desfaz o registro.
+    pub fn set_browser_fill(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.browser_error = None;
+        if crate::browser::system_enabled() {
+            if let Some(dir) = self.store.dir() {
+                if on {
+                    if let Err(e) = crate::browser::register(&dir) {
+                        self.browser_error = Some(e.into());
+                        cx.notify();
+                        return;
+                    }
+                } else {
+                    crate::browser::unregister(&dir);
+                }
+            }
+        }
+        self.browser_fill = on;
+        let mut settings = self.store.load();
+        settings.browser_fill = on;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
+    pub fn autotype(&self) -> AutoTypeSettings {
+        self.autotype
+    }
+
+    pub fn set_autotype(&mut self, next: AutoTypeSettings, cx: &mut Context<Self>) {
+        self.autotype = next;
+        let mut settings = self.store.load();
+        settings.autotype = next;
+        self.store.save(&settings);
         cx.notify();
     }
 
@@ -217,6 +278,29 @@ impl Render for SettingsView {
             )
         };
 
+        let motion_control = {
+            let this = this.clone();
+            ui::segmented(
+                "settings-motion",
+                Motion::ALL
+                    .iter()
+                    .map(|m| Segment {
+                        id: format!("motion-{}", m.id()).into(),
+                        label: m.label().into(),
+                        icon: None,
+                        selected: *m == a.motion,
+                    })
+                    .collect(),
+                move |ix, window, cx| {
+                    this.update(cx, |v, cx| {
+                        v.update(|a| a.motion = Motion::ALL[ix], window, cx)
+                    })
+                    .ok();
+                },
+                cx,
+            )
+        };
+
         let appearance_group = Self::group(
             "APARÊNCIA",
             vec![
@@ -244,7 +328,125 @@ impl Render for SettingsView {
                     corners_control,
                     cx,
                 ),
+                Self::row(
+                    "Movimento",
+                    "Arte de fundo do login e do desbloqueio, animada ou parada.",
+                    motion_control,
+                    cx,
+                ),
             ],
+            cx,
+        );
+
+        let at = self.autotype;
+        let autotype_group = Self::group(
+            "PREENCHER EM OUTROS APPS",
+            vec![
+                Self::row(
+                    "Atalho global",
+                    "Com o cofre aberto, Ctrl+Alt+A em qualquer janela digita usuário ⇥ senha.",
+                    Switch::new("autotype-enabled")
+                        .checked(at.enabled)
+                        .on_click(cx.listener(move |this, v: &bool, _, cx| {
+                            this.set_autotype(AutoTypeSettings { enabled: *v, ..at }, cx)
+                        })),
+                    cx,
+                ),
+                Self::row(
+                    "Apertar Enter no final",
+                    "Envia o formulário depois de digitar a senha.",
+                    Switch::new("autotype-enter")
+                        .checked(at.press_enter)
+                        .disabled(!at.enabled)
+                        .on_click(cx.listener(move |this, v: &bool, _, cx| {
+                            this.set_autotype(
+                                AutoTypeSettings {
+                                    press_enter: *v,
+                                    ..at
+                                },
+                                cx,
+                            )
+                        })),
+                    cx,
+                ),
+            ],
+            cx,
+        );
+        let _ = autotype::HOTKEY_LABEL;
+        let browser_group = {
+            let mut rows = vec![Self::row(
+                "Preencher no navegador",
+                "Deixa a extensão do Cofre (Chrome, Edge, Brave) pedir logins a este app. Só funciona com o cofre desbloqueado.",
+                Switch::new("browser-enabled")
+                    .checked(self.browser_fill)
+                    .on_click(cx.listener(|this, v: &bool, _, cx| this.set_browser_fill(*v, cx))),
+                cx,
+            )];
+            if self.browser_fill {
+                let dir = crate::browser::extension_dir();
+                rows.push(
+                    v_flex()
+                        .gap_2()
+                        .px_4()
+                        .py_3p5()
+                        .text_sm()
+                        .child(div().font_medium().child("Instalar a extensão"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    "No navegador, abra chrome://extensions (ou edge://extensions), ligue o \
+                                     Modo do desenvolvedor, clique em \"Carregar sem compactação\" e escolha a \
+                                     pasta abaixo. Depois, num site, clique no ícone do Cofre ou use Ctrl+Shift+L.",
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .child(dir.to_string_lossy().into_owned()),
+                                )
+                                .child(
+                                    Button::new("browser-open-folder")
+                                        .outline()
+                                        .small()
+                                        .label("Abrir pasta")
+                                        .on_click(move |_, _, cx| cx.reveal_path(&dir.join("manifest.json"))),
+                                ),
+                        ),
+                );
+            }
+            if let Some(e) = &self.browser_error {
+                rows.push(
+                    div()
+                        .px_4()
+                        .py_3()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(e.clone()),
+                );
+            }
+            Self::group("NAVEGADOR", rows, cx)
+        };
+        let session_group = Self::group(
+            "SESSÃO",
+            vec![Self::row(
+                "Lembrar sessão",
+                "Ao abrir o app, pede só a senha mestra. O cofre fica guardado cifrado neste computador e abre mesmo sem internet.",
+                Switch::new("remember-session")
+                    .checked(self.remember_session)
+                    .on_click(cx.listener(|this, v: &bool, _, cx| {
+                        this.set_remember_session(*v, cx)
+                    })),
+                cx,
+            )],
             cx,
         );
 
@@ -285,7 +487,10 @@ impl Render for SettingsView {
                     .py_10()
                     .gap_8()
                     .child(header)
-                    .child(appearance_group),
+                    .child(appearance_group)
+                    .child(session_group)
+                    .child(browser_group)
+                    .child(autotype_group),
             )
     }
 }

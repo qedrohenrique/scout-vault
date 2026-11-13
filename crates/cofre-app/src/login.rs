@@ -40,6 +40,9 @@ pub struct LoginView {
     email: Entity<InputState>,
     password: Entity<InputState>,
     code: Entity<InputState>,
+    sso_identifier: Entity<InputState>,
+    /// Entrar pelo SSO da empresa em vez de e-mail + senha.
+    use_sso: bool,
     remember_device: bool,
     step: Step,
     busy: Option<SharedString>,
@@ -69,6 +72,11 @@ impl LoginView {
                 .placeholder("Senha mestra")
         });
         let code = cx.new(|cx| InputState::new(window, cx).placeholder("Código"));
+        let sso_identifier = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("identificador-da-empresa")
+                .default_value(settings.last_sso_identifier.clone())
+        });
 
         let submit_on_enter =
             |input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>| {
@@ -82,6 +90,7 @@ impl LoginView {
             submit_on_enter(&email, window, cx),
             submit_on_enter(&password, window, cx),
             submit_on_enter(&code, window, cx),
+            submit_on_enter(&sso_identifier, window, cx),
         ];
 
         Self {
@@ -91,6 +100,8 @@ impl LoginView {
             email,
             password,
             code,
+            sso_identifier,
+            use_sso: false,
             remember_device: false,
             step: Step::Credentials,
             busy: None,
@@ -128,6 +139,16 @@ impl LoginView {
         self.submit(window, cx);
     }
 
+    /// Mensagem informativa mostrada acima do formulário (ex.: sessão expirada).
+    pub fn set_notice(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.info = Some(message.into());
+        cx.notify();
+    }
+
+    pub fn info(&self) -> Option<&SharedString> {
+        self.info.as_ref()
+    }
+
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
     }
@@ -155,7 +176,37 @@ impl LoginView {
                 providers,
                 selected,
             } => {
-                let token = self.code.read(cx).value().trim().to_owned();
+                if selected == TwoFactorProvider::WebAuthn {
+                    self.run(
+                        "Toque na chave de segurança ou confirme no Windows Hello…",
+                        flow::continue_with_webauthn(pending, self.remember_device),
+                        cx,
+                    );
+                    return;
+                }
+                let mut token = self.code.read(cx).value().trim().to_owned();
+                if matches!(
+                    selected,
+                    TwoFactorProvider::Duo | TwoFactorProvider::OrganizationDuo
+                ) && !token.is_empty()
+                {
+                    match flow::duo_token(&token) {
+                        Some(t) => token = t,
+                        None => {
+                            self.error = Some(
+                                "Cole o endereço completo da página que abriu depois de aprovar no Duo."
+                                    .into(),
+                            );
+                            self.step = Step::TwoFactor {
+                                pending,
+                                providers,
+                                selected,
+                            };
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
                 if token.is_empty() {
                     self.error = Some("Digite o código.".into());
                     self.step = Step::TwoFactor {
@@ -194,7 +245,11 @@ impl LoginView {
         }
     }
 
-    fn submit_credentials(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn submit_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.use_sso {
+            self.submit_sso(window, cx);
+            return;
+        }
         let email = self.email.read(cx).value().trim().to_owned();
         let password = Zeroizing::new(self.password.read(cx).value().to_string());
         self.settings.self_hosted_url = self.server_url.read(cx).value().trim().to_owned();
@@ -228,7 +283,45 @@ impl LoginView {
         };
         self.run(
             "Entrando… (derivar a chave leva alguns segundos)",
-            flow::start_login(client, email, password),
+            flow::start_login(client, email, password, self.store.secrets().clone()),
+            cx,
+        );
+    }
+
+    fn submit_sso(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let identifier = self.sso_identifier.read(cx).value().trim().to_owned();
+        let password = Zeroizing::new(self.password.read(cx).value().to_string());
+        self.settings.self_hosted_url = self.server_url.read(cx).value().trim().to_owned();
+
+        let validation = if identifier.is_empty() {
+            Err("Informe o identificador SSO da organização.".to_owned())
+        } else if password.is_empty() {
+            Err("Informe a senha mestra: ela abre o cofre depois do SSO.".to_owned())
+        } else {
+            self.settings.server_urls()
+        };
+        let urls = match validation {
+            Ok(urls) => urls,
+            Err(message) => {
+                self.error = Some(message.into());
+                cx.notify();
+                return;
+            }
+        };
+        self.settings.last_sso_identifier = identifier.clone();
+        self.store.save(&self.settings);
+
+        let client = match Client::for_sso(urls, self.settings.device.clone()) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                self.error = Some(flow::describe_api_error(e).into());
+                cx.notify();
+                return;
+            }
+        };
+        self.run(
+            "Conclua o login no navegador que abriu…",
+            flow::start_sso_login(client, identifier, password),
             cx,
         );
     }
@@ -259,10 +352,7 @@ impl LoginView {
                 let supported = flow::supported_providers(&providers);
                 match supported.first().copied() {
                     Some(selected) => {
-                        self.info = Some(
-                            format!("Digite o código do seu {}.", flow::provider_name(selected))
-                                .into(),
-                        );
+                        self.info = Some(flow::provider_prompt(selected).into());
                         self.step = Step::TwoFactor {
                             pending,
                             providers: supported,
@@ -279,6 +369,28 @@ impl LoginView {
                             )
                             .into(),
                         );
+                    }
+                }
+            }
+            Ok(LoginOutcome::WrongCode { pending, message }) => {
+                self.error = Some(message.into());
+                if pending.is_new_device() {
+                    self.step = Step::NewDevice { pending };
+                } else {
+                    let providers = flow::supported_providers(pending.providers());
+                    let selected = pending
+                        .last_provider()
+                        .filter(|p| providers.contains(p))
+                        .or_else(|| providers.first().copied());
+                    match selected {
+                        Some(selected) => {
+                            self.step = Step::TwoFactor {
+                                pending,
+                                providers,
+                                selected,
+                            }
+                        }
+                        None => self.step = Step::Credentials,
                     }
                 }
             }
@@ -300,8 +412,7 @@ impl LoginView {
     fn select_provider(&mut self, provider: TwoFactorProvider, cx: &mut Context<Self>) {
         if let Step::TwoFactor { selected, .. } = &mut self.step {
             *selected = provider;
-            self.info =
-                Some(format!("Digite o código do seu {}.", flow::provider_name(provider)).into());
+            self.info = Some(flow::provider_prompt(provider).into());
             cx.notify();
         }
     }
@@ -360,12 +471,26 @@ impl LoginView {
                         .disabled(busy),
                 )
             })
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(Label::new("E-mail").text_sm())
-                    .child(Input::new(&self.email).id("login-email").disabled(busy)),
-            )
+            .when(!self.use_sso, |el| {
+                el.child(
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new("E-mail").text_sm())
+                        .child(Input::new(&self.email).id("login-email").disabled(busy)),
+                )
+            })
+            .when(self.use_sso, |el| {
+                el.child(
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new("Identificador SSO da organização").text_sm())
+                        .child(
+                            Input::new(&self.sso_identifier)
+                                .id("login-sso-identifier")
+                                .disabled(busy),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .gap_1()
@@ -376,6 +501,17 @@ impl LoginView {
                             .mask_toggle()
                             .disabled(busy),
                     ),
+            )
+            .child(
+                Checkbox::new("login-use-sso")
+                    .label("Entrar com o SSO da empresa")
+                    .checked(self.use_sso)
+                    .disabled(busy)
+                    .on_change(cx.listener(|this, value: &bool, _, cx| {
+                        this.use_sso = *value;
+                        this.error = None;
+                        cx.notify();
+                    })),
             )
             .into_any_element()
     }
@@ -413,7 +549,49 @@ impl LoginView {
             }
         }
 
-        col = col.child(Input::new(&self.code).id("login-code").disabled(busy));
+        let uses_key = matches!(
+            &self.step,
+            Step::TwoFactor { selected, .. } if *selected == TwoFactorProvider::WebAuthn
+        );
+        let duo = match &self.step {
+            Step::TwoFactor {
+                pending, selected, ..
+            } if matches!(
+                selected,
+                TwoFactorProvider::Duo | TwoFactorProvider::OrganizationDuo
+            ) =>
+            {
+                Some(flow::duo_auth_url(pending, *selected))
+            }
+            _ => None,
+        };
+        if let Some(url) = duo {
+            col = col.child(
+                Button::new("login-duo-open")
+                    .outline()
+                    .label("Abrir o Duo no navegador")
+                    .disabled(busy || url.is_none())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(url) = &url {
+                            if let Err(e) = crate::sso::open_browser(url) {
+                                this.error = Some(e.into());
+                                cx.notify();
+                            }
+                        }
+                    })),
+            );
+        }
+        if uses_key {
+            col = col.child(
+                Button::new("login-webauthn")
+                    .outline()
+                    .label("Usar chave de segurança ou Windows Hello")
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+            );
+        } else {
+            col = col.child(Input::new(&self.code).id("login-code").disabled(busy));
+        }
 
         if matches!(self.step, Step::TwoFactor { .. }) {
             col = col.child(

@@ -2,9 +2,9 @@
 //!
 //! A derivação em si (PBKDF2-SHA256 / Argon2id) entra na fase 1, no módulo `crypto`.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kdf {
     /// Salt = e-mail em minúsculas.
     Pbkdf2Sha256 { iterations: u32 },
