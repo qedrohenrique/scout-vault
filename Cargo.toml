@@ -23,3 +23,7 @@ hmac.opt-level = 3
 aes.opt-level = 3
 rsa.opt-level = 3
 crypto-bigint.opt-level = 3
+
+[profile.release]
+# Binário menor na release (sem símbolos de depuração).
+strip = true

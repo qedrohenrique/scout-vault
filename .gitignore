@@ -4,3 +4,6 @@ dev/vw-data/
 .env
 dev/test-account.env
 dev/test-account-2fa.env
+
+# Pacotes de release
+/dist/
