@@ -27,7 +27,11 @@ gpui_kit::assets::icon_assets!(
         Paperclip,
         Pencil,
         Plus,
-        Undo2
+        Undo2,
+        Check,
+        Info,
+        Pin,
+        PinOff
     ]
 );
 
@@ -102,6 +106,10 @@ mod tests {
         IconName::Pencil,
         IconName::Plus,
         IconName::Undo2,
+        IconName::Check,
+        IconName::Info,
+        IconName::Pin,
+        IconName::PinOff,
     ];
 
     /// Nenhum ícone usado no código (`IconName::…`) pode faltar em `USED` (e, portanto, no binário).

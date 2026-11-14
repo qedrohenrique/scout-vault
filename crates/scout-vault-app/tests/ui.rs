@@ -870,6 +870,8 @@ fn entry_art_can_be_stilled(cx: &mut TestAppContext) {
         app.update(cx, |app, cx| app.close_settings(cx));
         window.render_frame(cx);
         assert_eq!(window.find("entry-backdrop").label(), Some("parado"));
+        // "Parado" vale para todas as animações da interface.
+        assert!(cx.reduce_motion());
     })
     .unwrap();
 }
@@ -960,7 +962,8 @@ fn logging_out_or_turning_off_forgets_the_session(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.open_settings(window, cx));
         window.render_frame(cx);
-        window.click("remember-session", cx);
+        let view = app.read(cx).settings_view().unwrap().clone();
+        view.update(cx, |v, cx| v.set_remember_session(false, cx));
     })
     .unwrap();
     assert!(store.read_session_blob_for_tests().is_none());
@@ -1245,14 +1248,14 @@ fn attachments_through_the_ui(cx: &mut TestAppContext) {
     // Abrir baixa, decifra e grava a cópia temporária.
     cx.update(|cx| vault.update(cx, |v, cx| v.open_attachment(att.id.clone(), cx)));
     wait_until(cx, |cx| {
-        cx.update_window(handle, |_, window, cx| {
-            window.render_frame(cx);
-            window
-                .find("vault-status")
-                .label()
-                .is_some_and(|l| l.contains("aberto"))
+        cx.update(|cx| {
+            app.read(cx)
+                .toasts()
+                .read(cx)
+                .texts()
+                .iter()
+                .any(|t| t.contains("aberto"))
         })
-        .unwrap()
     });
 
     // Remover (dois cliques) e apagar o item.
@@ -1378,4 +1381,564 @@ fn browser_requests_follow_setting_and_lock_state(cx: &mut TestAppContext) {
     .unwrap();
     assert_eq!(browser_ask(cx, handle, &app, list())["locked"], true);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn progress_bar_shows_while_syncing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("vault-progress").is_none());
+        window.click("vault-sync", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("vault-progress").is_some());
+    })
+    .unwrap();
+    // O servidor do fixture não existe: a sincronização falha e a barra some.
+    wait_until(cx, |cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("vault-progress").is_none()
+        })
+        .unwrap()
+    });
+}
+
+/// O formulário aproveita a largura: campos curtos dividem a linha.
+#[gpui_kit::test]
+fn editor_layout_puts_short_fields_side_by_side(cx: &mut TestAppContext) {
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    let row = |window: &mut gpui_kit::Window, ids: &[&'static str]| {
+        let b: Vec<_> = ids.iter().map(|id| window.find(*id).bounds()).collect();
+        (
+            b.iter().map(|b| f32::from(b.origin.y)).collect::<Vec<_>>(),
+            b,
+        )
+    };
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        // Seletor de tipo na barra, na altura do Salvar.
+        let kind = f32::from(window.find("editor-kind-login").bounds().center().y);
+        let save = f32::from(window.find("editor-save").bounds().center().y);
+        assert!((kind - save).abs() < 2.0, "seletor {kind} x salvar {save}");
+        // Centralizado no espaço livre: sobra igual dos dois lados.
+        let first = window.find("editor-kind-login").bounds();
+        let last = window.find("editor-kind-identity").bounds();
+        let cancel = window.find("editor-cancel").bounds();
+        let detail = window.find("editor-name").bounds();
+        let left_gap = f32::from(first.left() - detail.left());
+        let right_gap = f32::from(cancel.left() - last.right());
+        assert!(
+            (left_gap - right_gap).abs() < 16.0,
+            "esquerda {left_gap} x direita {right_gap}"
+        );
+        // Login: usuário e senha lado a lado.
+        let (ys, _) = row(window, &["editor-username", "editor-password"]);
+        assert!((ys[0] - ys[1]).abs() < 1.0, "{ys:?}");
+        window.click("editor-kind-card", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let (ys, b) = row(
+            window,
+            &["editor-card-month", "editor-card-year", "editor-card-code"],
+        );
+        assert!(
+            ys.windows(2).all(|w| (w[0] - w[1]).abs() < 1.0),
+            "mesma linha: {ys:?}"
+        );
+        assert!(
+            b.iter().all(|b| f32::from(b.size.width) <= 90.0),
+            "campos curtos estreitos"
+        );
+        let number = f32::from(window.find("editor-card-number").bounds().size.width);
+        assert!(number > 300.0, "número do cartão largo: {number}");
+        // Nada passa da borda da janela.
+        let right = f32::from(window.find("editor-save").bounds().right());
+        assert!(right <= 1100.0, "{right}");
+        window.click("editor-kind-identity", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let (ys, _) = row(
+            window,
+            &["editor-id-city", "editor-id-state", "editor-id-postal"],
+        );
+        assert!(
+            ys.windows(2).all(|w| (w[0] - w[1]).abs() < 1.0),
+            "endereço em linha: {ys:?}"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn sync_button_shows_progress_then_result_then_resets(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    let label = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("vault-sync").label().map(str::to_owned)
+        })
+        .unwrap()
+    };
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let (_, email) = fixture_password_and_email();
+        assert_eq!(window.find("vault-email").label(), Some(email.as_str()));
+        window.click("vault-sync", cx);
+    })
+    .unwrap();
+    assert_eq!(label(cx).as_deref(), Some("Sincronizando…"));
+    // O servidor do fixture não existe: termina com erro e mostra o ✗…
+    wait_until(cx, |cx| {
+        label(cx).as_deref() == Some("Não foi possível sincronizar")
+    });
+    // …que volta às setas depois de um instante.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(1700));
+    cx.run_until_parked();
+    assert_eq!(label(cx).as_deref(), Some("Sincronizar"));
+}
+
+/// Avisos viram toasts: aparecem, ficam um pouco e saem. Nada fica fixo no rodapé.
+#[gpui_kit::test]
+fn actions_show_a_toast_that_goes_away(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault_view = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    cx.update_window(handle, |_, window, cx| {
+        vault_view.update(cx, |v, cx| v.select_item("login-1", window, cx));
+        window.render_frame(cx);
+        assert!(
+            window.try_find("vault-status").is_none(),
+            "sem texto fixo no rodapé"
+        );
+        window.click("copy-password", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("toast").label(),
+            Some("Copiado: Senha · some em 30 s")
+        );
+    })
+    .unwrap();
+    assert_eq!(texts(cx), ["Copiado: Senha · some em 30 s"]);
+    // Copiar de novo não empilha o mesmo aviso.
+    cx.update_window(handle, |_, window, cx| window.click("copy-password", cx))
+        .unwrap();
+    assert_eq!(texts(cx).len(), 1);
+    // Depois do tempo, sai (e some da tela).
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(3000));
+    cx.run_until_parked();
+    assert!(texts(cx).is_empty());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("toast").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn folder_controls_show_up_and_validate(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let toasts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+
+    // "+" ao lado de Pastas abre o campo; vazio não cria.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("folder-new-name").is_none());
+        window.click("folder-new", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("folder-new-name").is_some());
+        window.click("folder-new-save", cx);
+    })
+    .unwrap();
+    assert_eq!(toasts(cx), ["Dê um nome à pasta."]);
+    cx.update_window(handle, |_, window, cx| {
+        window.click("folder-new-cancel", cx)
+    })
+    .unwrap();
+
+    // Com uma pasta aberta: renomear e apagar no cabeçalho.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("folder-new-name").is_none());
+        assert!(
+            window.try_find("folder-rename").is_none(),
+            "só aparece numa pasta"
+        );
+        vault.update(cx, |v, cx| {
+            v.set_filter(
+                scout_vault_app::item_list::Filter::Folder(Some("folder-1".into())),
+                window,
+                cx,
+            )
+        });
+        window.render_frame(cx);
+        window.click("folder-delete", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window
+            .find("folder-delete")
+            .label()
+            .is_some_and(|l| l.contains("Apagar?")));
+        window.click("folder-rename", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("folder-rename-name").is_some());
+        assert!(window.try_find("folder-rename").is_none());
+    })
+    .unwrap();
+}
+
+/// Cria, renomeia e apaga uma pasta pela interface, contra o Vaultwarden local.
+#[gpui_kit::test]
+#[ignore = "precisa de servidor; veja dev/test-account.env"]
+fn folders_through_the_ui(cx: &mut TestAppContext) {
+    use scout_vault_app::item_list::Filter;
+    cx.executor().allow_parking();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let (handle, app) = open_app(cx, None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("login-server").click(2usize, cx);
+        window.click("login-server-url", cx);
+        window.input(&url, cx);
+        window.click("login-email", cx);
+        window.input(&email, cx);
+        window.click("login-password", cx);
+        window.input(&password, cx);
+        window.click("login-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let folder = |cx: &mut TestAppContext, name: &str| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .folders
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| f.id.clone())
+        })
+    };
+    let name = format!("Pasta UI {}", std::process::id());
+    let renamed = format!("{name} renomeada");
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("folder-new", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("folder-new-name", cx);
+        window.input(&name, cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| folder(cx, &name).is_some());
+    let id = folder(cx, &name).unwrap();
+    // Abre a pasta recém-criada.
+    wait_until(cx, |cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("folder-rename").is_some()
+        })
+        .unwrap()
+    });
+    cx.update(|cx| {
+        assert_eq!(
+            *vault.read(cx).list().read(cx).delegate().filter(),
+            Filter::Folder(Some(id.clone()))
+        )
+    });
+
+    cx.update_window(handle, |_, window, cx| window.click("folder-rename", cx))
+        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("folder-rename-name", cx);
+        window.press("ctrl-a", cx);
+        window.input(&renamed, cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| folder(cx, &renamed).is_some());
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("folder-delete", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("folder-delete", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| folder(cx, &renamed).is_none());
+    wait_until(cx, |cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            true
+        })
+        .unwrap();
+        cx.update(|cx| *vault.read(cx).list().read(cx).delegate().filter() == Filter::All)
+    });
+}
+
+#[gpui_kit::test]
+fn pinning_adds_quick_access_and_is_saved(cx: &mut TestAppContext) {
+    use scout_vault_app::item_list::Filter;
+    cx.update(gpui_kit::init);
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-pins-{}", std::process::id()));
+    let store = SettingsStore::at(dir.join("settings.json"));
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("pinned-login-1").is_none());
+        vault.update(cx, |v, cx| v.select_item("login-1", window, cx));
+        window.render_frame(cx);
+        window.click("item-pin", cx);
+    })
+    .unwrap();
+    assert_eq!(store.load().pinned_items, ["login-1"], "fica salvo");
+
+    // Com outro filtro ativo, o atalho volta para "Todos" e abre o item.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("pinned-login-1").is_some());
+        vault.update(cx, |v, cx| {
+            v.set_filter(
+                Filter::Kind(scout_vault_app::item_list::KindFilter::Card),
+                window,
+                cx,
+            )
+        });
+        window.render_frame(cx);
+        window.click("pinned-login-1", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let v = vault.read(cx);
+        assert_eq!(v.selected().unwrap().id, "login-1");
+        assert_eq!(*v.list().read(cx).delegate().filter(), Filter::All);
+    });
+
+    // Desafixar tira da barra e do arquivo.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-pin", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("pinned-login-1").is_none());
+    })
+    .unwrap();
+    assert!(store.load().pinned_items.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn tray_commands_and_close_without_tray(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            // Sem bandeja (testes), fechar fecha de verdade.
+            assert!(app.on_close_requested(window, cx));
+            app.handle_tray(scout_vault_app::tray::Command::Show, window, cx);
+            app.handle_tray(scout_vault_app::tray::Command::Lock, window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Locked);
+        });
+    })
+    .unwrap();
+    let texts = cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    assert_eq!(texts, ["Cofre bloqueado"]);
+}
+
+fn temp_files(tag: &str, names: &[&str]) -> Vec<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    names
+        .iter()
+        .map(|n| {
+            let p = dir.join(n);
+            std::fs::write(&p, format!("conteúdo de {n}")).unwrap();
+            p
+        })
+        .collect()
+}
+
+#[gpui_kit::test]
+fn editor_collects_files_and_keeps_them_across_kinds(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let files = temp_files("editor", &["rg.pdf", "foto.png"]);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find("editor-attach-zone").is_some(),
+            "área de anexos visível"
+        );
+        let editor = vault.read(cx).editor().unwrap().clone();
+        editor.update(cx, |e, cx| e.add_paths(&files, cx));
+        window.render_frame(cx);
+        assert_eq!(window.find("editor-file-1").label(), Some("foto.png"));
+        window.click("editor-kind-note", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let editor = vault.read(cx).editor().unwrap().clone();
+        assert_eq!(
+            editor.read(cx).pending_files(),
+            ["rg.pdf", "foto.png"],
+            "trocar o tipo não perde"
+        );
+        window.click("editor-file-remove-0", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let editor = vault.read(cx).editor().unwrap().clone();
+        assert_eq!(editor.read(cx).pending_files(), ["foto.png"]);
+    });
+    let _ = std::fs::remove_dir_all(files[0].parent().unwrap());
+}
+
+/// Cria uma nota já com arquivos e anexa mais pelo detalhe, contra o Vaultwarden local.
+#[gpui_kit::test]
+#[ignore = "precisa de servidor; veja dev/test-account.env"]
+fn note_with_files_through_the_ui(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let (handle, app) = open_app(cx, None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("login-server").click(2usize, cx);
+        window.click("login-server-url", cx);
+        window.input(&url, cx);
+        window.click("login-email", cx);
+        window.input(&email, cx);
+        window.click("login-password", cx);
+        window.input(&password, cx);
+        window.click("login-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let name = format!("Anexo UI {}", std::process::id());
+    let first = temp_files("nota", &["rg.pdf", "foto.png"]);
+    let more = temp_files("nota-mais", &["contrato.txt", "recibo.txt"]);
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        window.click("editor-kind-note", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-name", cx);
+        window.input(&name, cx);
+        let editor = vault.read(cx).editor().unwrap().clone();
+        editor.update(cx, |e, cx| e.add_paths(&first, cx));
+        window.click("editor-save", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .selected()
+                .is_some_and(|i| i.name == name && i.attachments.len() == 2)
+        })
+    });
+
+    // Dois de uma vez pelo detalhe (como arrastar vários).
+    cx.update(|cx| vault.update(cx, |v, cx| v.attach_paths(&more, cx)));
+    wait_until(cx, |cx| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .selected()
+                .is_some_and(|i| i.attachments.len() == 4)
+        })
+    });
+    let names: Vec<String> = cx.update(|cx| {
+        let mut n: Vec<String> = vault
+            .read(cx)
+            .selected()
+            .unwrap()
+            .attachments
+            .iter()
+            .map(|a| a.file_name.clone())
+            .collect();
+        n.sort();
+        n
+    });
+    assert_eq!(names, ["contrato.txt", "foto.png", "recibo.txt", "rg.pdf"]);
+
+    // Limpa: lixeira e apagar de vez.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-trash", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| vault.read(cx).selected().is_some_and(|i| i.deleted))
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| cx.update(|cx| vault.read(cx).selected().is_none()));
+    let _ = std::fs::remove_dir_all(first[0].parent().unwrap());
+    let _ = std::fs::remove_dir_all(more[0].parent().unwrap());
 }

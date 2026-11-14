@@ -417,30 +417,112 @@ pub enum SyncError {
 }
 
 pub async fn resync(session: Session, keys: Arc<Keys>) -> Result<(Session, Vault), SyncError> {
-    let (session, vault, _) = write(session, keys, WriteOp::Nothing).await?;
-    Ok((session, vault))
+    let w = write(session, keys, WriteOp::Nothing).await?;
+    Ok((w.session, w.vault))
+}
+
+/// Arquivo escolhido para anexar ao salvar o item (conteúdo só em memória).
+#[derive(Clone)]
+pub struct NewFile {
+    pub name: String,
+    pub contents: Zeroizing<Vec<u8>>,
+}
+
+impl NewFile {
+    /// Lê um arquivo do disco, respeitando o limite de tamanho dos anexos.
+    pub fn read(path: &std::path::Path) -> Result<Self, String> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "arquivo".into());
+        let meta =
+            std::fs::metadata(path).map_err(|e| format!("Não foi possível ler {name}: {e}"))?;
+        if meta.len() as usize > scout_vault_core::attachment::MAX_SIZE {
+            return Err(format!("{name} passa do limite de 500 MB."));
+        }
+        let contents =
+            std::fs::read(path).map_err(|e| format!("Não foi possível ler {name}: {e}"))?;
+        Ok(Self {
+            name,
+            contents: Zeroizing::new(contents),
+        })
+    }
+}
+
+/// Cifra e envia cada arquivo como anexo de `cipher`. Falhas viram avisos
+/// (o resto continua), já explicados em português.
+async fn upload_files(
+    client: &Client,
+    token: &str,
+    cipher: &scout_vault_core::sync::CipherRaw,
+    keys: &Keys,
+    files: Vec<NewFile>,
+    warnings: &mut Vec<String>,
+) {
+    for file in files {
+        let result =
+            match scout_vault_core::attachment::prepare(cipher, keys, &file.name, &file.contents) {
+                Ok(new) => async {
+                    let up = client
+                        .create_attachment(
+                            token,
+                            &cipher.id,
+                            &new.key,
+                            &new.file_name,
+                            new.data.len(),
+                        )
+                        .await?;
+                    client
+                        .upload_attachment(token, &cipher.id, &up, &new.file_name, new.data)
+                        .await
+                }
+                .await
+                .map_err(describe_api_error),
+                Err(e) => Err(format!("não foi possível cifrar: {e}")),
+            };
+        if let Err(e) = result {
+            warnings.push(format!("{}: {e}", file.name));
+        }
+    }
+}
+
+/// Resultado de [`write`].
+pub struct Written {
+    pub session: Session,
+    pub vault: Vault,
+    /// Item salvo/alterado (ou pasta criada/renomeada).
+    pub saved_id: Option<String>,
+    /// Problemas que não desfazem a operação (ex.: um anexo recusado).
+    pub warnings: Vec<String>,
 }
 
 /// Uma alteração no cofre.
 pub enum WriteOp {
     /// Só sincronizar.
     Nothing,
-    /// Criar (id vazio) ou gravar um item editado.
-    Save(Box<scout_vault_core::vault::Item>),
+    /// Criar (id vazio) ou gravar um item editado, e anexar arquivos novos.
+    Save(Box<scout_vault_core::vault::Item>, Vec<NewFile>),
     Trash(String),
     Restore(String),
     /// Apagar de vez (o item precisa estar na lixeira).
     Delete(String),
     /// Anexar um arquivo ao item.
-    AddAttachment {
+    /// Anexar arquivos a um item que já existe.
+    AddAttachments {
         item_id: String,
-        file_name: String,
-        contents: Zeroizing<Vec<u8>>,
+        files: Vec<NewFile>,
     },
     RemoveAttachment {
         item_id: String,
         attachment_id: String,
     },
+    CreateFolder(String),
+    RenameFolder {
+        id: String,
+        name: String,
+    },
+    /// Apaga a pasta; os itens dela ficam sem pasta.
+    DeleteFolder(String),
 }
 
 fn base_cipher(
@@ -504,33 +586,21 @@ fn sync_error(e: ApiError) -> SyncError {
 
 /// Renova o token, aplica a alteração no servidor e baixa o cofre de novo.
 /// Devolve a sessão atualizada, o cofre decifrado e o id do item salvo.
-pub async fn write(
-    session: Session,
-    keys: Arc<Keys>,
-    op: WriteOp,
-) -> Result<(Session, Vault, Option<String>), SyncError> {
+pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Written, SyncError> {
     // Cifra antes de tocar na rede: um erro aqui não deixa nada pela metade.
-    let new_attachment = match &op {
-        WriteOp::AddAttachment {
-            item_id,
-            file_name,
-            contents,
-        } => {
-            let cipher = base_cipher(&session, item_id)?;
-            let keys = keys.clone();
-            let (file_name, contents) = (file_name.clone(), contents.clone());
-            Some(
-                io::blocking(move || {
-                    scout_vault_core::attachment::prepare(&cipher, &keys, &file_name, &contents)
-                })
-                .await
-                .map_err(|e| SyncError::Other(format!("Não foi possível cifrar o anexo: {e}")))?,
-            )
-        }
+    let attach_base = match &op {
+        WriteOp::AddAttachments { item_id, .. } => Some(base_cipher(&session, item_id)?),
+        _ => None,
+    };
+    let folder_name = match &op {
+        WriteOp::CreateFolder(name) | WriteOp::RenameFolder { name, .. } => Some(
+            scout_vault_core::edit::encrypt_folder_name(name, &keys)
+                .map_err(|e| SyncError::Other(format!("Não foi possível salvar a pasta: {e}")))?,
+        ),
         _ => None,
     };
     let body = match &op {
-        WriteOp::Save(item) => {
+        WriteOp::Save(item, _) => {
             let base = (!item.id.is_empty())
                 .then(|| session.sync.ciphers.iter().find(|c| c.id == item.id))
                 .flatten()
@@ -549,21 +619,26 @@ pub async fn write(
         }
         _ => None,
     };
-    let (access, refresh, sync, saved_id) = {
+    let file_keys = keys.clone();
+    let (access, refresh, sync, saved_id, warnings) = {
         let client = session.client.clone();
         let refresh_token = session.refresh_token.clone();
         io::run(async move {
+            let mut warnings: Vec<String> = Vec::new();
             let t = client.refresh(&refresh_token).await?;
             let token = &t.access_token;
             let saved_id = match op {
                 WriteOp::Nothing => None,
-                WriteOp::Save(item) => {
+                WriteOp::Save(item, files) => {
                     let body = body.expect("cifrado acima");
                     let saved = if item.id.is_empty() {
                         client.create_cipher(token, &body).await?
                     } else {
                         client.update_cipher(token, &item.id, &body).await?
                     };
+                    // Arquivos novos vão depois do item existir, com a chave dele.
+                    // Uma falha aqui não desfaz o item: vira aviso.
+                    upload_files(&client, token, &saved, &file_keys, files, &mut warnings).await;
                     Some(saved.id)
                 }
                 WriteOp::Trash(id) => {
@@ -578,20 +653,9 @@ pub async fn write(
                     client.delete_cipher(token, &id).await?;
                     None
                 }
-                WriteOp::AddAttachment { item_id, .. } => {
-                    let new = new_attachment.expect("cifrado acima");
-                    let up = client
-                        .create_attachment(
-                            token,
-                            &item_id,
-                            &new.key,
-                            &new.file_name,
-                            new.data.len(),
-                        )
-                        .await?;
-                    client
-                        .upload_attachment(token, &item_id, &up, &new.file_name, new.data)
-                        .await?;
+                WriteOp::AddAttachments { item_id, files } => {
+                    let base = attach_base.expect("procurado acima");
+                    upload_files(&client, token, &base, &file_keys, files, &mut warnings).await;
                     Some(item_id)
                 }
                 WriteOp::RemoveAttachment {
@@ -603,9 +667,22 @@ pub async fn write(
                         .await?;
                     Some(item_id)
                 }
+                WriteOp::CreateFolder(_) => {
+                    let name = folder_name.expect("cifrado acima");
+                    Some(client.create_folder(token, &name).await?.id)
+                }
+                WriteOp::RenameFolder { id, .. } => {
+                    let name = folder_name.expect("cifrado acima");
+                    client.rename_folder(token, &id, &name).await?;
+                    Some(id)
+                }
+                WriteOp::DeleteFolder(id) => {
+                    client.delete_folder(token, &id).await?;
+                    None
+                }
             };
             let sync = client.sync(token).await?;
-            Ok::<_, ApiError>((t.access_token, t.refresh_token, sync, saved_id))
+            Ok::<_, ApiError>((t.access_token, t.refresh_token, sync, saved_id, warnings))
         })
         .await
         .map_err(sync_error)?
@@ -619,8 +696,8 @@ pub async fn write(
         let sync = sync.clone();
         io::blocking(move || Vault::decrypt(&sync, &keys)).await
     };
-    Ok((
-        Session {
+    Ok(Written {
+        session: Session {
             access_token: access,
             refresh_token: refresh.unwrap_or(session.refresh_token.clone()),
             sync,
@@ -628,7 +705,8 @@ pub async fn write(
         },
         vault,
         saved_id,
-    ))
+        warnings,
+    })
 }
 
 fn client_identity(urls: &scout_vault_core::api::ServerUrls) -> String {
@@ -668,6 +746,15 @@ pub fn describe_api_error(e: ApiError) -> String {
         ApiError::Status { status, body } => {
             // Mostra a mensagem do servidor, se houver: ajuda a diagnosticar contas reais.
             let detail = server_message(&body);
+            let lower = detail.as_deref().unwrap_or_default().to_ascii_lowercase();
+            if lower.contains("premium") {
+                return "Anexos exigem Bitwarden Premium (ou uma organização). Na conta gratuita                         do bitwarden.com não dá para enviar arquivos."
+                    .into();
+            }
+            if lower.contains("storage") || status == 413 {
+                return "Não há espaço para esse arquivo: o limite de anexos da conta acabou."
+                    .into();
+            }
             if detail
                 .as_deref()
                 .is_some_and(|m| m.to_ascii_lowercase().contains("update your app"))
@@ -832,6 +919,20 @@ mod tests {
             Some("rate limited")
         );
         assert_eq!(server_message("<html>"), None);
+    }
+
+    #[test]
+    fn attachment_refusals_are_explained() {
+        let premium = describe_api_error(ApiError::Status {
+            status: 400,
+            body: r#"{"message":"Premium access is required to use this feature."}"#.into(),
+        });
+        assert!(premium.contains("Premium"), "{premium}");
+        let storage = describe_api_error(ApiError::Status {
+            status: 400,
+            body: r#"{"message":"Not enough storage available."}"#.into(),
+        });
+        assert!(storage.contains("espaço"), "{storage}");
     }
 
     #[test]

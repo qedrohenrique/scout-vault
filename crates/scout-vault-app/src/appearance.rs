@@ -399,6 +399,8 @@ pub fn apply(appearance: &Appearance, window: Option<&Window>, cx: &mut App) {
     // `change` recarrega o tema do modo mesmo se o modo não mudou.
     Theme::change(mode, None, cx);
     crate::backdrop::set_motion(appearance.motion == Motion::On, cx);
+    // Vale para todas as animações da interface (o GPUI pula direto ao estado final).
+    cx.set_reduce_motion(appearance.motion == Motion::Off);
 }
 
 /// A cor de destaque em uso (para detalhes desenhados à mão).

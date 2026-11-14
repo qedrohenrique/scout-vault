@@ -99,21 +99,47 @@ pub fn segmented(
     on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Stateful<Div> {
+    segmented_sized(id, segments, on_select, false, cx)
+}
+
+/// Versão justa do [`segmented`], para barras de ferramentas.
+pub fn segmented_compact(
+    id: impl Into<ElementId>,
+    segments: Vec<Segment>,
+    on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Stateful<Div> {
+    segmented_sized(id, segments, on_select, true, cx)
+}
+
+fn segmented_sized(
+    id: impl Into<ElementId>,
+    segments: Vec<Segment>,
+    on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
+    compact: bool,
+    cx: &App,
+) -> Stateful<Div> {
     let on_select = std::rc::Rc::new(on_select);
     let theme = cx.theme();
+    let popover = theme.popover;
     let items = segments.into_iter().enumerate().map(|(ix, s)| {
         let on_select = on_select.clone();
+        let (selected, anim_id) = (
+            s.selected,
+            crate::motion::key("seg", format!("{}:{}", s.id, s.selected)),
+        );
         h_flex()
             .id(s.id.clone())
             .test_support()
             .role(Role::Button)
             .aria_label(s.label.clone())
             .gap_1p5()
-            .px_3()
-            .py_1()
+            .when(compact, |el| el.px_2().py_0p5())
+            .when(!compact, |el| el.px_3().py_1())
             .rounded(theme.radius)
             .text_sm()
             .cursor_pointer()
+            .active(|el| el.opacity(0.7))
             .when(s.selected, |el| {
                 el.bg(theme.popover)
                     .text_color(theme.foreground)
@@ -130,6 +156,20 @@ pub fn segmented(
             .children(s.icon.map(|i| Icon::new(i).small()))
             .child(s.label)
             .on_click(move |_, window, cx| on_select(ix, window, cx))
+            // A opção escolhida acende e "assenta" no lugar.
+            .with_animation(
+                anim_id,
+                Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
+                move |el, t| {
+                    if selected {
+                        el.bg(popover.opacity(t))
+                            .relative()
+                            .top(px(1.5 * (1.0 - t)))
+                    } else {
+                        el
+                    }
+                },
+            )
     });
     h_flex()
         .id(id.into())
@@ -223,5 +263,69 @@ pub fn status_line(
         } else {
             cx.theme().muted_foreground
         })
-        .child(text)
+        .child(animated_status(text, error))
+}
+
+/// Texto de status com movimento: "…" (trabalhando) pulsa; erro chega com
+/// uma leve sacudida; o resto só aparece suave.
+fn animated_status(text: SharedString, error: bool) -> AnyElement {
+    let key = crate::motion::key("status", &text);
+    let body = div().child(text.clone());
+    if text.is_empty() {
+        return body.into_any_element();
+    }
+    if !error && text.ends_with('…') {
+        return crate::motion::pulse(body, key).into_any_element();
+    }
+    if error {
+        return crate::motion::shake(body, key).into_any_element();
+    }
+    crate::motion::fade(body, key).into_any_element()
+}
+
+/// Área para anexar: clique para escolher arquivos ou arraste do Explorer.
+pub fn drop_zone(
+    id: &'static str,
+    busy: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_drop: impl Fn(&ExternalPaths, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let accent = appearance::accent(cx);
+    let tint = appearance::accent_tint(cx, 0.08);
+    v_flex()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(SharedString::from("Anexar arquivos"))
+        .w_full()
+        .items_center()
+        .gap_1()
+        .px_4()
+        .py_4()
+        .rounded(theme.radius_lg)
+        .border_1()
+        .border_color(theme.border)
+        .text_color(theme.muted_foreground)
+        .when(!busy, |el| {
+            el.cursor_pointer()
+                .hover(|el| el.bg(theme.secondary_hover))
+                .active(|el| el.opacity(0.7))
+        })
+        // Arquivo sendo arrastado por cima: acende na cor de destaque.
+        .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(accent).bg(tint))
+        .on_click(on_click)
+        .on_drop(on_drop)
+        .child(Icon::new(IconName::Paperclip).text_color(accent))
+        .child(
+            div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.foreground)
+                .child("Arraste arquivos aqui ou clique para escolher"),
+        )
+        .child(div().text_xs().child(
+            "Documentos, imagens… até 500 MB cada. Tudo é cifrado antes de sair do computador.",
+        ))
+        .test_support()
 }

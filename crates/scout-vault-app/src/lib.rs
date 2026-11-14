@@ -25,11 +25,14 @@ mod io;
 pub mod item_editor;
 pub mod item_list;
 pub mod login;
+pub mod motion;
 pub mod saved_session;
 pub mod secrets;
 pub mod settings;
 pub mod settings_view;
 pub mod sso;
+pub mod toast;
+pub mod tray;
 mod ui;
 pub mod unlock;
 pub mod vault_view;
@@ -39,6 +42,10 @@ use gpui_kit::*;
 
 /// Abre a janela principal.
 pub fn run() {
+    // Já está rodando (talvez escondido na bandeja)? Só pede para aparecer.
+    if tray::wake_existing_instance() {
+        return;
+    }
     gpui_kit::application()
         .with_assets(assets::AppAssets)
         .run(|cx| {
@@ -53,6 +60,8 @@ pub fn run() {
             browser::enable_system();
             // Atalho global de preenchimento em outros apps (Ctrl+Alt+A).
             autotype::enable_system_hotkey();
+            // Fechar a janela deixa o app na bandeja do Windows.
+            tray::enable_system();
             let options = WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Scout Vault".into()),

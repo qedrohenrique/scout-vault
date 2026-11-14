@@ -33,8 +33,9 @@ Faça os casos em ordem. Anote o texto exato que aparecer embaixo do formulário
 | 16 | Criar e editar | Crie um login pelo `+`, depois edite a senha | Aparece no cofre web e no celular; no web vault, o **histórico de senhas** do item mostra a antiga |
 | 17 | Dados de outros apps | Edite no Scout Vault um item que tenha **passkey** ou regra de URI criada no app oficial | A passkey e a regra continuam lá no app oficial |
 | 18 | Lixeira | Mova para a lixeira, restaure, mova de novo e apague de vez | Bate com o cofre web a cada passo |
-| 19 | Anexos | Anexe um PDF, abra e salve; abra o mesmo anexo no cofre web | Abre igual nos dois. Na nuvem oficial o envio usa outro caminho (Azure), **ainda não testado** |
+| 19 | Anexos | Crie uma **Nota** e, no próprio formulário, arraste um PDF e uma imagem para "Anexos"; salve. Depois arraste mais um arquivo no detalhe do item | Os arquivos aparecem no cofre web e abrem iguais. Em conta gratuita do bitwarden.com, o app avisa que anexos exigem Premium. O envio para a nuvem oficial (Azure) **ainda não foi testado** |
 | 20 | Navegador | Configurações → Navegador → ligar; carregue a extensão; num site salvo, clique no ícone do Scout Vault | Lista os logins do site; clicar preenche usuário e senha |
+| 21 | Pastas | Crie uma pasta pelo `+` da barra lateral, ponha um item nela, renomeie e apague | A pasta aparece igual no cofre web; ao apagar, o item continua lá, em "Sem pasta" |
 
 ## Se algo falhar
 Para erros do servidor, o app mostra o código HTTP e a mensagem que o servidor mandou. Copie esse

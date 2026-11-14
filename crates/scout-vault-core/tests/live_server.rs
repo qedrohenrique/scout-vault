@@ -314,3 +314,83 @@ async fn cleanup_test_leftovers() {
         }
     }
 }
+
+/// Cria, renomeia e apaga uma pasta; um item dentro dela fica "sem pasta".
+#[tokio::test]
+#[ignore = "precisa de um servidor; veja o comentário do arquivo"]
+async fn folder_create_rename_delete() {
+    use scout_vault_core::edit::{encrypt_folder_name, encrypt_item, request_body};
+    use scout_vault_core::vault::{Item, ItemKind};
+
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let client = Client::new(
+        ServerUrls::self_hosted(&url),
+        DeviceInfo::new("Scout Vault (teste)"),
+    )
+    .unwrap();
+    let kdf = client.prelogin(&email).await.unwrap();
+    let mk = MasterKey::derive(&password, &email, kdf).unwrap();
+    let token = client
+        .login_password(&email, &mk.server_hash(&password), None, None)
+        .await
+        .unwrap()
+        .access_token;
+    let profile = client.sync(&token).await.unwrap().profile;
+    let keys = Keys::unlock(&mk, &profile).unwrap();
+
+    let name = format!("Pasta teste {}", std::process::id());
+    let folder = client
+        .create_folder(&token, &encrypt_folder_name(&name, &keys).unwrap())
+        .await
+        .unwrap();
+    let note = Item {
+        id: String::new(),
+        organization_id: None,
+        folder_id: Some(folder.id.clone()),
+        name: format!("Na pasta {}", std::process::id()),
+        notes: None,
+        favorite: false,
+        reprompt: false,
+        deleted: false,
+        revision_date: None,
+        attachments: Vec::new(),
+        fields: Vec::new(),
+        kind: ItemKind::SecureNote,
+    };
+    let item = client
+        .create_cipher(
+            &token,
+            &request_body(&encrypt_item(&note, None, &keys).unwrap(), &profile.id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(item.folder_id.as_deref(), Some(folder.id.as_str()));
+
+    client
+        .rename_folder(
+            &token,
+            &folder.id,
+            &encrypt_folder_name("Renomeada", &keys).unwrap(),
+        )
+        .await
+        .unwrap();
+    let vault = Vault::decrypt(&client.sync(&token).await.unwrap(), &keys);
+    assert!(vault
+        .folders
+        .iter()
+        .any(|f| f.id == folder.id && f.name == "Renomeada"));
+
+    client.delete_folder(&token, &folder.id).await.unwrap();
+    let sync = client.sync(&token).await.unwrap();
+    assert!(sync.folders.iter().all(|f| f.id != folder.id));
+    let moved = sync.ciphers.iter().find(|c| c.id == item.id).unwrap();
+    assert_eq!(moved.folder_id, None, "o item fica sem pasta");
+
+    client.trash_cipher(&token, &item.id).await.unwrap();
+    client.delete_cipher(&token, &item.id).await.unwrap();
+}

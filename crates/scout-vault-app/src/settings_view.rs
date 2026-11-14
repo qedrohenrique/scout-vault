@@ -21,6 +21,7 @@ pub struct SettingsView {
     appearance: Appearance,
     autotype: AutoTypeSettings,
     remember_session: bool,
+    close_to_tray: bool,
     browser_fill: bool,
     browser_error: Option<SharedString>,
 }
@@ -35,6 +36,7 @@ impl SettingsView {
             appearance: loaded.appearance,
             autotype: loaded.autotype,
             remember_session: loaded.remember_session,
+            close_to_tray: loaded.close_to_tray,
             browser_fill: loaded.browser_fill,
             browser_error: None,
         }
@@ -54,6 +56,14 @@ impl SettingsView {
         settings.appearance = next;
         self.store.save(&settings);
         appearance::apply(&next, Some(window), cx);
+        cx.notify();
+    }
+
+    pub fn set_close_to_tray(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.close_to_tray = on;
+        let mut settings = self.store.load();
+        settings.close_to_tray = on;
+        self.store.save(&settings);
         cx.notify();
     }
 
@@ -186,6 +196,7 @@ impl SettingsView {
                     transparent_black()
                 })
                 .cursor_pointer()
+                .active(|el| el.opacity(0.7))
                 .child(
                     div()
                         .size_full()
@@ -198,6 +209,18 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.update(|a| a.accent = accent, window, cx)
                 }))
+                // O anel da cor escolhida aparece crescendo de dentro.
+                .with_animation(
+                    crate::motion::key("cor", format!("{}:{selected}", accent.id())),
+                    Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
+                    move |el, t| {
+                        if selected {
+                            el.p(px(3. + 3. * (1.0 - t)))
+                        } else {
+                            el
+                        }
+                    },
+                )
         }))
     }
 }
@@ -330,7 +353,7 @@ impl Render for SettingsView {
                 ),
                 Self::row(
                     "Movimento",
-                    "Arte de fundo do login e do desbloqueio, animada ou parada.",
+                    "Animações da interface e a arte de fundo do login. \"Parado\" desliga tudo.",
                     motion_control,
                     cx,
                 ),
@@ -437,7 +460,16 @@ impl Render for SettingsView {
         };
         let session_group = Self::group(
             "SESSÃO",
-            vec![Self::row(
+            vec![
+                Self::row(
+                    "Ao fechar, continuar na bandeja",
+                    "O app segue rodando perto do relógio: Ctrl+Alt+A e o navegador continuam funcionando. Para sair de vez, use Sair no ícone.",
+                    Switch::new("tray-on-close")
+                        .checked(self.close_to_tray)
+                        .on_click(cx.listener(|this, v: &bool, _, cx| this.set_close_to_tray(*v, cx))),
+                    cx,
+                ),
+                Self::row(
                 "Lembrar sessão",
                 "Ao abrir o app, pede só a senha mestra. O cofre fica guardado cifrado neste computador e abre mesmo sem internet.",
                 Switch::new("remember-session")

@@ -2,7 +2,6 @@
 
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -49,6 +48,8 @@ pub struct ScoutVaultApp {
     _idle_task: Task<()>,
     /// Foco da raiz: garante que os atalhos funcionem mesmo sem campo focado.
     focus: FocusHandle,
+    /// Avisos curtos por cima de tudo.
+    toasts: Entity<crate::toast::Toasts>,
     /// Escolha do login para preencher em outro app.
     autotype_picker: Option<(Entity<AutoTypeView>, Subscription)>,
     /// Pedido que chegou com o cofre bloqueado; atendido ao desbloquear.
@@ -59,6 +60,9 @@ pub struct ScoutVaultApp {
     /// Servidor do pipe do navegador (soltar desliga).
     browser_server: Option<crate::io::Background>,
     browser_tx: std::sync::mpsc::Sender<crate::browser::Incoming>,
+    /// Ícone na bandeja do Windows (soltar remove).
+    tray: Option<crate::tray::Tray>,
+    tray_tx: std::sync::mpsc::Sender<crate::tray::Command>,
     typer: Typer,
     _autotype_task: Task<()>,
 }
@@ -105,6 +109,7 @@ impl ScoutVaultApp {
         // Pedidos do atalho global chegam por um canal (a thread do atalho não é a da UI).
         let (autotype_tx, autotype_rx) = std::sync::mpsc::channel::<Request>();
         let (browser_tx, browser_rx) = std::sync::mpsc::channel::<crate::browser::Incoming>();
+        let (tray_tx, tray_rx) = std::sync::mpsc::channel::<crate::tray::Command>();
         let autotype_task = cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(AUTOTYPE_POLL_EVERY).await;
             let alive = this.update_in(cx, |this, window, cx| {
@@ -113,6 +118,9 @@ impl ScoutVaultApp {
                 }
                 while let Ok(incoming) = browser_rx.try_recv() {
                     this.handle_browser(incoming, window, cx);
+                }
+                while let Ok(command) = tray_rx.try_recv() {
+                    this.handle_tray(command, window, cx);
                 }
             });
             if alive.is_err() {
@@ -136,6 +144,8 @@ impl ScoutVaultApp {
             autotype_tx,
             browser_server: None,
             browser_tx,
+            tray: None,
+            tray_tx,
             typer: autotype::system_typer(),
             _autotype_task: autotype_task,
             store,
@@ -148,10 +158,79 @@ impl ScoutVaultApp {
             _appearance_subscription: appearance_sub,
             _idle_task: idle_task,
             focus: cx.focus_handle(),
+            toasts: crate::toast::init(cx),
         };
         this.refresh_hotkey(window, cx);
         this.refresh_browser();
+        this.refresh_tray(window, cx);
+        // Fechar a janela (X, Alt+F4) só esconde, se a bandeja estiver ligada.
+        let app = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            app.update(cx, |this, cx| this.on_close_requested(window, cx))
+                .unwrap_or(true)
+        });
         this
+    }
+
+    /// Cria ou remove o ícone da bandeja conforme a configuração.
+    fn refresh_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted = self.store.load().close_to_tray && crate::tray::system_enabled();
+        if !wanted {
+            self.tray = None;
+        } else if self.tray.is_none() {
+            match crate::tray::start(self.tray_tx.clone()) {
+                Ok(tray) => self.tray = Some(tray),
+                Err(e) => cx.defer_in(window, move |_, _, cx| {
+                    crate::toast::error(
+                        format!("Não foi possível criar o ícone na bandeja: {e}"),
+                        cx,
+                    )
+                }),
+            }
+        }
+    }
+
+    /// `true` deixa a janela fechar (e o app sair); `false` só a esconde na bandeja.
+    pub fn on_close_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(tray) = &self.tray else {
+            return true;
+        };
+        let mut settings = self.store.load();
+        if !settings.close_to_tray {
+            return true;
+        }
+        crate::tray::hide_window(window);
+        if !settings.tray_hint_shown {
+            tray.notify(
+                "O Scout Vault continua aberto",
+                "Ele fica aqui na bandeja. Clique para abrir; botão direito para sair.",
+            );
+            settings.tray_hint_shown = true;
+            self.store.save(&settings);
+        }
+        let _ = cx;
+        false
+    }
+
+    /// Comandos do ícone da bandeja.
+    pub fn handle_tray(
+        &mut self,
+        command: crate::tray::Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            crate::tray::Command::Show => crate::tray::show_window(window),
+            crate::tray::Command::Lock => {
+                self.lock(window, cx);
+                crate::toast::info("Cofre bloqueado", cx);
+            }
+            crate::tray::Command::Quit => {
+                // Sai de vez: solta o ícone antes de encerrar.
+                self.tray = None;
+                cx.quit();
+            }
+        }
     }
 
     /// Liga ou desliga o pipe do navegador conforme a configuração.
@@ -184,11 +263,8 @@ impl ScoutVaultApp {
             }
             _ => {
                 if !matches!(incoming.request, crate::browser::Request::Status) {
-                    window.activate_window();
-                    window.push_notification(
-                        SharedString::from("Desbloqueie o cofre para preencher no navegador."),
-                        cx,
-                    );
+                    crate::tray::show_window(window);
+                    crate::toast::info("Desbloqueie o cofre para preencher no navegador.", cx);
                 }
                 crate::browser::handle(&incoming.request, None)
             }
@@ -209,9 +285,7 @@ impl ScoutVaultApp {
                 Ok(listener) => self.hotkey = Some(listener),
                 // Avisa depois: durante a criação da janela a camada de
                 // notificações ainda não existe.
-                Err(e) => cx.defer_in(window, move |_, window, cx| {
-                    window.push_notification(SharedString::from(e), cx)
-                }),
+                Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
             }
         }
     }
@@ -238,11 +312,11 @@ impl ScoutVaultApp {
             return;
         }
         if request.own_window {
-            window.push_notification(
-                SharedString::from(format!(
+            crate::toast::info(
+                format!(
                     "Abra o app onde quer entrar e use {} lá.",
                     autotype::HOTKEY_LABEL
-                )),
+                ),
                 cx,
             );
             return;
@@ -253,8 +327,8 @@ impl ScoutVaultApp {
                 request.title.trim()
             );
             self.pending_autotype = Some(request);
-            window.activate_window();
-            window.push_notification(SharedString::from(message), cx);
+            crate::tray::show_window(window);
+            crate::toast::info(message, cx);
             return;
         };
         let items = view
@@ -272,7 +346,7 @@ impl ScoutVaultApp {
             return;
         }
         self.open_autotype_picker(request, &items, window, cx);
-        window.activate_window();
+        crate::tray::show_window(window);
     }
 
     fn open_autotype_picker(
@@ -333,13 +407,16 @@ impl ScoutVaultApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = crate::io::blocking(move || typer(target, keys)).await;
             if let Err(message) = result {
-                this.update_in(cx, |_, window, cx| {
-                    window.push_notification(SharedString::from(message), cx)
-                })
-                .ok();
+                this.update(cx, |_, cx| crate::toast::error(message, cx))
+                    .ok();
             }
         })
         .detach();
+    }
+
+    /// Pilha de toasts (para testes).
+    pub fn toasts(&self) -> &Entity<crate::toast::Toasts> {
+        &self.toasts
     }
 
     pub fn settings_view(&self) -> Option<&Entity<SettingsView>> {
@@ -360,6 +437,7 @@ impl ScoutVaultApp {
                     this.close_settings(cx);
                     this.refresh_hotkey(window, cx);
                     this.refresh_browser();
+                    this.refresh_tray(window, cx);
                 }
             },
         );
@@ -547,8 +625,11 @@ impl ScoutVaultApp {
             crate::saved_session::save(&self.store, &unlocked.session);
             let next = Self::vault_screen(*unlocked, window, cx);
             if let Screen::Vault(view) = &next.0 {
-                let options = self.store.load().generator;
-                view.update(cx, |v, _| v.set_password_options(options));
+                let settings = self.store.load();
+                view.update(cx, |v, _| {
+                    v.set_password_options(settings.generator);
+                    v.set_pinned(settings.pinned_items.clone());
+                });
             }
             self.set_screen(next, cx);
             if let Some(request) = self.pending_autotype.take() {
@@ -594,6 +675,11 @@ impl ScoutVaultApp {
                     VaultEvent::OpenSettings => this.open_settings(window, cx),
                     VaultEvent::OpenGenerator => this.open_generator(window, cx),
                     VaultEvent::Synced(session) => crate::saved_session::save(&this.store, session),
+                    VaultEvent::PinsChanged(ids) => {
+                        let mut settings = this.store.load();
+                        settings.pinned_items = ids.clone();
+                        this.store.save(&settings);
+                    }
                     VaultEvent::SessionExpired => {
                         crate::saved_session::clear(&this.store);
                         this.show_login(window, cx);
@@ -626,11 +712,18 @@ impl Render for ScoutVaultApp {
         };
         div()
             .track_focus(&self.focus)
+            .relative()
             .size_full()
             // Qualquer tecla ou movimento do mouse adia o bloqueio automático.
             // Ctrl+, abre/fecha as configurações; Esc fecha.
             .capture_key_down(cx.listener(Self::on_key))
             .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, _| this.record_activity()))
-            .child(content)
+            // Cada tela nova (login → cofre, abrir configurações…) entra suave.
+            .child(crate::motion::rise(
+                div().size_full().child(content.clone()),
+                crate::motion::key("tela", content.entity_id()),
+                10.,
+            ))
+            .child(self.toasts.clone())
     }
 }

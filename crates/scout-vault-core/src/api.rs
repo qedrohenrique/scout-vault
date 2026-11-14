@@ -498,6 +498,50 @@ impl Client {
         read_json(res).await
     }
 
+    /// `POST /api/folders` — cria uma pasta. `name` já vem cifrado com a user key.
+    pub async fn create_folder(
+        &self,
+        access_token: &str,
+        name: &str,
+    ) -> Result<crate::sync::FolderRaw, ApiError> {
+        let res = self
+            .http
+            .post(format!("{}/folders", self.urls.api))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await?;
+        read_json(res).await
+    }
+
+    /// `PUT /api/folders/{id}` — renomeia (nome cifrado).
+    pub async fn rename_folder(
+        &self,
+        access_token: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<crate::sync::FolderRaw, ApiError> {
+        let res = self
+            .http
+            .put(format!("{}/folders/{id}", self.urls.api))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await?;
+        read_json(res).await
+    }
+
+    /// `DELETE /api/folders/{id}` — apaga a pasta; os itens dela ficam sem pasta.
+    pub async fn delete_folder(&self, access_token: &str, id: &str) -> Result<(), ApiError> {
+        let res = self
+            .http
+            .delete(format!("{}/folders/{id}", self.urls.api))
+            .bearer_auth(access_token)
+            .send()
+            .await?;
+        ensure_success(res).await.map(|_| ())
+    }
+
     /// `PUT /api/ciphers/{id}/delete` — manda para a lixeira (dá para restaurar).
     pub async fn trash_cipher(&self, access_token: &str, id: &str) -> Result<(), ApiError> {
         let res = self

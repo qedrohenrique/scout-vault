@@ -23,6 +23,8 @@ pub struct GeneratorView {
     store: SettingsStore,
     options: PasswordOptions,
     password: Zeroizing<String>,
+    /// Quantas senhas já foram geradas: reinicia a animação sem pôr a senha no id.
+    generation: u32,
 }
 
 impl EventEmitter<GeneratorEvent> for GeneratorView {}
@@ -34,6 +36,7 @@ impl GeneratorView {
             store,
             password: generator::password(&options),
             options,
+            generation: 0,
         }
     }
 
@@ -47,6 +50,7 @@ impl GeneratorView {
 
     pub fn regenerate(&mut self, cx: &mut Context<Self>) {
         self.password = generator::password(&self.options);
+        self.generation += 1;
         cx.notify();
     }
 
@@ -67,11 +71,12 @@ impl GeneratorView {
 
     pub fn copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         clipboard::copy_and_clear_later(&self.password, cx);
-        window.push_notification(
-            SharedString::from(format!(
-                "Senha copiada. A área de transferência será limpa em {} s.",
+        let _ = window;
+        crate::toast::success(
+            format!(
+                "Senha copiada · some em {} s",
                 clipboard::CLEAR_AFTER.as_secs()
-            )),
+            ),
             cx,
         );
     }
@@ -137,7 +142,11 @@ impl Render for GeneratorView {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_xl()
                     .whitespace_normal()
-                    .child(self.password.to_string()),
+                    .child(crate::motion::rise(
+                        div().child(self.password.to_string()),
+                        crate::motion::key("senha-gerada", self.generation),
+                        6.,
+                    )),
             )
             .child(
                 h_flex()

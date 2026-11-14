@@ -68,9 +68,15 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 - O Scout Vault só troca o que você editou: passkeys, regras de URI, campos vinculados e outros dados
   criados por outros clientes voltam intactos ao servidor.
 - **Lixeira**: mover, restaurar e **apagar de vez** (pede confirmação).
-- **Anexos**: anexar arquivos (até 500 MB), abrir com o programa padrão e salvar onde quiser.
-  Cada anexo tem chave própria. A cópia aberta fica em `%TEMP%\ScoutVault-anexos` e é apagada ao
-  bloquear.
+- **Acesso rápido**: o alfinete no detalhe de um item o fixa numa seção no topo da barra lateral
+  (até 10). Clicar abre o item direto, mesmo com outro filtro ativo. Fica salvo no computador.
+- **Pastas**: `+` ao lado de "Pastas" na barra lateral cria uma; com a pasta aberta, o cabeçalho
+  da lista tem renomear e apagar (os itens dela vão para "Sem pasta"). O nome vai cifrado.
+- **Anexos**: no formulário de um item novo (ou ao editar) e no detalhe do item há uma área para
+  **clicar ou arrastar arquivos** do Explorer (até 500 MB cada; vários de uma vez). Dá para abrir
+  com o programa padrão, salvar onde quiser e remover. Cada anexo tem chave própria; a cópia aberta
+  fica em `%TEMP%\ScoutVault-anexos` e é apagada ao bloquear. Na conta gratuita do bitwarden.com
+  anexos exigem **Premium** — o app avisa com essa mensagem.
 - Itens de organização em que você só tem leitura não mostram Editar.
 
 **Preencher no navegador** (Chrome, Edge, Brave)
@@ -81,6 +87,12 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 - A senha só sai do app quando você clica, e só para um item com endereço do mesmo site.
   A extensão fala com o app por *native messaging* e um canal local que só o seu usuário do
   Windows acessa. Com o cofre bloqueado, o app aparece pedindo a senha.
+
+**Bandeja do Windows**
+- Fechar a janela (X ou Alt+F4) deixa o app rodando no ícone perto do relógio: `Ctrl+Alt+A` e o
+  preenchimento no navegador continuam funcionando. Clique no ícone para abrir; botão direito
+  para **Abrir**, **Bloquear** ou **Sair**. Abrir o executável de novo só mostra a janela que já
+  existe. Dá para desligar em Configurações → Sessão.
 
 **Sessão e bloqueio**
 - **Lembrar sessão** (ligado por padrão): ao abrir o app, ele vai direto para o desbloqueio, só
@@ -104,8 +116,15 @@ e aparecem dentro de quadradinhos suaves.
 As telas de **login e desbloqueio** têm uma arte vetorial animada ao fundo: faixas onduladas nas
 laterais que balançam devagar e pequenas formas fechadas (bolinhas, círculos, triângulos,
 quadrados, losangos, pentágonos e hexágonos) subindo e girando devagar pelo meio, tudo em traço
-fino na cor de destaque. A marca grande fica centralizada sobre o formulário. É desenhada pelo próprio app a cada quadro, sem imagens, e pode
-ficar parada em Configurações → Movimento.
+fino na cor de destaque. A marca grande fica centralizada sobre o formulário. É desenhada pelo
+próprio app a cada quadro, sem imagens, e só se mexe com a janela em foco.
+
+A interface também tem **animações curtas** (até ~¼ s, só opacidade e posição): telas e painéis
+entram suaves, a barra lateral entra em cascata, o filtro escolhido acende, a seleção da lista
+envolve o ícone do item, mensagens de erro dão uma leve sacudida, "Entrando…" pulsa, uma barra
+fina corre enquanto sincroniza ou salva, o ícone de sincronizar gira e vira ✓ e o botão de copiar
+vira ✓. Avisos ("Copiado", "Item criado", erros) aparecem como **toasts** que sobem do pé da
+janela, ficam alguns segundos e descem sumindo. **Configurações → Movimento → Parado** desliga tudo isso e a arte.
 
 ![Tela de entrada com a arte de fundo](docs/imagens/fundo-animado-previa.png)
 

@@ -12,10 +12,12 @@ use scout_vault_core::generator::{self, PasswordOptions};
 use scout_vault_core::vault::{Card, Field, FieldKind, Identity, Item, ItemKind, Login, SshKey};
 use scout_vault_core::Secret;
 
+use crate::flow::NewFile;
 use crate::ui::{self, Segment};
 
 pub enum EditorEvent {
-    Save(Box<Item>),
+    /// O item e os arquivos novos a anexar.
+    Save(Box<Item>, Vec<NewFile>),
     Cancel,
 }
 
@@ -90,22 +92,99 @@ pub struct ItemEditor {
     generator: PasswordOptions,
     saving: bool,
     error: Option<SharedString>,
+    /// Arquivos escolhidos para anexar ao salvar.
+    files: Vec<NewFile>,
 }
 
 impl EventEmitter<EditorEvent> for ItemEditor {}
 
-fn input(
+fn input_with(
     window: &mut Window,
     cx: &mut App,
     value: Option<&str>,
     secret: bool,
+    placeholder: &'static str,
 ) -> Entity<InputState> {
     let value = value.unwrap_or_default().to_owned();
     cx.new(|cx| {
         InputState::new(window, cx)
             .masked(secret)
+            .placeholder(placeholder)
             .default_value(value)
     })
+}
+
+const URI_PLACEHOLDER: &str = "https://exemplo.com";
+const FIELD_NAME_PLACEHOLDER: &str = "Nome (ex.: PIN)";
+
+fn field_value_placeholder(kind: FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Hidden => "Valor oculto",
+        FieldKind::Boolean => "true ou false",
+        _ => "Valor",
+    }
+}
+
+/// Exemplo dentro do campo vazio: mostra o formato esperado.
+fn placeholder_for(key: &str) -> &'static str {
+    match key {
+        "username" => "nome ou e-mail",
+        "password" => "senha",
+        "totp" => "chave ou otpauth://…",
+        "card-holder" => "como está no cartão",
+        "card-brand" => "Visa",
+        "card-number" => "0000 0000 0000 0000",
+        "card-month" => "MM",
+        "card-year" => "AAAA",
+        "card-code" => "123",
+        "id-title" => "Sr., Sra.",
+        "id-email" => "nome@exemplo.com",
+        "id-phone" => "(00) 00000-0000",
+        "id-postal" => "00000-000",
+        "id-state" => "UF",
+        "id-country" => "Brasil",
+        "id-ssn" => "000.000.000-00",
+        "ssh-fingerprint" => "SHA256:…",
+        _ => "",
+    }
+}
+
+/// Como os campos se arrumam em linhas: `None` = ocupa o espaço que sobra,
+/// `Some(px)` = largura fixa para campos curtos (mês, CEP, CVV…).
+fn layout(kind: &ItemKind) -> &'static [&'static [(&'static str, Option<f32>)]] {
+    match kind {
+        ItemKind::Login(_) => &[&[("username", None), ("password", None)], &[("totp", None)]],
+        ItemKind::Card(_) => &[
+            &[("card-holder", None), ("card-brand", Some(120.))],
+            &[("card-number", None)],
+            &[
+                ("card-month", Some(72.)),
+                ("card-year", Some(88.)),
+                ("card-code", Some(88.)),
+            ],
+        ],
+        ItemKind::Identity(_) => &[
+            &[("id-title", Some(100.)), ("id-first", None)],
+            &[("id-middle", None), ("id-last", None)],
+            &[("id-email", None), ("id-phone", Some(170.))],
+            &[("id-username", None), ("id-company", None)],
+            &[("id-address1", None)],
+            &[("id-address2", None), ("id-address3", None)],
+            &[
+                ("id-city", None),
+                ("id-state", Some(64.)),
+                ("id-postal", Some(112.)),
+            ],
+            &[("id-country", None)],
+            &[
+                ("id-ssn", None),
+                ("id-passport", None),
+                ("id-license", None),
+            ],
+        ],
+        ItemKind::SshKey(_) => &[&[("ssh-public", None)], &[("ssh-fingerprint", None)]],
+        _ => &[],
+    }
 }
 
 impl ItemEditor {
@@ -181,7 +260,7 @@ impl ItemEditor {
                 lines.push(Line {
                     key,
                     label,
-                    state: input(window, cx, value, secret),
+                    state: input_with(window, cx, value, secret, placeholder_for(key)),
                     secret,
                 });
             };
@@ -205,23 +284,23 @@ impl ItemEditor {
                     );
                     line(
                         "totp",
-                        "Chave do autenticador (TOTP)",
+                        "Autenticador (TOTP)",
                         l.totp.as_ref().map(|s| s.expose()),
                         true,
                         window,
                         cx,
                     );
                     for u in &l.uris {
-                        uris.push(input(window, cx, Some(u), false));
+                        uris.push(input_with(window, cx, Some(u), false, URI_PLACEHOLDER));
                     }
                     if uris.is_empty() {
-                        uris.push(input(window, cx, None, false));
+                        uris.push(input_with(window, cx, None, false, URI_PLACEHOLDER));
                     }
                 }
                 ItemKind::Card(c) => {
                     line(
                         "card-holder",
-                        "Titular",
+                        "Nome no cartão",
                         c.cardholder_name.as_deref(),
                         false,
                         window,
@@ -245,23 +324,16 @@ impl ItemEditor {
                     );
                     line(
                         "card-month",
-                        "Mês de validade",
+                        "Mês",
                         c.exp_month.as_deref(),
                         false,
                         window,
                         cx,
                     );
-                    line(
-                        "card-year",
-                        "Ano de validade",
-                        c.exp_year.as_deref(),
-                        false,
-                        window,
-                        cx,
-                    );
+                    line("card-year", "Ano", c.exp_year.as_deref(), false, window, cx);
                     line(
                         "card-code",
-                        "Código de segurança",
+                        "CVV",
                         c.code.as_ref().map(|s| s.expose()),
                         true,
                         window,
@@ -331,12 +403,13 @@ impl ItemEditor {
             .iter()
             .map(|f| CustomField {
                 kind: f.kind,
-                name: input(window, cx, f.name.as_deref(), false),
-                value: input(
+                name: input_with(window, cx, f.name.as_deref(), false, FIELD_NAME_PLACEHOLDER),
+                value: input_with(
                     window,
                     cx,
                     f.value.as_ref().map(|s| s.expose()),
                     f.kind == FieldKind::Hidden,
+                    field_value_placeholder(f.kind),
                 ),
             })
             .collect();
@@ -356,6 +429,7 @@ impl ItemEditor {
             generator,
             saving: false,
             error: None,
+            files: Vec::new(),
         }
     }
 
@@ -376,6 +450,7 @@ impl ItemEditor {
         }
         let mut draft = self.to_item(cx);
         draft.kind = kind.empty();
+        let files = std::mem::take(&mut self.files);
         *self = Self::build(
             draft,
             true,
@@ -384,6 +459,7 @@ impl ItemEditor {
             window,
             cx,
         );
+        self.files = files;
         cx.notify();
     }
 
@@ -498,7 +574,7 @@ impl ItemEditor {
             return;
         }
         self.error = None;
-        cx.emit(EditorEvent::Save(Box::new(item)));
+        cx.emit(EditorEvent::Save(Box::new(item), self.files.clone()));
     }
 
     fn generate_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -509,8 +585,118 @@ impl ItemEditor {
         }
     }
 
+    /// Arquivos que serão anexados ao salvar.
+    pub fn pending_files(&self) -> Vec<String> {
+        self.files.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// Lê os arquivos e põe na lista para anexar (erros viram toast).
+    pub fn add_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            if path.is_dir() {
+                continue;
+            }
+            match NewFile::read(path) {
+                Ok(file) => self.files.push(file),
+                Err(e) => crate::toast::error(e, cx),
+            }
+        }
+        cx.notify();
+    }
+
+    fn pick_files(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Anexar".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                this.update(cx, |this, cx| this.add_paths(&paths, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    fn render_files(&self, busy: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let mut list = v_flex().gap_1p5();
+        // Os que já estão no item (gerenciados no detalhe).
+        for a in &self.base.attachments {
+            list = list.child(
+                h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(Icon::new(IconName::File).small())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(a.file_name.clone()),
+                    )
+                    .child(div().text_xs().child("já anexado")),
+            );
+        }
+        for (ix, f) in self.files.iter().enumerate() {
+            list = list.child(crate::motion::rise(
+                h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(
+                        Icon::new(IconName::File)
+                            .small()
+                            .text_color(crate::appearance::accent(cx)),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("editor-file-{ix}")))
+                            .test_support()
+                            .aria_label(SharedString::from(f.name.clone()))
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(f.name.clone()),
+                    )
+                    .child(div().text_xs().text_color(muted).child(
+                        scout_vault_core::attachment::human_size(f.contents.len() as u64),
+                    ))
+                    .child(
+                        Button::new(SharedString::from(format!("editor-file-remove-{ix}")))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .tooltip("Tirar da lista")
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if ix < this.files.len() {
+                                    this.files.remove(ix);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                crate::motion::key("arquivo-novo", format!("{ix}:{}", f.name)),
+                4.,
+            ));
+        }
+        v_flex().gap_2().child(list).child(ui::drop_zone(
+            "editor-attach-zone",
+            busy,
+            cx.listener(|this, _, _, cx| {
+                if !this.saving {
+                    this.pick_files(cx)
+                }
+            }),
+            cx.listener(|this, paths: &ExternalPaths, _, cx| this.add_paths(paths.paths(), cx)),
+            cx,
+        ))
+    }
+
     fn add_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.uris.push(input(window, cx, None, false));
+        self.uris
+            .push(input_with(window, cx, None, false, URI_PLACEHOLDER));
         cx.notify();
     }
 
@@ -521,22 +707,55 @@ impl ItemEditor {
             } else {
                 FieldKind::Text
             },
-            name: input(window, cx, None, false),
-            value: input(window, cx, None, hidden),
+            name: input_with(window, cx, None, false, FIELD_NAME_PLACEHOLDER),
+            value: input_with(
+                window,
+                cx,
+                None,
+                hidden,
+                if hidden { "Valor oculto" } else { "Valor" },
+            ),
         });
         cx.notify();
     }
 
     fn labeled(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
         v_flex()
-            .gap_1()
+            .gap_1p5()
             .child(
                 div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_sm()
+                    .font_medium()
+                    .text_color(cx.theme().foreground.opacity(0.8))
                     .child(label),
             )
             .child(control)
+    }
+
+    /// Campo de uma linha do formulário (com o botão de gerar, na senha).
+    fn render_line(&self, line: &Line, busy: bool, cx: &mut Context<Self>) -> Div {
+        let mut control = h_flex().gap_1().child(
+            div().flex_1().min_w_0().child(
+                Input::new(&line.state)
+                    .id(SharedString::from(format!("editor-{}", line.key)))
+                    .when(line.secret, |i| i.mask_toggle())
+                    .disabled(busy),
+            ),
+        );
+        if line.key == "password" {
+            control = control.child(
+                Button::new("editor-generate")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Dices)
+                    .tooltip("Gerar senha")
+                    .disabled(busy)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.generate_password(window, cx)),
+                    ),
+            );
+        }
+        Self::labeled(line.label, control, cx)
     }
 
     fn render_folders(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -545,6 +764,8 @@ impl ItemEditor {
                     folder: Option<String>,
                     selected: bool,
                     cx: &mut Context<Self>| {
+            let chip_id = id.clone();
+            let tint = crate::appearance::accent_tint(cx, 0.1);
             div()
                 .id(id)
                 .test_support()
@@ -556,6 +777,7 @@ impl ItemEditor {
                 .border_1()
                 .text_sm()
                 .cursor_pointer()
+                .active(|el| el.opacity(0.7))
                 .when(selected, |d| {
                     d.border_color(crate::appearance::accent(cx))
                         .text_color(crate::appearance::accent(cx))
@@ -567,6 +789,17 @@ impl ItemEditor {
                     this.folder_id = folder.clone();
                     cx.notify();
                 }))
+                .with_animation(
+                    crate::motion::key("pasta", format!("{chip_id}:{selected}")),
+                    Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
+                    move |el, t| {
+                        if selected {
+                            el.bg(tint.opacity(tint.a * t))
+                        } else {
+                            el
+                        }
+                    },
+                )
         };
         let mut row = h_flex().flex_wrap().gap_2();
         row = row.child(chip(
@@ -593,9 +826,9 @@ impl ItemEditor {
 impl Render for ItemEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.saving;
-        let mut form = v_flex().gap_4();
+        let mut form = v_flex().gap_3p5();
 
-        if self.is_new {
+        let kind_selector = self.is_new.then(|| {
             let current = NewKind::ALL
                 .into_iter()
                 .find(|k| {
@@ -603,7 +836,7 @@ impl Render for ItemEditor {
                 })
                 .unwrap_or(NewKind::Login);
             let this = cx.entity().downgrade();
-            form = form.child(ui::segmented(
+            ui::segmented_compact(
                 "editor-kind",
                 NewKind::ALL
                     .iter()
@@ -619,8 +852,8 @@ impl Render for ItemEditor {
                         .ok();
                 },
                 cx,
-            ));
-        }
+            )
+        });
 
         form = form.child(Self::labeled(
             "Nome",
@@ -628,29 +861,28 @@ impl Render for ItemEditor {
             cx,
         ));
 
-        for line in &self.lines {
-            let mut control = h_flex().gap_2().child(
-                div().flex_1().child(
-                    Input::new(&line.state)
-                        .id(SharedString::from(format!("editor-{}", line.key)))
-                        .when(line.secret, |i| i.mask_toggle())
-                        .disabled(busy),
-                ),
-            );
-            if line.key == "password" {
-                control = control.child(
-                    Button::new("editor-generate")
-                        .ghost()
-                        .small()
-                        .icon(IconName::Dices)
-                        .tooltip("Gerar senha")
-                        .disabled(busy)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.generate_password(window, cx)),
-                        ),
-                );
+        let rows = layout(&self.base.kind);
+        let mut placed: Vec<&str> = Vec::new();
+        for row in rows {
+            let mut line_row = h_flex().gap_3().items_start();
+            for (key, width) in row.iter() {
+                let Some(line) = self.lines.iter().find(|l| l.key == *key) else {
+                    continue;
+                };
+                placed.push(key);
+                let field = self.render_line(line, busy, cx);
+                line_row = line_row.child(match width {
+                    Some(w) => div().w(px(*w)).flex_shrink_0().child(field),
+                    None => div().flex_1().min_w_0().child(field),
+                });
             }
-            form = form.child(Self::labeled(line.label, control, cx));
+            form = form.child(line_row);
+        }
+        // Algum campo sem lugar no layout ainda aparece, numa linha só dele.
+        for line in &self.lines {
+            if !placed.contains(&line.key) {
+                form = form.child(self.render_line(line, busy, cx));
+            }
         }
 
         if matches!(self.base.kind, ItemKind::Login(_)) {
@@ -773,6 +1005,7 @@ impl Render for ItemEditor {
                 Textarea::new(&self.notes).disabled(busy),
                 cx,
             ))
+            .child(Self::labeled("Anexos", self.render_files(busy, cx), cx))
             .child(Self::labeled("Pasta", self.render_folders(cx), cx))
             .child(
                 Checkbox::new("editor-favorite")
@@ -794,24 +1027,21 @@ impl Render for ItemEditor {
         let bar = h_flex()
             .gap_2()
             .items_center()
-            .px_8()
+            .px_6()
             .py_3()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().text_lg().font_semibold().child(title))
-            .child(
-                div()
-                    .id("editor-status")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(self.error.clone().unwrap_or_default())
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .text_color(cx.theme().danger)
-                    .children(self.error.clone()),
-            )
+            // Item novo: o seletor de tipo fica centralizado no espaço livre da
+            // barra (entre a borda e os botões). Edição: título à esquerda.
+            .map(|bar| match kind_selector {
+                Some(selector) => bar
+                    .child(div().flex_1())
+                    .child(selector)
+                    .child(div().flex_1()),
+                None => bar
+                    .child(div().text_lg().font_semibold().child(title))
+                    .child(div().flex_1()),
+            })
             .child(
                 Button::new("editor-cancel")
                     .ghost()
@@ -829,6 +1059,18 @@ impl Render for ItemEditor {
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
             );
+        // Erro logo abaixo da barra, onde há espaço para a frase inteira.
+        let status = div()
+            .id("editor-status")
+            .test_support()
+            .role(Role::Status)
+            .aria_label(self.error.clone().unwrap_or_default())
+            .min_w_0()
+            .text_sm()
+            .text_color(cx.theme().danger)
+            .children(self.error.clone().map(|e| {
+                crate::motion::shake(div().child(e.clone()), crate::motion::key("erro", &e))
+            }));
 
         v_flex().flex_1().min_w_0().h_full().child(bar).child(
             div()
@@ -836,7 +1078,16 @@ impl Render for ItemEditor {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .child(v_flex().w_full().max_w(px(720.)).px_8().py_6().child(form)),
+                .child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(720.))
+                        .px_6()
+                        .py_5()
+                        .gap_2()
+                        .child(status)
+                        .child(form),
+                ),
         )
     }
 }

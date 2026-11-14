@@ -303,6 +303,15 @@ pub fn encrypt_item(
     Ok(raw)
 }
 
+/// Nome de pasta cifrado com a user key (pastas são sempre pessoais).
+pub fn encrypt_folder_name(name: &str, keys: &Keys) -> Result<String, VaultError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(VaultError::Unsupported("a pasta precisa de um nome".into()));
+    }
+    Ok(keys.user_key().encrypt_str(name)?.to_string())
+}
+
 /// Corpo JSON do `POST`/`PUT /api/ciphers`: o item sem as chaves que só
 /// existem na resposta, mais `lastKnownRevisionDate` (o servidor recusa se
 /// outro cliente mudou o item nesse meio-tempo) e `encryptedFor` (o id de
@@ -477,6 +486,19 @@ mod tests {
         let back = reopen(raw, &sync, &keys);
         assert!(matches!(back.kind, ItemKind::SecureNote));
         assert_eq!(back.notes.unwrap().expose(), "só uma nota");
+    }
+
+    #[test]
+    fn folder_names_round_trip() {
+        let (mut sync, keys, _) = open();
+        let enc = encrypt_folder_name("  Bancos ção ", &keys).unwrap();
+        sync.folders = vec![crate::sync::FolderRaw {
+            id: "f".into(),
+            name: enc,
+        }];
+        let vault = Vault::decrypt(&sync, &keys);
+        assert_eq!(vault.folders[0].name, "Bancos ção");
+        assert!(encrypt_folder_name("   ", &keys).is_err());
     }
 
     #[test]

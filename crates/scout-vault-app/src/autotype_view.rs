@@ -163,6 +163,7 @@ impl Render for AutoTypeView {
                 .px_4()
                 .py_2p5()
                 .cursor_pointer()
+                .active(|el| el.opacity(0.7))
                 .hover(|el| el.bg(cx.theme().secondary_hover))
                 .when(ix + 1 < count, |el| {
                     el.border_b_1().border_color(cx.theme().border)

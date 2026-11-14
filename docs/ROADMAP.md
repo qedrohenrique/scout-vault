@@ -104,7 +104,7 @@ Meta: usar no dia a dia para **consultar** senhas.
       e recalcula o `uriChecksum` das URIs.
 - [x] Histórico de senhas do item (até 5).
 - [x] Testes ao vivo no Vaultwarden (núcleo e interface).
-- Pastas: criar, renomear, apagar.
+- [x] Pastas: criar, renomear, apagar (nome cifrado com a user key).
 - Criar itens direto numa organização (precisa escolher coleções).
 - Testes de ida e volta com o cofre web oficial (ler no web vault o que o Scout Vault gravou).
 
@@ -121,6 +121,9 @@ Meta: usar no dia a dia para **consultar** senhas.
 - **Login social (Google etc.)**: o Bitwarden não oferece "entrar com Google" para contas
   pessoais; só existe via **SSO de organização** (Google Workspace como provedor), que o Scout Vault
   já suporta. Nada a fazer até o servidor oferecer.
+
+- [x] **Bandeja do Windows**: fechar esconde a janela e deixa o app rodando; menu Abrir/Bloquear/
+  Sair; uma instância só (abrir de novo mostra a existente).
 
 ## Fase 5 — Recursos avançados
 - Organizações e coleções (escrita), compartilhamento de item.

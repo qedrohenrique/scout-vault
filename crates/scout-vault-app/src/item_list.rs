@@ -244,14 +244,25 @@ impl ListDelegate for ItemList {
         Some(
             ListItem::new(ix).selected(selected).py_2().child(
                 h_flex()
+                    .relative()
                     .gap_3()
                     .w_full()
-                    .child(crate::ui::icon_chip(
-                        kind_icon(&item.kind),
-                        px(32.),
-                        selected,
-                        cx,
-                    ))
+                    // Item escolhido: a seleção envolve o ícone.
+                    .child({
+                        let chip =
+                            crate::ui::icon_chip(kind_icon(&item.kind), px(32.), selected, cx);
+                        if selected {
+                            crate::motion::selection_ring(
+                                chip,
+                                crate::motion::key("item-anel", &item.id),
+                                crate::appearance::accent(cx),
+                                32.,
+                            )
+                            .into_any_element()
+                        } else {
+                            chip.into_any_element()
+                        }
+                    })
                     .child(
                         v_flex()
                             .min_w_0()

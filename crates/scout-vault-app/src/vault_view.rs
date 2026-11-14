@@ -15,8 +15,9 @@ use scout_vault_core::vault::{FieldKind, Item, ItemKind, Keys};
 use crate::flow::{self, Session, Unlocked, WriteOp};
 use crate::item_editor::{EditorEvent, ItemEditor, NewKind};
 use crate::item_list::{kind_icon, Filter, ItemList, KindFilter};
-use crate::{appearance, clipboard, ui};
+use crate::{appearance, clipboard, motion, ui};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use scout_vault_core::generator::PasswordOptions;
 
 pub enum VaultEvent {
@@ -27,6 +28,8 @@ pub enum VaultEvent {
     SessionExpired,
     /// Sincronizou: tokens e cache novos para guardar.
     Synced(Session),
+    /// O "Acesso rápido" mudou: ids para guardar nas configurações.
+    PinsChanged(Vec<String>),
     OpenGenerator,
 }
 
@@ -87,6 +90,17 @@ fn add<'a>(
 }
 
 const TOTP_CODE_KEY: &str = "totp-code";
+
+/// Período atual do TOTP (muda a cada 30 s), para animar a troca do código.
+fn totp_step(key: &str) -> u64 {
+    if key != TOTP_CODE_KEY {
+        return 0;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 30)
+        .unwrap_or(0)
+}
 
 /// Código TOTP atual do item, se ele tiver uma chave válida.
 fn live_totp(item: &Item) -> Option<totp::Code> {
@@ -343,7 +357,6 @@ pub struct VaultView {
     selected: Option<Item>,
     revealed: HashSet<String>,
     syncing: bool,
-    status: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
     /// Redesenha a cada segundo enquanto o item aberto tem código TOTP.
     _ticker: Task<()>,
@@ -355,6 +368,24 @@ pub struct VaultView {
     password_options: PasswordOptions,
     /// "Remover anexo" pede um segundo clique.
     confirm_remove_attachment: Option<String>,
+    /// Campo copiado há pouco: o botão mostra ✓ por um instante.
+    copied: Option<(String, u32)>,
+    /// Itens fixados no "Acesso rápido", na ordem em que foram fixados.
+    pinned: Vec<String>,
+    /// Campo de "nova pasta" aberto na barra lateral.
+    new_folder: Option<(Entity<InputState>, Subscription)>,
+    /// Pasta sendo renomeada (id + campo) no cabeçalho da lista.
+    renaming_folder: Option<(String, Entity<InputState>, Subscription)>,
+    /// "Apagar pasta" pede um segundo clique.
+    confirm_delete_folder: bool,
+    /// Filtro a aplicar no próximo quadro (depois de criar/apagar uma pasta).
+    pending_filter: Option<Filter>,
+    /// Resultado da última sincronização (ok?, contador), mostrado no ícone por um instante.
+    sync_feedback: Option<(bool, u32)>,
+    /// Quantas sincronizações já terminaram (reinicia as animações do ícone).
+    sync_count: u32,
+    /// Posição de cada linha da barra lateral no quadro atual (para a cascata).
+    sidebar_order: std::cell::Cell<usize>,
     /// Anexo sendo baixado agora.
     downloading: Option<String>,
     /// Cópias temporárias abertas com outro programa; apagadas ao bloquear.
@@ -410,6 +441,15 @@ impl VaultView {
             editor: None,
             confirm_delete: false,
             confirm_remove_attachment: None,
+            copied: None,
+            sidebar_order: std::cell::Cell::new(0),
+            sync_feedback: None,
+            new_folder: None,
+            pinned: Vec::new(),
+            renaming_folder: None,
+            confirm_delete_folder: false,
+            pending_filter: None,
+            sync_count: 0,
             downloading: None,
             temp_files: Vec::new(),
             password_options: PasswordOptions::default(),
@@ -420,10 +460,11 @@ impl VaultView {
             selected: None,
             revealed: HashSet::new(),
             syncing: false,
-            status: (errors > 0)
-                .then(|| format!("{errors} item(ns) não puderam ser decifrados.").into()),
             _subscriptions: vec![sub],
         };
+        if errors > 0 {
+            crate::toast::error(format!("{errors} item(ns) não puderam ser decifrados."), cx);
+        }
         // Aberto a partir da sessão lembrada (sem access token): busca o que
         // mudou no servidor. Sem rede, o cofre segue aberto com o cache.
         if this.session.access_token.is_empty() {
@@ -483,14 +524,15 @@ impl VaultView {
         cx: &mut Context<Self>,
     ) {
         let Some(item) = &self.selected else {
-            window.push_notification(SharedString::from("Abra um item primeiro."), cx);
+            let _ = window;
+            crate::toast::info("Abra um item primeiro.", cx);
             return;
         };
         let key = what.key();
         if field_rows(item).iter().any(|r| r.key == key) {
             self.copy_field(key, window, cx);
         } else {
-            window.push_notification(SharedString::from(what.missing()), cx);
+            crate::toast::info(what.missing(), cx);
         }
     }
 
@@ -510,16 +552,34 @@ impl VaultView {
             row.value.clone()
         };
         clipboard::copy_and_clear_later(&value, cx);
+        // ✓ no botão por um instante (o contador reinicia a animação a cada cópia).
+        let n = self.copied.as_ref().map_or(0, |(_, n)| n + 1);
+        self.copied = Some((key.to_owned(), n));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1300))
+                .await;
+            this.update(cx, |this, cx| {
+                if this.copied.as_ref().is_some_and(|(_, m)| *m == n) {
+                    this.copied = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
         let message = if row.secret {
             format!(
-                "{} copiado. A área de transferência será limpa em {} s.",
+                "Copiado: {} · some em {} s",
                 row.label,
                 clipboard::CLEAR_AFTER.as_secs()
             )
         } else {
-            format!("{} copiado.", row.label)
+            format!("Copiado: {}", row.label)
         };
-        window.push_notification(SharedString::from(message), cx);
+        let _ = window;
+        crate::toast::success(message, cx);
     }
 
     fn request_lock(&mut self, cx: &mut Context<Self>) {
@@ -575,12 +635,213 @@ impl VaultView {
                     this.editor = None;
                     cx.notify();
                 }
-                EditorEvent::Save(item) => this.run_write(WriteOp::Save(item.clone()), cx),
+                EditorEvent::Save(item, files) => {
+                    this.run_write(WriteOp::Save(item.clone(), files.clone()), cx)
+                }
             },
         );
         self.editor = Some((editor, sub));
         self.confirm_delete = false;
         cx.notify();
+    }
+
+    /// Quantos itens cabem no acesso rápido.
+    pub const MAX_PINNED: usize = 10;
+
+    pub fn set_pinned(&mut self, ids: Vec<String>) {
+        self.pinned = ids;
+    }
+
+    pub fn pinned(&self) -> &[String] {
+        &self.pinned
+    }
+
+    /// Fixa ou desafixa o item aberto no "Acesso rápido".
+    pub fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = &self.selected else { return };
+        let id = item.id.clone();
+        if let Some(pos) = self.pinned.iter().position(|p| *p == id) {
+            self.pinned.remove(pos);
+            crate::toast::info("Removido do acesso rápido", cx);
+        } else if self.pinned.len() >= Self::MAX_PINNED {
+            crate::toast::error(
+                format!(
+                    "O acesso rápido já tem {} itens; tire um antes.",
+                    Self::MAX_PINNED
+                ),
+                cx,
+            );
+            return;
+        } else {
+            self.pinned.push(id);
+            crate::toast::success("Fixado no acesso rápido", cx);
+        }
+        cx.emit(VaultEvent::PinsChanged(self.pinned.clone()));
+        cx.notify();
+    }
+
+    /// Abre um item do acesso rápido (mostrando "Todos" se o filtro atual o esconde).
+    pub fn open_pinned(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let visible = self
+            .list
+            .read(cx)
+            .delegate()
+            .visible_items()
+            .any(|i| i.id == id);
+        if !visible {
+            self.set_filter(Filter::All, window, cx);
+        }
+        self.select_item(id, window, cx);
+    }
+
+    /// Itens fixados que ainda existem (fora da lixeira), na ordem de fixação.
+    fn pinned_items(&self, cx: &App) -> Vec<Item> {
+        let vault = self.list.read(cx).delegate().vault();
+        self.pinned
+            .iter()
+            .filter_map(|id| vault.items.iter().find(|i| &i.id == id && !i.deleted))
+            .cloned()
+            .collect()
+    }
+
+    fn pinned_row(&self, item: &Item, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.selected.as_ref().is_some_and(|s| s.id == item.id);
+        let accent = appearance::accent(cx);
+        let theme = cx.theme();
+        let (fg, muted, hover) = (
+            theme.foreground.opacity(0.85),
+            theme.muted_foreground,
+            theme.secondary_hover,
+        );
+        let order = self.sidebar_order.get();
+        self.sidebar_order.set(order + 1);
+        let id = item.id.clone();
+        let row_id = SharedString::from(format!("pinned-{}", item.id));
+        let row = h_flex()
+            .id(row_id.clone())
+            .test_support()
+            .role(Role::Button)
+            .aria_label(SharedString::from(item.name.clone()))
+            .relative()
+            .w_full()
+            .gap_2p5()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .text_sm()
+            .cursor_pointer()
+            .when(selected, |el| el.text_color(accent).font_medium())
+            .when(!selected, |el| el.text_color(fg).hover(|el| el.bg(hover)))
+            .active(|el| el.opacity(0.7))
+            .when(selected, |el| {
+                el.child(motion::accent_bar(
+                    motion::key("fixado-barra", &row_id),
+                    accent,
+                ))
+            })
+            .child(
+                Icon::new(kind_icon(&item.kind))
+                    .small()
+                    .when(!selected, |i| i.text_color(muted)),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(item.name.clone()))
+            .on_click(cx.listener(move |this, _, window, cx| this.open_pinned(&id, window, cx)))
+            .with_animation(
+                motion::key("fixado", format!("{row_id}:{selected}")),
+                Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
+                move |el, t| {
+                    if selected {
+                        el.bg(accent.opacity(0.13 * t))
+                    } else {
+                        el
+                    }
+                },
+            );
+        motion::cascade(
+            div().w_full().child(row),
+            motion::key("fixado-entra", &row_id),
+            order,
+        )
+    }
+
+    /// Abre o campo de nova pasta na barra lateral.
+    pub fn start_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.new_folder.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Nome da pasta"));
+        let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.save_new_folder(cx);
+            }
+        });
+        input.update(cx, |i, cx| i.focus(window, cx));
+        self.new_folder = Some((input, sub));
+        cx.notify();
+    }
+
+    pub fn save_new_folder(&mut self, cx: &mut Context<Self>) {
+        let Some((input, _)) = &self.new_folder else {
+            return;
+        };
+        let name = input.read(cx).value().trim().to_owned();
+        if name.is_empty() {
+            crate::toast::error("Dê um nome à pasta.", cx);
+            return;
+        }
+        self.run_write(WriteOp::CreateFolder(name), cx);
+    }
+
+    fn cancel_folder_edit(&mut self, cx: &mut Context<Self>) {
+        self.new_folder = None;
+        self.renaming_folder = None;
+        self.confirm_delete_folder = false;
+        cx.notify();
+    }
+
+    /// Renomear a pasta aberta: o título da lista vira um campo.
+    pub fn start_rename_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Filter::Folder(Some(id)) = self.list.read(cx).delegate().filter().clone() else {
+            return;
+        };
+        let current = self.filter_title(&Filter::Folder(Some(id.clone())), cx);
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
+        let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.save_rename_folder(cx);
+            }
+        });
+        input.update(cx, |i, cx| i.focus(window, cx));
+        self.renaming_folder = Some((id, input, sub));
+        self.confirm_delete_folder = false;
+        cx.notify();
+    }
+
+    pub fn save_rename_folder(&mut self, cx: &mut Context<Self>) {
+        let Some((id, input, _)) = &self.renaming_folder else {
+            return;
+        };
+        let name = input.read(cx).value().trim().to_owned();
+        if name.is_empty() {
+            crate::toast::error("Dê um nome à pasta.", cx);
+            return;
+        }
+        let id = id.clone();
+        self.run_write(WriteOp::RenameFolder { id, name }, cx);
+    }
+
+    /// Apagar a pasta aberta (segundo clique confirma).
+    pub fn delete_folder(&mut self, cx: &mut Context<Self>) {
+        let Filter::Folder(Some(id)) = self.list.read(cx).delegate().filter().clone() else {
+            return;
+        };
+        if !self.confirm_delete_folder {
+            self.confirm_delete_folder = true;
+            cx.notify();
+            return;
+        }
+        self.confirm_delete_folder = false;
+        self.run_write(WriteOp::DeleteFolder(id), cx);
     }
 
     /// Novo item (`Ctrl+N`). Começa na pasta do filtro atual, se houver.
@@ -648,15 +909,13 @@ impl VaultView {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
-            multiple: false,
+            multiple: true,
             prompt: Some("Anexar".into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = paths.await {
-                if let Some(path) = paths.into_iter().next() {
-                    this.update(cx, |this, cx| this.attach_file_from_path(&path, cx))
-                        .ok();
-                }
+                this.update(cx, |this, cx| this.attach_paths(&paths, cx))
+                    .ok();
             }
         })
         .detach();
@@ -664,28 +923,22 @@ impl VaultView {
 
     /// Anexa o arquivo em `path` ao item aberto.
     pub fn attach_file_from_path(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.attach_paths(&[path.to_path_buf()], cx);
+    }
+
+    /// Anexa vários arquivos ao item aberto (escolhidos ou arrastados).
+    pub fn attach_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
         let Some(item) = &self.selected else { return };
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "arquivo".into());
-        match std::fs::read(path) {
-            Ok(bytes) if bytes.len() > scout_vault_core::attachment::MAX_SIZE => {
-                self.status = Some("O arquivo passa do limite de 500 MB.".into());
-                cx.notify();
+        let item_id = item.id.clone();
+        let mut files = Vec::new();
+        for path in paths.iter().filter(|p| !p.is_dir()) {
+            match flow::NewFile::read(path) {
+                Ok(file) => files.push(file),
+                Err(e) => crate::toast::error(e, cx),
             }
-            Ok(bytes) => self.run_write(
-                WriteOp::AddAttachment {
-                    item_id: item.id.clone(),
-                    file_name,
-                    contents: zeroize::Zeroizing::new(bytes),
-                },
-                cx,
-            ),
-            Err(e) => {
-                self.status = Some(format!("Não foi possível ler o arquivo: {e}").into());
-                cx.notify();
-            }
+        }
+        if !files.is_empty() {
+            self.run_write(WriteOp::AddAttachments { item_id, files }, cx);
         }
     }
 
@@ -727,7 +980,6 @@ impl VaultView {
             return;
         }
         self.downloading = Some(attachment_id.clone());
-        self.status = Some(format!("Baixando {}…", att.file_name).into());
         cx.notify();
         let work = flow::download_attachment(
             self.session.clone(),
@@ -742,7 +994,7 @@ impl VaultView {
                 match result {
                     Ok(bytes) => then(this, att.file_name, bytes, cx),
                     Err(flow::SyncError::Expired) => cx.emit(VaultEvent::SessionExpired),
-                    Err(flow::SyncError::Other(e)) => this.status = Some(e.into()),
+                    Err(flow::SyncError::Other(e)) => crate::toast::error(e, cx),
                 }
                 cx.notify();
             })
@@ -761,11 +1013,9 @@ impl VaultView {
                         cx.open_with_system(&path);
                     }
                     this.temp_files.push(path);
-                    this.status = Some(
-                        format!("{name} aberto. A cópia temporária é apagada ao bloquear.").into(),
-                    );
+                    crate::toast::success(format!("{name} aberto."), cx);
                 }
-                Err(e) => this.status = Some(format!("Não foi possível abrir: {e}").into()),
+                Err(e) => crate::toast::error(format!("Não foi possível abrir: {e}"), cx),
             },
             cx,
         );
@@ -783,13 +1033,12 @@ impl VaultView {
                         Ok(Ok(Some(path))) => path,
                         _ => return,
                     };
-                    let message = match std::fs::write(&path, &bytes[..]) {
-                        Ok(()) => format!("Salvo em {}.", path.display()),
-                        Err(e) => format!("Não foi possível salvar: {e}"),
-                    };
-                    this.update(cx, |this, cx| {
-                        this.status = Some(message.into());
-                        cx.notify();
+                    let result = std::fs::write(&path, &bytes[..]);
+                    this.update(cx, |_, cx| match result {
+                        Ok(()) => {
+                            crate::toast::success(format!("Salvo em {}.", path.display()), cx)
+                        }
+                        Err(e) => crate::toast::error(format!("Não foi possível salvar: {e}"), cx),
                     })
                     .ok();
                 })
@@ -881,24 +1130,7 @@ impl VaultView {
         Some(
             v_flex()
                 .gap_2()
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .child(ui::section_label("ANEXOS", cx).px_0())
-                        .when(can_add, |h| {
-                            h.child(
-                                Button::new("attach-add")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Paperclip)
-                                    .label("Anexar arquivo")
-                                    .disabled(busy)
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.pick_attachment(cx)),
-                                    ),
-                            )
-                        }),
-                )
+                .child(ui::section_label("ANEXOS", cx).px_0())
                 .when(count > 0, |v| {
                     v.child(
                         v_flex()
@@ -908,6 +1140,22 @@ impl VaultView {
                             .bg(cx.theme().popover)
                             .children(rows),
                     )
+                })
+                // Sempre visível em itens editáveis: clicar ou arrastar arquivos.
+                .when(can_add, |v| {
+                    v.child(ui::drop_zone(
+                        "attach-add",
+                        busy,
+                        cx.listener(|this, _, _, cx| {
+                            if !this.syncing {
+                                this.pick_attachment(cx)
+                            }
+                        }),
+                        cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                            this.attach_paths(paths.paths(), cx)
+                        }),
+                        cx,
+                    ))
                 })
                 .into_any_element(),
         )
@@ -920,24 +1168,23 @@ impl VaultView {
         }
         let done_message = match &op {
             WriteOp::Nothing => None,
-            WriteOp::Save(item) if item.id.is_empty() => Some("Item criado."),
-            WriteOp::Save(_) => Some("Alterações salvas."),
+            WriteOp::Save(item, _) if item.id.is_empty() => Some("Item criado."),
+            WriteOp::Save(..) => Some("Alterações salvas."),
             WriteOp::Trash(_) => Some("Item movido para a lixeira."),
             WriteOp::Restore(_) => Some("Item restaurado."),
             WriteOp::Delete(_) => Some("Item apagado de vez."),
-            WriteOp::AddAttachment { .. } => Some("Arquivo anexado."),
+            WriteOp::AddAttachments { files, .. } if files.len() > 1 => Some("Arquivos anexados."),
+            WriteOp::AddAttachments { .. } => Some("Arquivo anexado."),
             WriteOp::RemoveAttachment { .. } => Some("Anexo removido."),
+            WriteOp::CreateFolder(_) => Some("Pasta criada."),
+            WriteOp::RenameFolder { .. } => Some("Pasta renomeada."),
+            WriteOp::DeleteFolder(_) => Some("Pasta apagada; os itens foram para Sem pasta."),
         };
         let closes_detail = matches!(op, WriteOp::Delete(_));
+        // Pastas: depois de salvar, abre a pasta; depois de apagar, volta para todos.
+        let folder_saved = matches!(op, WriteOp::CreateFolder(_) | WriteOp::RenameFolder { .. });
+        let folder_deleted = matches!(op, WriteOp::DeleteFolder(_));
         self.syncing = true;
-        self.status = Some(
-            if matches!(op, WriteOp::Nothing) {
-                "Sincronizando…"
-            } else {
-                "Salvando…"
-            }
-            .into(),
-        );
         if let Some((editor, _)) = &self.editor {
             editor.update(cx, |e, cx| e.set_saving(true, None, cx));
         }
@@ -947,9 +1194,48 @@ impl VaultView {
             let result = work.await;
             this.update(cx, |this, cx| {
                 this.syncing = false;
+                this.sync_count += 1;
+                let n = this.sync_count;
+                this.sync_feedback = Some((result.is_ok(), n));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(1600))
+                        .await;
+                    this.update(cx, |this, cx| {
+                        if this.sync_feedback.is_some_and(|(_, m)| m == n) {
+                            this.sync_feedback = None;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
                 match result {
-                    Ok((session, vault, saved_id)) => {
-                        if done_message.is_some() {
+                    Ok(flow::Written {
+                        session,
+                        vault,
+                        saved_id,
+                        warnings,
+                    }) => {
+                        for w in &warnings {
+                            crate::toast::error(format!("Anexo não enviado — {w}"), cx);
+                        }
+                        if folder_saved || folder_deleted {
+                            this.new_folder = None;
+                            this.renaming_folder = None;
+                            this.confirm_delete_folder = false;
+                            this.pending_filter = if folder_deleted {
+                                Some(Filter::All)
+                            } else {
+                                saved_id.clone().map(|id| Filter::Folder(Some(id)))
+                            };
+                        }
+                        let saved_id = if folder_saved || folder_deleted {
+                            None
+                        } else {
+                            saved_id
+                        };
+                        if done_message.is_some() && !(folder_saved || folder_deleted) {
                             this.editor = None;
                         }
                         let keep = saved_id.or_else(|| {
@@ -976,14 +1262,20 @@ impl VaultView {
                                 .find(|i| i.id == id)
                                 .cloned()
                         });
-                        this.status = Some(match (done_message, errors) {
-                            (Some(m), _) => m.into(),
-                            (None, 0) => "Sincronizado.".into(),
-                            (None, n) => {
-                                format!("Sincronizado; {n} item(ns) não puderam ser decifrados.")
-                                    .into()
-                            }
-                        });
+                        // Sincronizar sozinho já mostra o ✓ no ícone; o resto vira toast.
+                        let attach_only = done_message
+                            .is_some_and(|m| m.starts_with("Arquivo") || m.starts_with("Arquivos"));
+                        if let Some(m) =
+                            done_message.filter(|_| !(attach_only && !warnings.is_empty()))
+                        {
+                            crate::toast::success(m.trim_end_matches('.'), cx);
+                        }
+                        if errors > 0 {
+                            crate::toast::error(
+                                format!("{errors} item(ns) não puderam ser decifrados."),
+                                cx,
+                            );
+                        }
                     }
                     Err(flow::SyncError::Expired) => cx.emit(VaultEvent::SessionExpired),
                     Err(flow::SyncError::Other(e)) => {
@@ -991,8 +1283,9 @@ impl VaultView {
                         if let Some((editor, _)) = &this.editor {
                             let msg = e.clone();
                             editor.update(cx, |ed, cx| ed.set_saving(false, Some(msg), cx));
+                        } else {
+                            crate::toast::error(e, cx);
                         }
-                        this.status = Some(e.into());
                     }
                 }
                 cx.notify();
@@ -1037,18 +1330,21 @@ impl VaultView {
         let count = list.count(&filter);
         let selected = *list.filter() == filter;
         let accent = appearance::accent(cx);
-        let tint = appearance::accent_tint(cx, 0.13);
+        let order = self.sidebar_order.get();
+        self.sidebar_order.set(order + 1);
         let theme = cx.theme();
         let (fg, muted, hover) = (
             theme.foreground.opacity(0.85),
             theme.muted_foreground,
             theme.secondary_hover,
         );
-        h_flex()
+        let id_text = id.clone();
+        let row = h_flex()
             .id(id)
             .test_support()
             .role(Role::Button)
             .aria_label(SharedString::from(label.clone()))
+            .relative()
             .w_full()
             .gap_2p5()
             .px_2()
@@ -1056,26 +1352,158 @@ impl VaultView {
             .rounded(theme.radius)
             .text_sm()
             .cursor_pointer()
-            .when(selected, |el| el.bg(tint).text_color(accent).font_medium())
+            .when(selected, |el| el.text_color(accent).font_medium())
             .when(!selected, |el| el.text_color(fg).hover(|el| el.bg(hover)))
-            .child(
-                Icon::new(icon)
-                    .small()
-                    .when(!selected, |i| i.text_color(muted)),
-            )
+            .active(|el| el.opacity(0.7))
+            .when(selected, |el| {
+                el.child(motion::accent_bar(
+                    motion::key("filtro-barra", &id_text),
+                    accent,
+                ))
+            })
+            .child({
+                let icon = div().flex().child(
+                    Icon::new(icon)
+                        .small()
+                        .when(!selected, |i| i.text_color(muted)),
+                );
+                if selected {
+                    motion::nudge(icon, motion::key("filtro-icone", &id_text), 2.)
+                        .into_any_element()
+                } else {
+                    icon.into_any_element()
+                }
+            })
             .child(div().flex_1().min_w_0().truncate().child(label))
-            .child(
-                div()
+            .child({
+                let badge = div()
                     .text_xs()
                     .when(!selected, |d| d.text_color(muted))
-                    .child(count.to_string()),
-            )
+                    .child(count.to_string());
+                if selected {
+                    motion::pop(badge, motion::key("filtro-conta", &id_text)).into_any_element()
+                } else {
+                    badge.into_any_element()
+                }
+            })
             .on_click(
                 cx.listener(move |this, _, window, cx| this.set_filter(filter.clone(), window, cx)),
             )
+            // O destaque do filtro escolhido acende suave.
+            .with_animation(
+                motion::key("filtro", format!("{id_text}:{selected}")),
+                Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
+                move |el, t| {
+                    if selected {
+                        el.bg(accent.opacity(0.13 * t))
+                    } else {
+                        el
+                    }
+                },
+            );
+        // Ao abrir o cofre, as linhas entram em cascata (uma vez por tela).
+        motion::cascade(
+            div().w_full().child(row),
+            motion::key("filtro-entra", &id_text),
+            order,
+        )
+    }
+
+    /// Botão de sincronizar: gira enquanto trabalha; ao terminar vira ✓ (ou ✗)
+    /// por um instante, com transição, e volta às setas.
+    fn render_sync_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use std::f32::consts::TAU;
+        let accent = appearance::accent(cx);
+        let danger = cx.theme().danger;
+        let muted = cx.theme().foreground.opacity(0.8);
+        let n = self.sync_count;
+        let (icon, label): (AnyElement, &str) = if self.syncing {
+            (
+                Icon::new(IconName::RefreshCw)
+                    .small()
+                    .text_color(accent)
+                    .with_animation(
+                        "sync-girando",
+                        Animation::new(std::time::Duration::from_millis(900)).repeat(),
+                        |icon, t| icon.rotate(radians(t * TAU)),
+                    )
+                    .into_any_element(),
+                "Sincronizando…",
+            )
+        } else if let Some((ok, m)) = self.sync_feedback {
+            let (name, color, label) = if ok {
+                (IconName::Check, accent, "Sincronizado")
+            } else {
+                (IconName::Close, danger, "Não foi possível sincronizar")
+            };
+            (
+                // Entra girando um quarto de volta enquanto aparece.
+                Icon::new(name)
+                    .small()
+                    .with_animation(
+                        motion::key("sync-fim", m),
+                        Animation::new(std::time::Duration::from_millis(340))
+                            .with_easing(ease_out_quint()),
+                        move |icon, t| {
+                            icon.text_color(color.opacity(t))
+                                .rotate(radians(-TAU / 4. * (1. - t)))
+                        },
+                    )
+                    .into_any_element(),
+                label,
+            )
+        } else {
+            (
+                // Volta às setas com meio giro suave (não anima na primeira vez).
+                Icon::new(IconName::RefreshCw)
+                    .small()
+                    .text_color(muted)
+                    .with_animation(
+                        motion::key("sync-volta", n),
+                        Animation::new(if n == 0 {
+                            std::time::Duration::from_millis(1)
+                        } else {
+                            motion::NORMAL
+                        })
+                        .with_easing(ease_out_quint()),
+                        move |icon, t| {
+                            if n == 0 {
+                                icon
+                            } else {
+                                icon.rotate(radians(-TAU / 2. * (1. - t)))
+                            }
+                        },
+                    )
+                    .into_any_element(),
+                "Sincronizar",
+            )
+        };
+        let busy = self.syncing;
+        let hover = cx.theme().secondary_hover;
+        div()
+            .id("vault-sync")
+            .test_support()
+            .role(Role::Button)
+            .aria_label(SharedString::from(label))
+            .size(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(cx.theme().radius)
+            .when(!busy, |el| {
+                el.cursor_pointer()
+                    .hover(|el| el.bg(hover))
+                    .active(|el| el.opacity(0.7))
+            })
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
+            })
+            .child(icon)
+            .on_click(cx.listener(|this, _, _, cx| this.sync(cx)))
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sidebar_order.set(0);
         let vault = self.list.read(cx).delegate().vault();
         let orgs: Vec<_> = vault
             .organizations
@@ -1108,8 +1536,16 @@ impl VaultView {
                 IconName::Star,
                 "Favoritos".into(),
                 cx,
-            ))
-            .child(ui::section_label("Tipos", cx));
+            ));
+        // Acesso rápido: itens fixados pela pessoa, logo no topo.
+        let pinned = self.pinned_items(cx);
+        if !pinned.is_empty() {
+            nav = nav.child(ui::section_label("Acesso rápido", cx));
+            for item in &pinned {
+                nav = nav.child(self.pinned_row(item, cx));
+            }
+        }
+        nav = nav.child(ui::section_label("Tipos", cx));
         for k in KindFilter::ALL {
             let icon = match k {
                 KindFilter::Login => IconName::Globe,
@@ -1138,7 +1574,56 @@ impl VaultView {
                 ));
             }
         }
-        nav = nav.child(ui::section_label("Pastas", cx));
+        nav = nav.child(
+            h_flex()
+                .justify_between()
+                .pr_1()
+                .child(ui::section_label("Pastas", cx))
+                .child(
+                    Button::new("folder-new")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Plus)
+                        .tooltip("Nova pasta")
+                        .disabled(self.syncing)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_new_folder(window, cx)),
+                        ),
+                ),
+        );
+        if let Some((input, _)) = &self.new_folder {
+            nav = nav.child(motion::rise(
+                h_flex()
+                    .gap_1()
+                    .px_1()
+                    .pb_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(input).id("folder-new-name").small()),
+                    )
+                    .child(
+                        Button::new("folder-new-save")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Check)
+                            .tooltip("Criar (Enter)")
+                            .disabled(self.syncing)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_new_folder(cx))),
+                    )
+                    .child(
+                        Button::new("folder-new-cancel")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .tooltip("Cancelar")
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_folder_edit(cx))),
+                    ),
+                motion::key("pasta-nova", "campo"),
+                4.,
+            ));
+        }
         for (id, name) in folders {
             nav = nav.child(self.filter_row(
                 format!("filter-folder-{id}").into(),
@@ -1173,37 +1658,27 @@ impl VaultView {
             .border_t_1()
             .border_color(cx.theme().border)
             .child(
-                div()
-                    .id("vault-status")
-                    .role(Role::Status)
-                    .test_support()
-                    .aria_label(self.status.clone().unwrap_or_default())
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .children(self.status.clone()),
-            )
-            .child(
                 h_flex()
                     .gap_1()
-                    .child(
+                    .child({
+                        // E-mail cortado na barra; inteiro ao passar o mouse.
+                        let email = SharedString::from(self.session.email.clone());
                         div()
+                            .id("vault-email")
+                            .test_support()
+                            .aria_label(email.clone())
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(self.session.email.clone()),
-                    )
-                    .child(
-                        Button::new("vault-sync")
-                            .ghost()
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .tooltip("Sincronizar")
-                            .loading(self.syncing)
-                            .disabled(self.syncing)
-                            .on_click(cx.listener(|this, _, _, cx| this.sync(cx))),
-                    )
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(email.clone())
+                                    .build(window, cx)
+                            })
+                            .child(self.session.email.clone())
+                    })
+                    .child(self.render_sync_button(cx))
                     .child(
                         Button::new("vault-generator")
                             .ghost()
@@ -1249,6 +1724,7 @@ impl VaultView {
         let filter = list.filter().clone();
         let count = list.count(&filter);
         let title = self.filter_title(&filter, cx);
+        let list_key = format!("{filter:?}");
         v_flex()
             .w(px(330.))
             .h_full()
@@ -1261,14 +1737,74 @@ impl VaultView {
                     .pt_4()
                     .pb_1()
                     .gap_2()
-                    .child(
-                        div()
+                    .child(match &self.renaming_folder {
+                        Some((_, input, _)) => h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(Input::new(input).id("folder-rename-name").small()),
+                            )
+                            .child(
+                                Button::new("folder-rename-save")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Check)
+                                    .tooltip("Salvar (Enter)")
+                                    .disabled(self.syncing)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.save_rename_folder(cx)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("folder-rename-cancel")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .tooltip("Cancelar")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.cancel_folder_edit(cx)),
+                                    ),
+                            )
+                            .into_any_element(),
+                        None => div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .text_lg()
                             .font_semibold()
-                            .child(title),
+                            .child(title)
+                            .into_any_element(),
+                    })
+                    .when(
+                        matches!(filter, Filter::Folder(Some(_))) && self.renaming_folder.is_none(),
+                        |row| {
+                            let confirming = self.confirm_delete_folder;
+                            row.child(
+                                Button::new("folder-rename")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Pencil)
+                                    .tooltip("Renomear pasta")
+                                    .disabled(self.syncing)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.start_rename_folder(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("folder-delete")
+                                    .when(confirming, |b| b.danger().label("Apagar?"))
+                                    .when(!confirming, |b| {
+                                        b.ghost().icon(IconName::Trash).tooltip("Apagar pasta")
+                                    })
+                                    .xsmall()
+                                    .disabled(self.syncing)
+                                    .on_click(cx.listener(|this, _, _, cx| this.delete_folder(cx))),
+                            )
+                        },
                     )
                     .child(
                         div()
@@ -1290,12 +1826,30 @@ impl VaultView {
                             .on_click(cx.listener(|this, _, window, cx| this.new_item(window, cx))),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(List::new(&self.list)))
+            .child(if self.syncing || self.downloading.is_some() {
+                motion::progress_bar("vault-progress", appearance::accent(cx)).into_any_element()
+            } else {
+                div().h(px(2.)).into_any_element()
+            })
+            .child(motion::fade(
+                div().flex_1().min_h_0().child(List::new(&self.list)),
+                motion::key("lista", &list_key),
+            ))
     }
 
     fn render_detail(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some((editor, _)) = &self.editor {
-            return editor.clone().into_any_element();
+            return motion::slide(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .child(editor.clone()),
+                motion::key("editor", editor.entity_id()),
+                14.,
+            )
+            .into_any_element();
         }
         let Some(item) = &self.selected else {
             return v_flex()
@@ -1316,6 +1870,9 @@ impl VaultView {
                         .text_color(cx.theme().muted_foreground.opacity(0.75))
                         .child("Use as setas na lista; Enter abre o item."),
                 )
+                .with_animation("detalhe-vazio", Animation::new(motion::NORMAL), |el, t| {
+                    el.opacity(t)
+                })
                 .into_any_element();
         };
 
@@ -1362,7 +1919,24 @@ impl VaultView {
                         .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
                 );
         } else if self.can_edit(item) {
+            let pinned = self.pinned.contains(&item.id);
             actions = actions
+                .child(
+                    Button::new("item-pin")
+                        .ghost()
+                        .small()
+                        .icon(if pinned {
+                            IconName::PinOff
+                        } else {
+                            IconName::Pin
+                        })
+                        .tooltip(if pinned {
+                            "Tirar do acesso rápido"
+                        } else {
+                            "Fixar no acesso rápido"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_pin(cx))),
+                )
                 .child(
                     Button::new("item-edit")
                         .outline()
@@ -1496,7 +2070,15 @@ impl VaultView {
                                 })
                                 .when(!row.multiline, |d| d.truncate())
                                 .when(row.multiline && revealed, |d| d.whitespace_normal())
-                                .child(shown),
+                                .child(motion::fade(
+                                    div().child(shown.clone()),
+                                    // Nunca o valor na chave (pode ser uma senha):
+                                    // só o campo, se está revelado e, no TOTP, o período.
+                                    motion::key(
+                                        "valor",
+                                        format!("{}:{revealed}:{}", row.key, totp_step(&row.key)),
+                                    ),
+                                )),
                         ),
                 )
                 .when(row.secret, |el| {
@@ -1515,16 +2097,33 @@ impl VaultView {
                             })),
                     )
                 })
-                .child(
-                    Button::new(SharedString::from(format!("copy-{}", row.key)))
+                .child({
+                    let just_copied = self
+                        .copied
+                        .as_ref()
+                        .filter(|(k, _)| *k == row.key)
+                        .map(|(_, n)| *n);
+                    let button = Button::new(SharedString::from(format!("copy-{}", row.key)))
                         .ghost()
                         .small()
-                        .icon(IconName::Copy)
+                        .icon(if just_copied.is_some() {
+                            IconName::Check
+                        } else {
+                            IconName::Copy
+                        })
                         .tooltip("Copiar")
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.copy_field(&copy_key, window, cx)
-                        })),
-                )
+                        }));
+                    match just_copied {
+                        Some(n) => motion::pop(
+                            div().text_color(appearance::accent(cx)).child(button),
+                            motion::key("copiado", format!("{}:{n}", row.key)),
+                        )
+                        .into_any_element(),
+                        None => button.into_any_element(),
+                    }
+                })
         });
 
         let fields = v_flex()
@@ -1534,7 +2133,7 @@ impl VaultView {
             .bg(cx.theme().popover)
             .children(rows);
 
-        v_flex()
+        let detail = v_flex()
             .id("vault-detail")
             .flex_1()
             .min_w_0()
@@ -1551,13 +2150,16 @@ impl VaultView {
                     .when(has_badges, |el| el.child(badges))
                     .when(total > 0, |el| el.child(fields))
                     .children(attachments),
-            )
-            .into_any_element()
+            );
+        motion::slide(detail, motion::key("detalhe", &item.id), 12.).into_any_element()
     }
 }
 
 impl Render for VaultView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(filter) = self.pending_filter.take() {
+            self.set_filter(filter, window, cx);
+        }
         h_flex()
             .items_stretch()
             .size_full()

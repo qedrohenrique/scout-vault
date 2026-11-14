@@ -49,6 +49,15 @@ pub struct Settings {
     /// Tema, cor de destaque e afins.
     #[serde(default)]
     pub appearance: Appearance,
+    /// Fechar a janela deixa o app rodando na bandeja do Windows.
+    #[serde(default = "yes")]
+    pub close_to_tray: bool,
+    /// O aviso "continua na bandeja" já foi mostrado uma vez.
+    #[serde(default)]
+    pub tray_hint_shown: bool,
+    /// Itens fixados no "Acesso rápido" da barra lateral (só os ids; nada secreto).
+    #[serde(default)]
+    pub pinned_items: Vec<String>,
     /// Ao abrir o app, ir direto para o desbloqueio (sessão e cache cifrado guardados).
     #[serde(default = "yes")]
     pub remember_session: bool,
@@ -91,6 +100,9 @@ impl Default for Settings {
             appearance: Appearance::default(),
             generator: PasswordOptions::default(),
             remember_session: true,
+            pinned_items: Vec::new(),
+            close_to_tray: true,
+            tray_hint_shown: false,
             browser_fill: false,
             autotype: AutoTypeSettings::default(),
         }
