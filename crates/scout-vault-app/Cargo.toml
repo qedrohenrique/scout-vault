@@ -3,6 +3,8 @@ name = "scout-vault-app"
 description = "Interface desktop do Scout Vault, em GPUI (via gpui-kit)."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "scout-vault"

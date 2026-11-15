@@ -3,6 +3,8 @@ name = "scout-vault-core"
 description = "Protocolo, criptografia e modelo do cofre — sem dependência de UI."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
 aes = "0.9.4"

@@ -294,7 +294,14 @@ cargo test -p scout-vault-app --test ui      # só a UI
 - **2FA ao vivo:** `python tools/dev_seed.py --totp` cria uma conta com autenticador
   (credenciais em `dev/test-account-2fa.env`) para `cargo test -p scout-vault-app --test live_2fa -- --ignored`.
 
-A CI (Windows) roda `cargo fmt --check`, `cargo clippy -D warnings` e `cargo test --workspace`.
+A CI (GitHub Actions, em `.github/workflows/`) roda em cada push e PR:
+- **CI**: `cargo fmt --check`; `cargo clippy -D warnings` e `cargo test --workspace` no Windows;
+  os testes ao vivo do núcleo contra um Vaultwarden descartável (conta e organização criadas
+  pelos scripts de `tools/`); e a sintaxe da extensão.
+- **Segurança**: `cargo deny check` (vulnerabilidades do RustSec, licenças, crates e origens —
+  regras em `deny.toml`) e CodeQL (Rust, JavaScript da extensão e os próprios workflows).
+  Também roda toda segunda, para pegar falhas novas sem precisar de commit.
+- **Dependabot** abre PRs semanais de dependências e actions.
 Os testes headless não desenham pixels. Por isso, mudanças visuais precisam ser conferidas numa
 janela real.
 
