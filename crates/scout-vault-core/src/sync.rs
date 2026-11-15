@@ -14,6 +14,20 @@ pub struct SyncResponse {
     pub folders: Vec<FolderRaw>,
     #[serde(default)]
     pub ciphers: Vec<CipherRaw>,
+    /// Coleções das organizações (nome cifrado com a chave da organização).
+    #[serde(default)]
+    pub collections: Vec<CollectionRaw>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionRaw {
+    pub id: String,
+    pub organization_id: String,
+    pub name: String,
+    /// A pessoa só pode ler (não pode pôr itens nela).
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl SyncResponse {

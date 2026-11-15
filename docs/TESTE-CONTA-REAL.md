@@ -36,6 +36,8 @@ Faça os casos em ordem. Anote o texto exato que aparecer embaixo do formulário
 | 19 | Anexos | Crie uma **Nota** e, no próprio formulário, arraste um PDF e uma imagem para "Anexos"; salve. Depois arraste mais um arquivo no detalhe do item | Os arquivos aparecem no cofre web e abrem iguais. Em conta gratuita do bitwarden.com, o app avisa que anexos exigem Premium. O envio para a nuvem oficial (Azure) **ainda não foi testado** |
 | 20 | Navegador | Configurações → Navegador → ligar; carregue a extensão; num site salvo, clique no ícone do Scout Vault | Lista os logins do site; clicar preenche usuário e senha |
 | 21 | Pastas | Crie uma pasta pelo `+` da barra lateral, ponha um item nela, renomeie e apague | A pasta aparece igual no cofre web; ao apagar, o item continua lá, em "Sem pasta" |
+| 22 | Organização | Numa organização, abra uma coleção na barra lateral, crie um login pelo `+` e salve; depois edite e marque outra coleção | O item aparece na organização e nas coleções certas no cofre web; quem só tem a outra coleção passa a vê-lo |
+| 23 | Ficar conectado | Em Configurações → Sessão, ponha "Pedir a senha mestra ao abrir" em 7 dias; desbloqueie, saia pela bandeja e abra de novo. Depois troque a senha mestra no cofre web e sincronize | Reabre já desbloqueado; depois da troca de senha aparece o aviso e a próxima abertura pede a senha nova |
 
 ## Se algo falhar
 Para erros do servidor, o app mostra o código HTTP e a mensagem que o servidor mandou. Copie esse

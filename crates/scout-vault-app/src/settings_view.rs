@@ -22,6 +22,9 @@ pub struct SettingsView {
     autotype: AutoTypeSettings,
     remember_session: bool,
     close_to_tray: bool,
+    unlock_memory_days: u32,
+    relogin_days: u32,
+    auto_lock_minutes: u32,
     browser_fill: bool,
     browser_error: Option<SharedString>,
 }
@@ -37,6 +40,9 @@ impl SettingsView {
             autotype: loaded.autotype,
             remember_session: loaded.remember_session,
             close_to_tray: loaded.close_to_tray,
+            unlock_memory_days: loaded.unlock_memory_days,
+            relogin_days: loaded.relogin_days,
+            auto_lock_minutes: loaded.auto_lock_minutes,
             browser_fill: loaded.browser_fill,
             browser_error: None,
         }
@@ -57,6 +63,64 @@ impl SettingsView {
         self.store.save(&settings);
         appearance::apply(&next, Some(window), cx);
         cx.notify();
+    }
+
+    /// Abrir sem senha por N dias (0 = pedir sempre). Desligar apaga a chave guardada.
+    pub fn set_unlock_memory_days(&mut self, days: u32, cx: &mut Context<Self>) {
+        self.unlock_memory_days = days;
+        let mut settings = self.store.load();
+        settings.unlock_memory_days = days;
+        self.store.save(&settings);
+        if days == 0 {
+            crate::saved_session::forget_quick_unlock(&self.store);
+        }
+        cx.notify();
+    }
+
+    pub fn set_relogin_days(&mut self, days: u32, cx: &mut Context<Self>) {
+        self.relogin_days = days;
+        let mut settings = self.store.load();
+        settings.relogin_days = days;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
+    pub fn set_auto_lock_minutes(&mut self, minutes: u32, cx: &mut Context<Self>) {
+        self.auto_lock_minutes = minutes;
+        let mut settings = self.store.load();
+        settings.auto_lock_minutes = minutes;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
+    /// Controle segmentado de opções numéricas (dias, minutos).
+    fn number_choice(
+        &self,
+        id: &'static str,
+        prefix: &'static str,
+        options: &'static [(u32, &'static str)],
+        current: u32,
+        set: fn(&mut Self, u32, &mut Context<Self>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        ui::segmented_compact(
+            id,
+            options
+                .iter()
+                .map(|(v, label)| Segment {
+                    id: format!("{prefix}-{v}").into(),
+                    label: (*label).into(),
+                    icon: None,
+                    selected: *v == current,
+                })
+                .collect(),
+            move |ix, _, cx| {
+                let value = options[ix].0;
+                this.update(cx, |v, cx| set(v, value, cx)).ok();
+            },
+            cx,
+        )
     }
 
     pub fn set_close_to_tray(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -458,9 +522,62 @@ impl Render for SettingsView {
             }
             Self::group("NAVEGADOR", rows, cx)
         };
+        let unlock_control = self.number_choice(
+            "settings-unlock-memory",
+            "unlock",
+            &[(0, "Sempre"), (1, "1 dia"), (7, "7 dias"), (30, "30 dias")],
+            self.unlock_memory_days,
+            Self::set_unlock_memory_days,
+            cx,
+        );
+        let relogin_control = self.number_choice(
+            "settings-relogin",
+            "relogin",
+            &[
+                (7, "7 dias"),
+                (30, "30 dias"),
+                (90, "90 dias"),
+                (0, "Nunca"),
+            ],
+            self.relogin_days,
+            Self::set_relogin_days,
+            cx,
+        );
+        let lock_control = self.number_choice(
+            "settings-auto-lock",
+            "lock",
+            &[
+                (1, "1 min"),
+                (5, "5 min"),
+                (15, "15 min"),
+                (60, "1 h"),
+                (0, "Nunca"),
+            ],
+            self.auto_lock_minutes,
+            Self::set_auto_lock_minutes,
+            cx,
+        );
         let session_group = Self::group(
             "SESSÃO",
             vec![
+                Self::row(
+                    "Pedir a senha mestra ao abrir",
+                    "Depois de digitar a senha, o app abre direto por esse tempo. Quem usar este computador com o seu usuário do Windows abre o cofre sem senha nesse período. Se a senha mudar, ela volta a ser pedida.",
+                    unlock_control,
+                    cx,
+                ),
+                Self::row(
+                    "Pedir login completo a cada",
+                    "E-mail, senha mestra e 2FA de novo depois desse tempo. Trocar a senha ou encerrar a sessão em outro lugar também pede login.",
+                    relogin_control,
+                    cx,
+                ),
+                Self::row(
+                    "Bloquear sem uso após",
+                    "Tempo sem mexer no teclado ou no mouse até o cofre bloquear.",
+                    lock_control,
+                    cx,
+                ),
                 Self::row(
                     "Ao fechar, continuar na bandeja",
                     "O app segue rodando perto do relógio: Ctrl+Alt+A e o navegador continuam funcionando. Para sair de vez, use Sair no ícone.",

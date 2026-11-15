@@ -481,6 +481,48 @@ impl Client {
         read_json(res).await
     }
 
+    /// `POST /api/ciphers/create` — cria um item **numa organização**, já nas coleções.
+    pub async fn create_cipher_in_org(
+        &self,
+        access_token: &str,
+        body: &Value,
+        collection_ids: &[String],
+    ) -> Result<crate::sync::CipherRaw, ApiError> {
+        let res = self
+            .http
+            .post(format!("{}/ciphers/create", self.urls.api))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "cipher": body, "collectionIds": collection_ids }))
+            .send()
+            .await?;
+        read_json(res).await
+    }
+
+    /// Troca as coleções de um item de organização. Servidores novos usam
+    /// `collections_v2`; os antigos, `collections`.
+    pub async fn update_collections(
+        &self,
+        access_token: &str,
+        id: &str,
+        collection_ids: &[String],
+    ) -> Result<(), ApiError> {
+        let body = serde_json::json!({ "collectionIds": collection_ids });
+        for path in ["collections_v2", "collections"] {
+            let res = self
+                .http
+                .put(format!("{}/ciphers/{id}/{path}", self.urls.api))
+                .bearer_auth(access_token)
+                .json(&body)
+                .send()
+                .await?;
+            if matches!(res.status().as_u16(), 404 | 405) && path == "collections_v2" {
+                continue;
+            }
+            return ensure_success(res).await.map(|_| ());
+        }
+        Ok(())
+    }
+
     /// `PUT /api/ciphers/{id}` — grava a edição de um item.
     pub async fn update_cipher(
         &self,
@@ -496,6 +538,25 @@ impl Client {
             .send()
             .await?;
         read_json(res).await
+    }
+
+    /// `PUT /api/ciphers/{id}/partial` — muda só a pasta (e o favorito) do item,
+    /// sem recifrar nada. Vale também para itens de organização (a pasta é pessoal).
+    pub async fn move_cipher_to_folder(
+        &self,
+        access_token: &str,
+        id: &str,
+        folder_id: Option<&str>,
+        favorite: bool,
+    ) -> Result<(), ApiError> {
+        let res = self
+            .http
+            .put(format!("{}/ciphers/{id}/partial", self.urls.api))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "folderId": folder_id, "favorite": favorite }))
+            .send()
+            .await?;
+        ensure_success(res).await.map(|_| ())
     }
 
     /// `POST /api/folders` — cria uma pasta. `name` já vem cifrado com a user key.

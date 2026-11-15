@@ -456,6 +456,7 @@ mod tests {
             deleted: false,
             revision_date: None,
             attachments: Vec::new(),
+            collection_ids: Vec::new(),
             fields: vec![crate::vault::Field {
                 kind: FieldKind::Hidden,
                 name: Some("PIN".into()),

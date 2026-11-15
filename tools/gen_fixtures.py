@@ -119,6 +119,10 @@ def main() -> None:
             ],
         },
         "folders": [{"id": "folder-1", "name": u("Bancos")}],
+        "collections": [
+            {"id": "col-fin", "organizationId": "org-1", "name": o("Financeiro"), "readOnly": False},
+            {"id": "col-ro", "organizationId": "org-1", "name": o("Só leitura"), "readOnly": True},
+        ],
         "ciphers": [
             # Em PascalCase, como o servidor oficial antigo responde.
             {
@@ -151,6 +155,7 @@ def main() -> None:
                 "id": "card-org",
                 "type": 3,
                 "organizationId": "org-1",
+                "collectionIds": ["col-fin"],
                 "name": o("Cartão da empresa"),
                 "card": {
                     "cardholderName": o("Ana Souza"),

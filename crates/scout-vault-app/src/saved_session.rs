@@ -29,6 +29,9 @@ struct Saved {
     email: String,
     kdf: Kdf,
     sync: SyncResponse,
+    /// Último login completo (0 = desconhecido: sessões salvas antes desta opção).
+    #[serde(default)]
+    logged_in_at: u64,
 }
 
 fn token_key(urls: &ServerUrls, email: &str) -> String {
@@ -52,6 +55,7 @@ pub fn save(store: &SettingsStore, session: &Session) {
         kdf: session.kdf,
         sync: (*session.sync).clone(),
         urls: urls.clone(),
+        logged_in_at: session.logged_in_at,
     };
     let Ok(bytes) = serde_json::to_vec(&saved) else {
         return;
@@ -73,6 +77,19 @@ pub fn load(store: &SettingsStore) -> Option<Session> {
     if saved.version != VERSION {
         return None;
     }
+    // "Pedir login completo a cada N dias": passou do prazo, esquece a sessão.
+    let logged_in_at = if saved.logged_in_at == 0 {
+        crate::flow::now_secs()
+    } else {
+        saved.logged_in_at
+    };
+    if settings.relogin_days > 0
+        && crate::flow::now_secs().saturating_sub(logged_in_at)
+            > u64::from(settings.relogin_days) * 86_400
+    {
+        clear(store);
+        return None;
+    }
     let refresh_token = store.secrets().get(&token_key(&saved.urls, &saved.email))?;
     let client = if saved.sso {
         Client::for_sso(saved.urls, settings.device)
@@ -88,6 +105,7 @@ pub fn load(store: &SettingsStore) -> Option<Session> {
         access_token: String::new(),
         refresh_token,
         sync: Arc::new(saved.sync),
+        logged_in_at,
     })
 }
 
@@ -100,6 +118,30 @@ pub fn clear(store: &SettingsStore) {
         store
             .secrets()
             .delete(&token_key(&saved.urls, &saved.email));
+        store
+            .secrets()
+            .delete(&quick_key(&saved.urls, &saved.email));
     }
     store.write_session_blob(None);
+}
+
+/// Mesmo nome que [`crate::quick_unlock`] usa para a chave guardada.
+fn quick_key(urls: &ServerUrls, email: &str) -> String {
+    format!(
+        "desbloqueio|{}|{}",
+        urls.identity.trim_end_matches('/'),
+        email.trim().to_lowercase()
+    )
+}
+
+/// Apaga só a chave de "abrir sem senha" da sessão lembrada (a opção foi desligada).
+pub fn forget_quick_unlock(store: &SettingsStore) {
+    if let Some(saved) = store
+        .read_session_blob()
+        .and_then(|b| serde_json::from_slice::<Saved>(&b).ok())
+    {
+        store
+            .secrets()
+            .delete(&quick_key(&saved.urls, &saved.email));
+    }
 }

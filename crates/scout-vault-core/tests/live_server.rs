@@ -99,6 +99,7 @@ async fn create_edit_trash_restore_delete() {
         deleted: false,
         revision_date: None,
         attachments: Vec::new(),
+        collection_ids: Vec::new(),
         fields: Vec::new(),
         kind: ItemKind::Login(Login {
             username: Some("quem".into()),
@@ -218,6 +219,7 @@ async fn attachment_upload_download_delete() {
         deleted: false,
         revision_date: None,
         attachments: Vec::new(),
+        collection_ids: Vec::new(),
         fields: Vec::new(),
         kind: ItemKind::SecureNote,
     };
@@ -283,7 +285,14 @@ async fn attachment_upload_download_delete() {
 #[tokio::test]
 #[ignore = "precisa de um servidor; veja o comentário do arquivo"]
 async fn cleanup_test_leftovers() {
-    const PREFIXES: &[&str] = &["Teste escrita ", "Com anexo ", "Pela UI ", "Anexo UI "];
+    const PREFIXES: &[&str] = &[
+        "Teste escrita ",
+        "Com anexo ",
+        "Pela UI ",
+        "Anexo UI ",
+        "Arrastado ",
+    ];
+    const FOLDER_PREFIXES: &[&str] = &["Arrasto ", "Pasta UI ", "Pasta teste "];
     let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
     let (url, email, password) = (
         env("SCOUT_VAULT_TEST_URL"),
@@ -304,7 +313,14 @@ async fn cleanup_test_leftovers() {
         .access_token;
     let sync = client.sync(&token).await.unwrap();
     let keys = Keys::unlock(&mk, &sync.profile).unwrap();
-    for item in Vault::decrypt(&sync, &keys).items {
+    let vault = Vault::decrypt(&sync, &keys);
+    for folder in &vault.folders {
+        if FOLDER_PREFIXES.iter().any(|p| folder.name.starts_with(p)) {
+            client.delete_folder(&token, &folder.id).await.unwrap();
+            println!("pasta apagada: {}", folder.name);
+        }
+    }
+    for item in vault.items {
         if PREFIXES.iter().any(|p| item.name.starts_with(p)) {
             if !item.deleted {
                 client.trash_cipher(&token, &item.id).await.unwrap();
@@ -359,6 +375,7 @@ async fn folder_create_rename_delete() {
         deleted: false,
         revision_date: None,
         attachments: Vec::new(),
+        collection_ids: Vec::new(),
         fields: Vec::new(),
         kind: ItemKind::SecureNote,
     };
@@ -370,6 +387,22 @@ async fn folder_create_rename_delete() {
         .await
         .unwrap();
     assert_eq!(item.folder_id.as_deref(), Some(folder.id.as_str()));
+
+    // Mover sem recifrar (arrastar para "Sem pasta" e de volta), mantendo o favorito.
+    client
+        .move_cipher_to_folder(&token, &item.id, None, true)
+        .await
+        .unwrap();
+    let sync = client.sync(&token).await.unwrap();
+    let c = sync.ciphers.iter().find(|c| c.id == item.id).unwrap();
+    assert_eq!((c.folder_id.as_deref(), c.favorite), (None, true));
+    client
+        .move_cipher_to_folder(&token, &item.id, Some(&folder.id), false)
+        .await
+        .unwrap();
+    let sync = client.sync(&token).await.unwrap();
+    let c = sync.ciphers.iter().find(|c| c.id == item.id).unwrap();
+    assert_eq!(c.folder_id.as_deref(), Some(folder.id.as_str()));
 
     client
         .rename_folder(
@@ -393,4 +426,127 @@ async fn folder_create_rename_delete() {
 
     client.trash_cipher(&token, &item.id).await.unwrap();
     client.delete_cipher(&token, &item.id).await.unwrap();
+}
+
+/// Item de organização: cria numa coleção, troca de coleção, edita e apaga.
+/// Precisa da organização de `tools/dev_org.py`.
+#[tokio::test]
+#[ignore = "precisa de um servidor; veja o comentário do arquivo"]
+async fn org_item_with_collections() {
+    use scout_vault_core::edit::{encrypt_item, request_body};
+    use scout_vault_core::vault::{Item, ItemKind, Login};
+    use scout_vault_core::Secret;
+
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let client = Client::new(
+        ServerUrls::self_hosted(&url),
+        DeviceInfo::new("Scout Vault (teste)"),
+    )
+    .unwrap();
+    let kdf = client.prelogin(&email).await.unwrap();
+    let mk = MasterKey::derive(&password, &email, kdf).unwrap();
+    let token = client
+        .login_password(&email, &mk.server_hash(&password), None, None)
+        .await
+        .unwrap()
+        .access_token;
+    let sync = client.sync(&token).await.unwrap();
+    let keys = Keys::unlock(&mk, &sync.profile).unwrap();
+    let vault = Vault::decrypt(&sync, &keys);
+    let org = vault
+        .organizations
+        .iter()
+        .find(|o| o.name == "Empresa de teste")
+        .expect("rode tools/dev_org.py");
+    let col = |name: &str| {
+        vault
+            .collections
+            .iter()
+            .find(|c| c.organization_id == org.id && c.name == name)
+            .unwrap_or_else(|| panic!("coleção {name}"))
+            .id
+            .clone()
+    };
+    let (fin, ti) = (col("Financeiro"), col("TI"));
+
+    let item = Item {
+        id: String::new(),
+        organization_id: Some(org.id.clone()),
+        folder_id: None,
+        name: format!("Da empresa {}", std::process::id()),
+        notes: None,
+        favorite: false,
+        reprompt: false,
+        deleted: false,
+        revision_date: None,
+        attachments: Vec::new(),
+        collection_ids: vec![fin.clone()],
+        fields: Vec::new(),
+        kind: ItemKind::Login(Login {
+            username: Some("financeiro".into()),
+            password: Some(Secret::new("da-empresa".into())),
+            totp: None,
+            uris: vec![],
+        }),
+    };
+    let body = request_body(&encrypt_item(&item, None, &keys).unwrap(), &sync.profile.id);
+    let created = client
+        .create_cipher_in_org(&token, &body, &item.collection_ids)
+        .await
+        .unwrap();
+
+    let find = |s: &scout_vault_core::sync::SyncResponse| {
+        Vault::decrypt(s, &keys)
+            .items
+            .into_iter()
+            .find(|i| i.id == created.id)
+            .unwrap()
+    };
+    let s = client.sync(&token).await.unwrap();
+    let got = find(&s);
+    assert_eq!(got.organization_id.as_deref(), Some(org.id.as_str()));
+    assert_eq!(got.collection_ids, std::slice::from_ref(&fin));
+    let ItemKind::Login(l) = &got.kind else {
+        panic!()
+    };
+    assert_eq!(l.password.as_ref().unwrap().expose(), "da-empresa");
+
+    // Troca para TI e edita o nome.
+    client
+        .update_collections(&token, &created.id, std::slice::from_ref(&ti))
+        .await
+        .unwrap();
+    let s = client.sync(&token).await.unwrap();
+    let base = s
+        .ciphers
+        .iter()
+        .find(|c| c.id == created.id)
+        .unwrap()
+        .clone();
+    let mut edited = find(&s);
+    assert_eq!(edited.collection_ids, std::slice::from_ref(&ti));
+    edited.name.push_str(" (editado)");
+    client
+        .update_cipher(
+            &token,
+            &created.id,
+            &request_body(
+                &encrypt_item(&edited, Some(&base), &keys).unwrap(),
+                &s.profile.id,
+            ),
+        )
+        .await
+        .unwrap();
+    let s = client.sync(&token).await.unwrap();
+    let after = find(&s);
+    assert!(after.name.ends_with("(editado)"));
+    assert_eq!(after.collection_ids, [ti], "editar não tira da coleção");
+
+    client.trash_cipher(&token, &created.id).await.unwrap();
+    client.delete_cipher(&token, &created.id).await.unwrap();
 }

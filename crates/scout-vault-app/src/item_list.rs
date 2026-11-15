@@ -14,6 +14,8 @@ pub enum Filter {
     Kind(KindFilter),
     Folder(Option<String>),
     Organization(String),
+    /// Itens de uma coleção de organização.
+    Collection(String),
     Trash,
 }
 
@@ -77,6 +79,7 @@ impl Filter {
             Filter::Kind(k) => k.matches(&item.kind),
             Filter::Folder(id) => item.folder_id == *id && item.organization_id.is_none(),
             Filter::Organization(id) => item.organization_id.as_deref() == Some(id),
+            Filter::Collection(id) => item.collection_ids.contains(id),
         }
     }
 }
@@ -241,9 +244,19 @@ impl ListDelegate for ItemList {
         let item = self.item_at(ix)?;
         let sub = subtitle(item);
         let selected = self.selected == Some(ix);
+        // Arrastar o item até uma pasta da barra lateral o leva para lá.
+        let dragged = (!item.deleted).then(|| crate::dnd::DraggedItem {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            icon: kind_icon(&item.kind),
+        });
         Some(
             ListItem::new(ix).selected(selected).py_2().child(
                 h_flex()
+                    .id(SharedString::from(format!("item-drag-{}", item.id)))
+                    .when_some(dragged, |el, dragged| {
+                        el.on_drag(dragged, |d, _, _, cx| crate::dnd::DragPreview::item(d, cx))
+                    })
                     .relative()
                     .gap_3()
                     .w_full()
@@ -289,7 +302,8 @@ impl ListDelegate for ItemList {
                                 .xsmall()
                                 .text_color(crate::appearance::accent(cx)),
                         )
-                    }),
+                    })
+                    .test_support(),
             ),
         )
     }
@@ -343,6 +357,7 @@ mod tests {
             deleted: false,
             revision_date: None,
             attachments: Vec::new(),
+            collection_ids: Vec::new(),
             fields: Vec::new(),
             kind,
         }

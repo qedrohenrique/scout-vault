@@ -7,3 +7,4 @@ dev/test-account-2fa.env
 
 # Pacotes de release
 /dist/
+__pycache__/

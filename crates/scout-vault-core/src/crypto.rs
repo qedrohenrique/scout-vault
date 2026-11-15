@@ -185,6 +185,18 @@ impl SymmetricKey {
     }
 
     /// Bytes crus da chave, como o AEAD espera.
+    /// Bytes da chave no formato que [`SymmetricKey::from_bytes`] lê de volta
+    /// (64 bytes nas legadas; `COSE_Key` acolchoada nas v2). Para guardar no
+    /// cofre do sistema — use com cuidado.
+    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+        match self {
+            SymmetricKey::AesCbcHmac { .. } => self.raw(),
+            SymmetricKey::Cose { alg, key, kid } => Zeroizing::new(crate::cose::pad_key(
+                &crate::cose::encode_cose_key_with_kid(*alg, key, kid.as_deref()),
+            )),
+        }
+    }
+
     pub(crate) fn raw(&self) -> Zeroizing<Vec<u8>> {
         match self {
             SymmetricKey::AesCbcHmac { enc, mac } => {
@@ -405,6 +417,14 @@ mod tests {
         // Ida e volta pelo texto, como vem do servidor.
         let field: EncString = field.to_string().parse().unwrap();
         assert_eq!(user.decrypt_str(&field).unwrap().expose(), "senha-ção");
+
+        // Guardar e recarregar a chave v2 preserva algoritmo e kid.
+        let again = SymmetricKey::from_bytes(&user.to_bytes()).unwrap();
+        assert_eq!(again.decrypt_str(&field).unwrap().expose(), "senha-ção");
+        let legacy = SymmetricKey::generate().unwrap();
+        let back = SymmetricKey::from_bytes(&legacy.to_bytes()).unwrap();
+        let enc = legacy.encrypt_str("x").unwrap();
+        assert_eq!(back.decrypt_str(&enc).unwrap().expose(), "x");
 
         // Cifrar com a chave v2 e decifrar de volta (IV aleatório a cada vez).
         let a = user.encrypt_str("nova senha ✓").unwrap();

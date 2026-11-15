@@ -59,6 +59,7 @@ fn unlocked_fixture() -> Unlocked {
             access_token: "token".into(),
             refresh_token: "refresh".into(),
             sync,
+            logged_in_at: scout_vault_app::flow::now_secs(),
         },
         keys,
         vault,
@@ -1941,4 +1942,595 @@ fn note_with_files_through_the_ui(cx: &mut TestAppContext) {
     wait_until(cx, |cx| cx.update(|cx| vault.read(cx).selected().is_none()));
     let _ = std::fs::remove_dir_all(first[0].parent().unwrap());
     let _ = std::fs::remove_dir_all(more[0].parent().unwrap());
+}
+
+#[gpui_kit::test]
+fn org_items_choose_owner_and_collections(cx: &mut TestAppContext) {
+    use scout_vault_app::item_list::Filter;
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let editor =
+        |cx: &mut TestAppContext| cx.update(|cx| vault.read(cx).editor().cloned().unwrap());
+
+    // Coleções na barra lateral, embaixo da organização; filtrar por uma.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("filter-col-col-fin").is_some());
+        assert!(window.try_find("filter-col-col-ro").is_some());
+        window.click("filter-col-col-fin", cx);
+    })
+    .unwrap();
+    let visible: Vec<String> = cx.update(|cx| {
+        vault
+            .read(cx)
+            .list()
+            .read(cx)
+            .delegate()
+            .visible_items()
+            .map(|i| i.id.clone())
+            .collect()
+    });
+    assert_eq!(visible, ["card-org"]);
+
+    // Novo item a partir da coleção: já nasce na organização e nela.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find("editor-col-col-ro").is_none(),
+            "só leitura não é opção"
+        );
+    })
+    .unwrap();
+    let e = editor(cx);
+    cx.update(|cx| {
+        assert_eq!(e.read(cx).owner(), Some("org-1"));
+        assert_eq!(e.read(cx).collections(), ["col-fin"]);
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-owner-personal", cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(e.read(cx).owner(), None));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-owner-org-1", cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(e.read(cx).collections(), ["col-fin"]));
+    // Sem coleção não salva.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-col-col-fin", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-name", cx);
+        window.input("Da empresa", cx);
+        window.click("editor-save", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("editor-status").label(),
+            Some("Escolha pelo menos uma coleção da organização.")
+        );
+        window.click("editor-cancel", cx);
+    })
+    .unwrap();
+
+    // Item existente da organização: dono fixo, coleções editáveis.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(Filter::All, window, cx);
+            v.select_item("card-org", window, cx);
+        });
+        window.render_frame(cx);
+        window.click("item-edit", cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find("editor-owner-personal").is_none(),
+            "dono não muda ao editar"
+        );
+        assert!(window.try_find("editor-col-col-fin").is_some());
+    })
+    .unwrap();
+    let e = editor(cx);
+    cx.update(|cx| assert_eq!(e.read(cx).owner(), Some("org-1")));
+}
+
+/// Cria um item numa organização pela interface, contra o Vaultwarden local.
+/// Precisa da organização de `tools/dev_org.py`.
+#[gpui_kit::test]
+#[ignore = "precisa de servidor; veja dev/test-account.env"]
+fn org_item_through_the_ui(cx: &mut TestAppContext) {
+    use scout_vault_app::item_list::Filter;
+    cx.executor().allow_parking();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let (handle, app) = open_app(cx, None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("login-server").click(2usize, cx);
+        window.click("login-server-url", cx);
+        window.input(&url, cx);
+        window.click("login-email", cx);
+        window.input(&email, cx);
+        window.click("login-password", cx);
+        window.input(&password, cx);
+        window.click("login-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let (org, ti) = cx.update(|cx| {
+        let v = vault.read(cx).list().read(cx).delegate().vault();
+        let org = v
+            .organizations
+            .iter()
+            .find(|o| o.name == "Empresa de teste")
+            .expect("rode tools/dev_org.py")
+            .id
+            .clone();
+        let ti = v
+            .collections
+            .iter()
+            .find(|c| c.organization_id == org && c.name == "TI")
+            .unwrap()
+            .id
+            .clone();
+        (org, ti)
+    });
+    let name = format!("Pela UI na empresa {}", std::process::id());
+
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(Filter::Collection(ti.clone()), window, cx)
+        });
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-name", cx);
+        window.input(&name, cx);
+        window.click("editor-password", cx);
+        window.input("senha-da-empresa", cx);
+        window.click("editor-save", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| vault.read(cx).selected().is_some_and(|i| i.name == name))
+    });
+    cx.update(|cx| {
+        let item = vault.read(cx).selected().unwrap();
+        assert_eq!(item.organization_id.as_deref(), Some(org.as_str()));
+        assert_eq!(item.collection_ids, std::slice::from_ref(&ti));
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-trash", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| vault.read(cx).selected().is_some_and(|i| i.deleted))
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| cx.update(|cx| vault.read(cx).selected().is_none()));
+}
+
+fn file_store(tag: &str) -> (std::path::PathBuf, SettingsStore) {
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    (dir.clone(), SettingsStore::at(dir.join("settings.json")))
+}
+
+#[gpui_kit::test]
+fn opens_without_password_for_n_days_until_password_changes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    let (dir, store) = file_store("quick");
+    let mut settings = store.load();
+    settings.unlock_memory_days = 7;
+    store.save(&settings);
+
+    // Primeira vez: bloqueia e desbloqueia com a senha (isso guarda a chave).
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.lock(window, cx))
+    })
+    .unwrap();
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("unlock-password", cx);
+        window.input(&password, cx);
+        window.click("unlock-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+
+    let saved = scout_vault_app::saved_session::load(&store).expect("sessão salva");
+    assert!(
+        scout_vault_app::quick_unlock::open(&store, &saved).is_some(),
+        "chave guardada não abriu"
+    );
+    // "Reabrir o app": já abre desbloqueado, sem senha.
+    let (_, app2) = open_with_store(cx, &store, None);
+    cx.update(|cx| assert_eq!(app2.read(cx).screen_kind(), ScreenKind::Vault));
+
+    // Senha mestra trocada noutro lugar: a user key cifrada do perfil muda no sync.
+    let mut session = scout_vault_app::saved_session::load(&store).unwrap();
+    let mut sync = (*session.sync).clone();
+    sync.profile.key = Some("2.outra|chave|cifrada".into());
+    session.sync = Arc::new(sync);
+    assert!(scout_vault_app::quick_unlock::password_changed(
+        &store, &session
+    ));
+    let (_, app3) = open_with_store(cx, &store, None);
+    cx.update(|cx| assert_eq!(app3.read(cx).screen_kind(), ScreenKind::Locked));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn full_login_is_required_after_n_days(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (dir, store) = file_store("relogin");
+    let mut session = unlocked_fixture().session;
+    session.logged_in_at = scout_vault_app::flow::now_secs() - 31 * 86_400;
+    scout_vault_app::saved_session::save(&store, &session);
+    // Padrão: 30 dias. Passou de 30 → pede login.
+    let (_, app) = open_with_store(cx, &store, None);
+    cx.update(|cx| assert_eq!(app.read(cx).screen_kind(), ScreenKind::Login));
+    assert!(
+        scout_vault_app::saved_session::load(&store).is_none(),
+        "sessão esquecida"
+    );
+
+    // Com "Nunca", a mesma sessão antiga continua valendo.
+    let mut settings = store.load();
+    settings.relogin_days = 0;
+    store.save(&settings);
+    scout_vault_app::saved_session::save(&store, &session);
+    let (_, app) = open_with_store(cx, &store, None);
+    cx.update(|cx| assert_eq!(app.read(cx).screen_kind(), ScreenKind::Locked));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn auto_lock_follows_the_setting(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (dir, store) = file_store("autolock");
+    let mut settings = store.load();
+    settings.auto_lock_minutes = 0;
+    store.save(&settings);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            // "Nunca": nem depois de um dia.
+            app.lock_if_idle(Instant::now() + Duration::from_secs(86_400), window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Vault);
+        })
+    })
+    .unwrap();
+    let mut settings = store.load();
+    settings.auto_lock_minutes = 1;
+    store.save(&settings);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.lock_if_idle(Instant::now() + Duration::from_secs(30), window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Vault);
+            app.lock_if_idle(Instant::now() + Duration::from_secs(61), window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Locked);
+        })
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Clicar num item da lista mostra ele, mesmo com o formulário aberto.
+#[gpui_kit::test]
+fn clicking_an_item_leaves_the_form(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let selected =
+        |cx: &mut TestAppContext| cx.update(|cx| vault.read(cx).selected().map(|i| i.id.clone()));
+    // Formulário de item novo aberto → clica num item.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("editor-name").is_some());
+        window.click("item-drag-login-1", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("editor-name").is_none());
+        assert!(window.try_find("item-edit").is_some());
+    })
+    .unwrap();
+    assert!(cx.update(|cx| vault.read(cx).editor().is_none()));
+    assert_eq!(selected(cx).as_deref(), Some("login-1"));
+
+    // Editando um item → clica em outro: mostra o outro.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("item-edit", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("editor-name").is_some());
+        window.click("item-drag-identity-1", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("editor-name").is_none());
+    })
+    .unwrap();
+    assert_eq!(selected(cx).as_deref(), Some("identity-1"));
+}
+
+/// Arrastar para uma pasta com o formulário aberto não perde o formulário.
+#[gpui_kit::test]
+fn dragging_into_a_folder_waits_for_the_form(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        window.drag_to("item-drag-identity-1", "filter-folder-folder-1", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+    assert!(cx.update(|cx| vault.read(cx).editor().is_some()));
+    assert_eq!(
+        texts(cx),
+        ["Salve ou cancele o formulário antes de mover itens."]
+    );
+}
+
+/// Arrasta um item para uma pasta e uma pasta para dentro de outra, contra o
+/// Vaultwarden local.
+#[gpui_kit::test]
+#[ignore = "precisa de servidor; veja dev/test-account.env"]
+fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
+    use scout_vault_app::item_list::Filter;
+    cx.executor().allow_parking();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let (handle, app) = open_app(cx, None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("login-server").click(2usize, cx);
+        window.click("login-server-url", cx);
+        window.input(&url, cx);
+        window.click("login-email", cx);
+        window.input(&email, cx);
+        window.click("login-password", cx);
+        window.input(&password, cx);
+        window.click("login-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let folders = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .folders
+                .iter()
+                .map(|f| (f.id.clone(), f.name.clone()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let item_state = |cx: &mut TestAppContext, name: &str| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .items
+                .iter()
+                .find(|i| i.name == name)
+                .map(|i| (i.id.clone(), i.folder_id.clone(), i.deleted))
+        })
+    };
+    let idle = |cx: &mut TestAppContext| {
+        wait_until(cx, |cx| {
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.update(|cx| !vault.read(cx).is_busy())
+        })
+    };
+    let folder_id = |cx: &mut TestAppContext, name: &str| {
+        folders(cx)
+            .into_iter()
+            .find(|(_, n)| n == name)
+            .map(|(id, _)| id)
+    };
+    let pid = std::process::id();
+    let (outer, inner, item_name) = (
+        format!("Arrasto A {pid}"),
+        format!("Arrasto B {pid}"),
+        format!("Arrastado {pid}"),
+    );
+    for name in [&outer, &inner] {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("folder-new", cx);
+        })
+        .unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("folder-new-name", cx);
+            window.input(name, cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        wait_until(cx, |cx| folder_id(cx, name).is_some());
+        idle(cx);
+    }
+    let (outer_id, inner_id) = (
+        folder_id(cx, &outer).unwrap(),
+        folder_id(cx, &inner).unwrap(),
+    );
+
+    // Um item sem pasta, para arrastar.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.set_filter(Filter::Folder(None), window, cx));
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        window.click("editor-name", cx);
+        window.input(&item_name, cx);
+        window.click("editor-save", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        item_state(cx, &item_name).is_some() && cx.update(|cx| vault.read(cx).editor().is_none())
+    });
+    idle(cx);
+    let item_id = item_state(cx, &item_name).unwrap().0;
+
+    // Item → pasta B.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.drag_to(
+            gpui_kit::SharedString::from(format!("item-drag-{item_id}")),
+            gpui_kit::SharedString::from(format!("filter-folder-{inner_id}")),
+            cx,
+        );
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        item_state(cx, &item_name).and_then(|s| s.1) == Some(inner_id.clone())
+    });
+    idle(cx);
+
+    // Pasta B → dentro de A: vira "A/B" e aparece recuada, só com o nome.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.drag_to(
+            gpui_kit::SharedString::from(format!("filter-folder-{inner_id}")),
+            gpui_kit::SharedString::from(format!("filter-folder-{outer_id}")),
+            cx,
+        );
+    })
+    .unwrap();
+    let nested = format!("{outer}/{inner}");
+    wait_until(cx, |cx| folder_id(cx, &nested) == Some(inner_id.clone()));
+    idle(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find(gpui_kit::SharedString::from(format!(
+                    "filter-folder-{inner_id}"
+                )))
+                .label(),
+            Some(inner.as_str())
+        );
+        // E de volta para o topo, soltando no título "Pastas".
+        window.drag_to(
+            gpui_kit::SharedString::from(format!("filter-folder-{inner_id}")),
+            "folders-header",
+            cx,
+        );
+    })
+    .unwrap();
+    wait_until(cx, |cx| folder_id(cx, &inner) == Some(inner_id.clone()));
+    idle(cx);
+
+    // Item → Sem pasta.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(Filter::Folder(Some(inner_id.clone())), window, cx)
+        });
+        window.render_frame(cx);
+        window.drag_to(
+            gpui_kit::SharedString::from(format!("item-drag-{item_id}")),
+            "filter-no-folder",
+            cx,
+        );
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        item_state(cx, &item_name).is_some_and(|s| s.1.is_none())
+    });
+    idle(cx);
+
+    // Limpeza: apaga as pastas e o item.
+    for id in [inner_id, outer_id] {
+        cx.update_window(handle, |_, window, cx| {
+            vault.update(cx, |v, cx| {
+                v.set_filter(Filter::Folder(Some(id.clone())), window, cx);
+                v.delete_folder(cx);
+                v.delete_folder(cx);
+            });
+        })
+        .unwrap();
+        wait_until(cx, |cx| folders(cx).iter().all(|(f, _)| *f != id));
+        idle(cx);
+    }
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(Filter::All, window, cx);
+            v.select_item(&item_id, window, cx);
+        });
+        window.render_frame(cx);
+        window.click("item-trash", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| item_state(cx, &item_name).is_some_and(|s| s.2));
+    idle(cx);
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(Filter::Trash, window, cx);
+            v.select_item(&item_id, window, cx);
+        });
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| item_state(cx, &item_name).is_none());
 }

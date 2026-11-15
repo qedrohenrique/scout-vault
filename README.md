@@ -70,8 +70,15 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 - **Lixeira**: mover, restaurar e **apagar de vez** (pede confirmação).
 - **Acesso rápido**: o alfinete no detalhe de um item o fixa numa seção no topo da barra lateral
   (até 10). Clicar abre o item direto, mesmo com outro filtro ativo. Fica salvo no computador.
+- **Organizações**: ao criar um item, escolha o dono ("Meu cofre" ou a organização) e as
+  coleções em que ele fica (só as que você pode editar). Itens existentes da organização podem
+  trocar de coleção. As coleções aparecem embaixo de cada organização na barra lateral; criar um
+  item com uma coleção aberta já o põe nela.
 - **Pastas**: `+` ao lado de "Pastas" na barra lateral cria uma; com a pasta aberta, o cabeçalho
   da lista tem renomear e apagar (os itens dela vão para "Sem pasta"). O nome vai cifrado.
+  **Arraste** um item da lista até uma pasta (ou "Sem pasta") para movê-lo, e uma pasta até
+  outra para virar subpasta (no Bitwarden é o nome "Pai/Filha"; soltar no título "Pastas" a
+  devolve ao topo). Subpastas aparecem recuadas.
 - **Anexos**: no formulário de um item novo (ou ao editar) e no detalhe do item há uma área para
   **clicar ou arrastar arquivos** do Explorer (até 500 MB cada; vários de uma vez). Dá para abrir
   com o programa padrão, salvar onde quiser e remover. Cada anexo tem chave própria; a cópia aberta
@@ -99,7 +106,13 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
   com a senha mestra, e **abre mesmo sem internet**. Guarda o cofre **cifrado** como veio do
   servidor em `%APPDATA%\Scout Vault\sessao.json` e o refresh token no Gerenciador de Credenciais do
   Windows. "Sair da conta" ou desligar a opção apagam os dois.
-- Bloqueia pelo botão de cadeado, por `Ctrl+L` ou sozinho, depois de 5 min sem teclado nem mouse.
+- **Quanto tempo ficar conectado** (Configurações → Sessão):
+  - *Pedir a senha mestra ao abrir*: sempre, ou lembrar por 1, 7 ou 30 dias. Nesse período o app
+    abre já desbloqueado; a chave fica no Gerenciador de Credenciais, vence no prazo e é
+    descartada se a senha mestra for trocada (o app percebe no sync).
+  - *Pedir login completo a cada*: 7, 30 (padrão) ou 90 dias, ou nunca.
+  - *Bloquear sem uso após*: 1, 5 (padrão), 15 ou 60 minutos, ou nunca.
+- Bloqueia pelo botão de cadeado, por `Ctrl+L`, pela bandeja ou sozinho, sem uso.
 - Ao bloquear, o cofre decifrado sai da memória. Para desbloquear basta a senha mestra, sem rede.
 
 ## Aparência e configurações
@@ -252,6 +265,12 @@ Para criar uma conta de teste já populada, sem navegador (as credenciais vão p
 python tools/dev_seed.py
 ```
 
+Para testar itens de organização, crie nessa conta a organização "Empresa de teste", com as
+coleções Financeiro e TI (só no servidor local; não faz nada se ela já existir):
+```bash
+python tools/dev_org.py
+```
+
 ## Testes
 ```bash
 cargo test --workspace                 # tudo (núcleo + UI headless)
@@ -289,5 +308,6 @@ janela real.
 4. Escreva um teste em `tests/ui.rs` que clique no controle e confira o efeito.
 
 ## Roadmap
-Veja [docs/ROADMAP.md](docs/ROADMAP.md). Os próximos passos são o cache cifrado para abrir offline,
-bloquear junto com o Windows, a busca rápida por atalho global e, depois, edição de itens.
+Veja [docs/ROADMAP.md](docs/ROADMAP.md), que inclui um comparativo com Bitwarden, 1Password,
+KeePassXC e Proton Pass. Os próximos passos são Windows Hello e bloqueio junto com o Windows,
+salvar logins pelo navegador, a busca rápida por atalho global e o relatório de saúde das senhas.

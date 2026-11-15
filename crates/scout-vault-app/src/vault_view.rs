@@ -13,7 +13,7 @@ use scout_vault_core::totp;
 use scout_vault_core::vault::{FieldKind, Item, ItemKind, Keys};
 
 use crate::flow::{self, Session, Unlocked, WriteOp};
-use crate::item_editor::{EditorEvent, ItemEditor, NewKind};
+use crate::item_editor::{EditorEvent, ItemEditor, NewKind, Places};
 use crate::item_list::{kind_icon, Filter, ItemList, KindFilter};
 use crate::{appearance, clipboard, motion, ui};
 use gpui_kit::assets::IconName;
@@ -416,6 +416,7 @@ impl VaultView {
             ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
                 this.selected = list.read(cx).delegate().item_at(*ix).cloned();
                 this.revealed.clear();
+                this.leave_editor(cx);
                 cx.notify();
             }
             ListEvent::Cancel => {}
@@ -481,6 +482,11 @@ impl VaultView {
         &self.list
     }
 
+    /// Sincronizando ou gravando algo no servidor agora.
+    pub fn is_busy(&self) -> bool {
+        self.syncing
+    }
+
     pub fn selected(&self) -> Option<&Item> {
         self.selected.as_ref()
     }
@@ -495,7 +501,21 @@ impl VaultView {
             .update(cx, |list, cx| list.set_selected_index(ix, window, cx));
         self.selected = ix.and_then(|ix| self.list.read(cx).delegate().item_at(ix).cloned());
         self.revealed.clear();
+        self.leave_editor(cx);
         cx.notify();
+    }
+
+    /// Escolher outro item mostra ele: fecha o formulário aberto (novo item ou
+    /// edição) e os "clique de novo para confirmar". Enquanto o formulário está
+    /// salvando, ele fica — o resultado ainda vai aparecer nele.
+    fn leave_editor(&mut self, cx: &mut Context<Self>) {
+        self.confirm_delete = false;
+        self.confirm_remove_attachment = None;
+        if let Some((editor, _)) = &self.editor {
+            if !editor.read(cx).is_saving() {
+                self.editor = None;
+            }
+        }
     }
 
     pub fn set_filter(&mut self, filter: Filter, window: &mut Window, cx: &mut Context<Self>) {
@@ -598,15 +618,22 @@ impl VaultView {
         self.editor.as_ref().map(|(e, _)| e)
     }
 
-    fn folders(&self, cx: &App) -> Vec<(String, String)> {
-        self.list
-            .read(cx)
-            .delegate()
-            .vault()
-            .folders
-            .iter()
-            .map(|f| (f.id.clone(), f.name.clone()))
-            .collect()
+    /// Pastas, organizações e coleções, para o editor.
+    fn places(&self, cx: &App) -> Places {
+        let vault = self.list.read(cx).delegate().vault();
+        Places {
+            folders: vault
+                .folders
+                .iter()
+                .map(|f| (f.id.clone(), f.name.clone()))
+                .collect(),
+            orgs: vault
+                .organizations
+                .iter()
+                .map(|o| (o.id.clone(), o.name.clone()))
+                .collect(),
+            collections: vault.collections.clone(),
+        }
     }
 
     /// O servidor deixa editar este item? (itens de organização podem ser só leitura)
@@ -844,6 +871,74 @@ impl VaultView {
         self.run_write(WriteOp::DeleteFolder(id), cx);
     }
 
+    /// Leva um item (arrastado da lista) para a pasta `folder` (`None` = sem pasta).
+    pub fn move_item_to_folder(
+        &mut self,
+        item_id: &str,
+        folder: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.syncing {
+            crate::toast::info("Espere a sincronização terminar.", cx);
+            return;
+        }
+        if self.editor.is_some() {
+            crate::toast::info("Salve ou cancele o formulário antes de mover itens.", cx);
+            return;
+        }
+        let vault = self.list.read(cx).delegate().vault();
+        let Some(item) = vault.items.iter().find(|i| i.id == item_id) else {
+            return;
+        };
+        if item.deleted || item.folder_id == folder {
+            return;
+        }
+        let message = match &folder {
+            Some(id) => {
+                let name = vault
+                    .folders
+                    .iter()
+                    .find(|f| &f.id == id)
+                    .map(|f| f.name.rsplit('/').next().unwrap_or(&f.name).to_owned())
+                    .unwrap_or_default();
+                format!("{} → {name}", item.name)
+            }
+            None => format!("{} → Sem pasta", item.name),
+        };
+        let op = WriteOp::MoveItem {
+            item_id: item_id.to_owned(),
+            folder_id: folder,
+        };
+        self.run_write_with(op, Some(message), cx);
+    }
+
+    /// Põe a pasta `folder_id` (com as subpastas) dentro de `target` (`None` = no topo).
+    pub fn move_folder_into(
+        &mut self,
+        folder_id: &str,
+        target: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.syncing {
+            crate::toast::info("Espere a sincronização terminar.", cx);
+            return;
+        }
+        let folders = &self.list.read(cx).delegate().vault().folders;
+        match crate::dnd::move_folder(folders, folder_id, target.as_deref()) {
+            Ok(plan) if plan.is_empty() => {}
+            Ok(plan) => {
+                let message = match plan[0].1.rsplit_once('/') {
+                    Some((parent, _)) => format!("Pasta movida para {parent}"),
+                    None => "Pasta movida para o topo".to_owned(),
+                };
+                self.renaming_folder = None;
+                self.confirm_delete_folder = false;
+                self.run_write_with(WriteOp::RenameFolders(plan), Some(message), cx);
+            }
+            Err(e) => crate::toast::error(e.message(), cx),
+        }
+    }
+
     /// Novo item (`Ctrl+N`). Começa na pasta do filtro atual, se houver.
     pub fn new_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Não descarta um formulário já aberto.
@@ -860,9 +955,24 @@ impl VaultView {
             Filter::Kind(KindFilter::Identity) => NewKind::Identity,
             _ => NewKind::Login,
         };
-        let folders = self.folders(cx);
+        // Filtro numa organização/coleção: o item novo já nasce lá.
+        let owner = match self.list.read(cx).delegate().filter() {
+            Filter::Organization(id) => Some((id.clone(), None)),
+            Filter::Collection(id) => self
+                .list
+                .read(cx)
+                .delegate()
+                .vault()
+                .collections
+                .iter()
+                .find(|c| &c.id == id && !c.read_only)
+                .map(|c| (c.organization_id.clone(), Some(c.id.clone()))),
+            _ => None,
+        };
+        let places = self.places(cx);
         let options = self.password_options;
-        let editor = cx.new(|cx| ItemEditor::create(kind, folder, folders, options, window, cx));
+        let editor =
+            cx.new(|cx| ItemEditor::create(kind, folder, owner, places, options, window, cx));
         self.open_editor(editor, window, cx);
     }
 
@@ -874,9 +984,9 @@ impl VaultView {
         if self.syncing || self.editor.is_some() || item.deleted || !self.can_edit(&item) {
             return;
         }
-        let folders = self.folders(cx);
+        let places = self.places(cx);
         let options = self.password_options;
-        let editor = cx.new(|cx| ItemEditor::edit(&item, folders, options, window, cx));
+        let editor = cx.new(|cx| ItemEditor::edit(&item, places, options, window, cx));
         self.open_editor(editor, window, cx);
     }
 
@@ -1163,27 +1273,40 @@ impl VaultView {
 
     /// Manda uma alteração (ou só sincroniza) e atualiza a tela com o resultado.
     fn run_write(&mut self, op: WriteOp, cx: &mut Context<Self>) {
+        self.run_write_with(op, None, cx);
+    }
+
+    /// Como [`Self::run_write`], com a mensagem de sucesso escolhida por quem chama.
+    fn run_write_with(&mut self, op: WriteOp, message: Option<String>, cx: &mut Context<Self>) {
         if self.syncing {
             return;
         }
-        let done_message = match &op {
-            WriteOp::Nothing => None,
-            WriteOp::Save(item, _) if item.id.is_empty() => Some("Item criado."),
-            WriteOp::Save(..) => Some("Alterações salvas."),
-            WriteOp::Trash(_) => Some("Item movido para a lixeira."),
-            WriteOp::Restore(_) => Some("Item restaurado."),
-            WriteOp::Delete(_) => Some("Item apagado de vez."),
-            WriteOp::AddAttachments { files, .. } if files.len() > 1 => Some("Arquivos anexados."),
-            WriteOp::AddAttachments { .. } => Some("Arquivo anexado."),
-            WriteOp::RemoveAttachment { .. } => Some("Anexo removido."),
-            WriteOp::CreateFolder(_) => Some("Pasta criada."),
-            WriteOp::RenameFolder { .. } => Some("Pasta renomeada."),
-            WriteOp::DeleteFolder(_) => Some("Pasta apagada; os itens foram para Sem pasta."),
-        };
+        let done_message: Option<String> = message.or_else(|| {
+            match &op {
+                WriteOp::Nothing => None,
+                WriteOp::Save(item, _) if item.id.is_empty() => Some("Item criado."),
+                WriteOp::Save(..) => Some("Alterações salvas."),
+                WriteOp::Trash(_) => Some("Item movido para a lixeira."),
+                WriteOp::Restore(_) => Some("Item restaurado."),
+                WriteOp::Delete(_) => Some("Item apagado de vez."),
+                WriteOp::AddAttachments { files, .. } if files.len() > 1 => {
+                    Some("Arquivos anexados.")
+                }
+                WriteOp::AddAttachments { .. } => Some("Arquivo anexado."),
+                WriteOp::RemoveAttachment { .. } => Some("Anexo removido."),
+                WriteOp::CreateFolder(_) => Some("Pasta criada."),
+                WriteOp::RenameFolder { .. } => Some("Pasta renomeada."),
+                WriteOp::DeleteFolder(_) => Some("Pasta apagada; os itens foram para Sem pasta."),
+                WriteOp::MoveItem { .. } => Some("Item movido."),
+                WriteOp::RenameFolders(_) => Some("Pasta movida."),
+            }
+            .map(String::from)
+        });
         let closes_detail = matches!(op, WriteOp::Delete(_));
         // Pastas: depois de salvar, abre a pasta; depois de apagar, volta para todos.
         let folder_saved = matches!(op, WriteOp::CreateFolder(_) | WriteOp::RenameFolder { .. });
         let folder_deleted = matches!(op, WriteOp::DeleteFolder(_));
+        let folder_moved = matches!(op, WriteOp::RenameFolders(_));
         self.syncing = true;
         if let Some((editor, _)) = &self.editor {
             editor.update(cx, |e, cx| e.set_saving(true, None, cx));
@@ -1230,7 +1353,7 @@ impl VaultView {
                                 saved_id.clone().map(|id| Filter::Folder(Some(id)))
                             };
                         }
-                        let saved_id = if folder_saved || folder_deleted {
+                        let saved_id = if folder_saved || folder_deleted || folder_moved {
                             None
                         } else {
                             saved_id
@@ -1264,11 +1387,12 @@ impl VaultView {
                         });
                         // Sincronizar sozinho já mostra o ✓ no ícone; o resto vira toast.
                         let attach_only = done_message
+                            .as_deref()
                             .is_some_and(|m| m.starts_with("Arquivo") || m.starts_with("Arquivos"));
                         if let Some(m) =
                             done_message.filter(|_| !(attach_only && !warnings.is_empty()))
                         {
-                            crate::toast::success(m.trim_end_matches('.'), cx);
+                            crate::toast::success(m.trim_end_matches('.').to_owned(), cx);
                         }
                         if errors > 0 {
                             crate::toast::error(
@@ -1314,8 +1438,60 @@ impl VaultView {
                 .map(|f| f.name.clone())
                 .unwrap_or_default(),
             Filter::Folder(None) => "Sem pasta".into(),
+            Filter::Collection(id) => vault
+                .collections
+                .iter()
+                .find(|c| &c.id == id)
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
             Filter::Trash => "Lixeira".into(),
         }
+    }
+
+    /// Destaque de um lugar onde dá para soltar o que está sendo arrastado.
+    fn drop_style<T: 'static>(
+        cx: &App,
+    ) -> impl Fn(StyleRefinement, &T, &mut Window, &mut App) -> StyleRefinement + 'static {
+        let accent = appearance::accent(cx);
+        move |style, _, _, _| style.bg(accent.opacity(0.18))
+    }
+
+    /// Pasta na barra lateral: recuada pela hierarquia, arrastável e alvo de
+    /// itens e de outras pastas.
+    fn folder_row(&self, row: crate::dnd::FolderRow, cx: &mut Context<Self>) -> impl IntoElement {
+        let dragged = crate::dnd::DraggedFolder {
+            id: row.id.clone(),
+            name: row.label.clone(),
+        };
+        let (item_target, folder_target) = (row.id.clone(), row.id.clone());
+        let id = row.id.clone();
+        div()
+            .id(SharedString::from(format!("drop-folder-{id}")))
+            .w_full()
+            .pl(px(14. * row.depth as f32))
+            .rounded(cx.theme().radius)
+            .on_drag(dragged, |f, _, _, cx| {
+                crate::dnd::DragPreview::folder(f, cx)
+            })
+            .drag_over::<crate::dnd::DraggedItem>(Self::drop_style(cx))
+            .drag_over::<crate::dnd::DraggedFolder>(Self::drop_style(cx))
+            .on_drop(
+                cx.listener(move |this, item: &crate::dnd::DraggedItem, _, cx| {
+                    this.move_item_to_folder(&item.id, Some(item_target.clone()), cx)
+                }),
+            )
+            .on_drop(
+                cx.listener(move |this, f: &crate::dnd::DraggedFolder, _, cx| {
+                    this.move_folder_into(&f.id, Some(folder_target.clone()), cx)
+                }),
+            )
+            .child(self.filter_row(
+                format!("filter-folder-{id}").into(),
+                Filter::Folder(Some(row.id)),
+                IconName::Folder,
+                row.label,
+                cx,
+            ))
     }
 
     fn filter_row(
@@ -1510,11 +1686,12 @@ impl VaultView {
             .iter()
             .map(|o| (o.id.clone(), o.name.clone()))
             .collect();
-        let folders: Vec<_> = vault
-            .folders
+        let collections: Vec<_> = vault
+            .collections
             .iter()
-            .map(|f| (f.id.clone(), f.name.clone()))
+            .map(|c| (c.id.clone(), c.organization_id.clone(), c.name.clone()))
             .collect();
+        let folders = crate::dnd::folder_rows(&vault.folders);
 
         let mut nav = v_flex()
             .id("vault-filters")
@@ -1567,17 +1744,34 @@ impl VaultView {
             for (id, name) in orgs {
                 nav = nav.child(self.filter_row(
                     format!("filter-org-{id}").into(),
-                    Filter::Organization(id),
+                    Filter::Organization(id.clone()),
                     IconName::Building2,
                     name,
                     cx,
                 ));
+                // Coleções da organização, recuadas embaixo dela.
+                for (cid, _, cname) in collections.iter().filter(|(_, org, _)| *org == id) {
+                    nav = nav.child(div().pl_4().child(self.filter_row(
+                        format!("filter-col-{cid}").into(),
+                        Filter::Collection(cid.clone()),
+                        IconName::FolderOpen,
+                        cname.clone(),
+                        cx,
+                    )));
+                }
             }
         }
         nav = nav.child(
             h_flex()
+                .id("folders-header")
                 .justify_between()
                 .pr_1()
+                .rounded(cx.theme().radius)
+                // Soltar uma pasta no título "Pastas" a leva para o topo.
+                .drag_over::<crate::dnd::DraggedFolder>(Self::drop_style(cx))
+                .on_drop(cx.listener(|this, f: &crate::dnd::DraggedFolder, _, cx| {
+                    this.move_folder_into(&f.id, None, cx)
+                }))
                 .child(ui::section_label("Pastas", cx))
                 .child(
                     Button::new("folder-new")
@@ -1589,7 +1783,8 @@ impl VaultView {
                         .on_click(
                             cx.listener(|this, _, window, cx| this.start_new_folder(window, cx)),
                         ),
-                ),
+                )
+                .test_support(),
         );
         if let Some((input, _)) = &self.new_folder {
             nav = nav.child(motion::rise(
@@ -1624,23 +1819,27 @@ impl VaultView {
                 4.,
             ));
         }
-        for (id, name) in folders {
-            nav = nav.child(self.filter_row(
-                format!("filter-folder-{id}").into(),
-                Filter::Folder(Some(id)),
-                IconName::Folder,
-                name,
-                cx,
-            ));
+        for row in folders {
+            nav = nav.child(self.folder_row(row, cx));
         }
         nav = nav
-            .child(self.filter_row(
-                "filter-no-folder".into(),
-                Filter::Folder(None),
-                IconName::FolderOpen,
-                "Sem pasta".into(),
-                cx,
-            ))
+            .child(
+                div()
+                    .id("drop-no-folder")
+                    .w_full()
+                    .rounded(cx.theme().radius)
+                    .drag_over::<crate::dnd::DraggedItem>(Self::drop_style(cx))
+                    .on_drop(cx.listener(|this, item: &crate::dnd::DraggedItem, _, cx| {
+                        this.move_item_to_folder(&item.id, None, cx)
+                    }))
+                    .child(self.filter_row(
+                        "filter-no-folder".into(),
+                        Filter::Folder(None),
+                        IconName::FolderOpen,
+                        "Sem pasta".into(),
+                        cx,
+                    )),
+            )
             .child(div().h_3())
             .child(self.filter_row(
                 "filter-trash".into(),
@@ -1878,11 +2077,21 @@ impl VaultView {
 
         let vault = self.list.read(cx).delegate().vault();
         let place = match (&item.organization_id, &item.folder_id) {
-            (Some(org), _) => vault
-                .organizations
-                .iter()
-                .find(|o| &o.id == org)
-                .map(|o| (IconName::Building2, o.name.clone())),
+            (Some(org), _) => vault.organizations.iter().find(|o| &o.id == org).map(|o| {
+                // "Empresa · Financeiro, TI"
+                let cols: Vec<&str> = vault
+                    .collections
+                    .iter()
+                    .filter(|c| item.collection_ids.contains(&c.id))
+                    .map(|c| c.name.as_str())
+                    .collect();
+                let text = if cols.is_empty() {
+                    o.name.clone()
+                } else {
+                    format!("{} · {}", o.name, cols.join(", "))
+                };
+                (IconName::Building2, text)
+            }),
             (None, Some(folder)) => vault
                 .folders
                 .iter()

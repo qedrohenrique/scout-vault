@@ -524,6 +524,7 @@ mod tests {
             deleted: false,
             revision_date: None,
             attachments: Vec::new(),
+            collection_ids: Vec::new(),
             fields: Vec::new(),
             kind: ItemKind::Login(Login {
                 username: Some(format!("user-{id}")),

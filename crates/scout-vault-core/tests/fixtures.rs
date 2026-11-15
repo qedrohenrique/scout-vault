@@ -185,3 +185,35 @@ fn opens_the_whole_vault() {
         ("orphan", VaultError::MissingOrgKey("org-quebrada".into()))
     );
 }
+
+#[test]
+fn collections_are_decrypted_with_the_org_key() {
+    let v = vectors();
+    let s = sync();
+    let keys = Keys::unlock(&pbkdf2_master_key(&v), &s.profile).unwrap();
+    let vault = Vault::decrypt(&s, &keys);
+    let names: Vec<(&str, bool)> = vault
+        .collections
+        .iter()
+        .map(|c| (c.name.as_str(), c.read_only))
+        .collect();
+    assert_eq!(names, [("Financeiro", false), ("Só leitura", true)]);
+    let card = vault.items.iter().find(|i| i.id == "card-org").unwrap();
+    assert_eq!(card.collection_ids, ["col-fin"]);
+}
+
+#[test]
+fn stored_user_key_reopens_and_a_wrong_one_is_refused() {
+    let v = vectors();
+    let s = sync();
+    let keys = Keys::unlock(&pbkdf2_master_key(&v), &s.profile).unwrap();
+    let again =
+        scout_vault_core::crypto::SymmetricKey::from_bytes(&keys.user_key().to_bytes()).unwrap();
+    let reopened = Keys::from_user_key(again, &s.profile).unwrap();
+    assert!(Vault::decrypt(&s, &reopened).errors.len() <= Vault::decrypt(&s, &keys).errors.len());
+    let other = scout_vault_core::crypto::SymmetricKey::generate().unwrap();
+    assert!(matches!(
+        Keys::from_user_key(other, &s.profile),
+        Err(VaultError::WrongPassword)
+    ));
+}

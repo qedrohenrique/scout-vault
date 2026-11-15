@@ -45,12 +45,25 @@ impl Keys {
                 other => other.into(),
             })?;
         let user = SymmetricKey::from_bytes(&user_bytes)?;
+        Self::from_user_key(user, profile)
+    }
 
+    /// Monta as chaves a partir da user key já aberta (ex.: guardada para abrir
+    /// sem senha por alguns dias). Confere que ela ainda abre o perfil: se a
+    /// senha mestra mudou e a chave foi trocada, falha com [`VaultError::WrongPassword`].
+    pub fn from_user_key(user: SymmetricKey, profile: &Profile) -> Result<Self, VaultError> {
         let mut keys = Keys {
             user,
             orgs: HashMap::new(),
             failed_orgs: Vec::new(),
         };
+        // A chave privada do perfil é cifrada com a user key: se não abre, a
+        // chave não é mais desta conta (ex.: a senha mestra mudou e ela foi trocada).
+        if let Some(pk) = profile.private_key.as_deref() {
+            if keys.user.decrypt(&pk.parse()?).is_err() {
+                return Err(VaultError::WrongPassword);
+            }
+        }
 
         let orgs_with_keys: Vec<_> = profile
             .organizations
@@ -120,6 +133,15 @@ pub struct Organization {
     pub name: String,
 }
 
+/// Coleção de uma organização (onde os itens da organização ficam).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Collection {
+    pub id: String,
+    pub organization_id: String,
+    pub name: String,
+    pub read_only: bool,
+}
+
 /// Arquivo anexado ao item (o conteúdo fica no servidor, cifrado).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
@@ -144,6 +166,8 @@ pub struct Item {
     pub fields: Vec<Field>,
     pub kind: ItemKind,
     pub attachments: Vec<Attachment>,
+    /// Coleções do item (só itens de organização).
+    pub collection_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +270,7 @@ impl Item {
 #[derive(Debug, Default)]
 pub struct Vault {
     pub organizations: Vec<Organization>,
+    pub collections: Vec<Collection>,
     pub folders: Vec<Folder>,
     pub items: Vec<Item>,
     /// Itens/pastas que não abriram, com o motivo. Um item corrompido não derruba o cofre.
@@ -276,6 +301,24 @@ impl Vault {
                 Err(e) => vault.errors.push((f.id.clone(), e)),
             }
         }
+
+        for c in &sync.collections {
+            let name = keys
+                .for_owner(Some(&c.organization_id))
+                .and_then(|k| plain(k, &Some(c.name.clone())));
+            match name {
+                Ok(name) => vault.collections.push(Collection {
+                    id: c.id.clone(),
+                    organization_id: c.organization_id.clone(),
+                    name: name.unwrap_or_default(),
+                    read_only: c.read_only,
+                }),
+                Err(e) => vault.errors.push((c.id.clone(), e)),
+            }
+        }
+        vault
+            .collections
+            .sort_by_cached_key(|c| c.name.to_lowercase());
 
         for c in &sync.ciphers {
             match decrypt_item(c, keys) {
@@ -410,8 +453,20 @@ fn decrypt_item(c: &CipherRaw, keys: &Keys) -> Result<Item, VaultError> {
         })
         .collect();
 
+    let collection_ids = c
+        .extra
+        .get("collectionIds")
+        .and_then(|v| v.as_array())
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(Item {
         attachments,
+        collection_ids,
         id: c.id.clone(),
         organization_id: c.organization_id.clone(),
         folder_id: c.folder_id.clone(),

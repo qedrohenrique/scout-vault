@@ -70,12 +70,48 @@ pub struct ScoutVaultApp {
 impl ScoutVaultApp {
     pub fn new(store: SettingsStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
         appearance::apply(&store.load().appearance, Some(window), cx);
-        // Sessão lembrada: abre direto no desbloqueio (só a senha mestra).
+        // Sessão lembrada: abre direto no desbloqueio (só a senha mestra) — ou
+        // já desbloqueado, se a senha foi digitada há menos de N dias.
         let (screen, sub) = match crate::saved_session::load(&store) {
-            Some(session) => Self::locked_screen(session, window, cx),
+            Some(session) => match crate::quick_unlock::open(&store, &session) {
+                Some(keys) => {
+                    let vault = scout_vault_core::vault::Vault::decrypt(&session.sync, &keys);
+                    Self::vault_screen(
+                        Unlocked {
+                            session,
+                            keys,
+                            vault,
+                        },
+                        window,
+                        cx,
+                    )
+                }
+                None => Self::locked_screen(session, window, cx),
+            },
             None => Self::login_screen(&store, window, cx),
         };
-        Self::build(store, screen, sub, window, cx)
+        let this = Self::build(store, screen, sub, window, cx);
+        if let Screen::Vault(view) = &this.screen {
+            this.configure_vault(view, cx);
+        }
+        this
+    }
+
+    /// Opções do gerador e itens fixados para uma tela do cofre recém-aberta.
+    fn configure_vault(&self, view: &Entity<VaultView>, cx: &mut App) {
+        let settings = self.store.load();
+        view.update(cx, |v, _| {
+            v.set_password_options(settings.generator);
+            v.set_pinned(settings.pinned_items.clone());
+        });
+    }
+
+    /// Prazo do bloqueio por inatividade, das configurações (0 = nunca).
+    fn auto_lock_from_settings(store: &SettingsStore) -> Duration {
+        match store.load().auto_lock_minutes {
+            0 => Duration::from_secs(u64::MAX / 4),
+            m => Duration::from_secs(u64::from(m) * 60),
+        }
     }
 
     /// Começa já com o cofre aberto (usado pelos testes de UI).
@@ -137,6 +173,7 @@ impl ScoutVaultApp {
                 appearance::apply(&current, Some(window), cx);
             }
         });
+        let auto_lock_after = Self::auto_lock_from_settings(&store);
         let mut this = Self {
             autotype_picker: None,
             pending_autotype: None,
@@ -151,7 +188,7 @@ impl ScoutVaultApp {
             store,
             screen,
             last_activity: Instant::now(),
-            auto_lock_after: DEFAULT_AUTO_LOCK,
+            auto_lock_after,
             settings: None,
             generator: None,
             _screen_subscription: sub,
@@ -438,6 +475,7 @@ impl ScoutVaultApp {
                     this.refresh_hotkey(window, cx);
                     this.refresh_browser();
                     this.refresh_tray(window, cx);
+                    this.auto_lock_after = Self::auto_lock_from_settings(&this.store);
                 }
             },
         );
@@ -623,13 +661,13 @@ impl ScoutVaultApp {
     fn show_vault_from(&mut self, handoff: &Handoff, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(unlocked) = handoff.take() {
             crate::saved_session::save(&self.store, &unlocked.session);
+            // Senha digitada agora: vale para abrir sem senha pelos próximos N dias.
+            if self.store.load().remember_session {
+                crate::quick_unlock::remember(&self.store, &unlocked.session, &unlocked.keys);
+            }
             let next = Self::vault_screen(*unlocked, window, cx);
             if let Screen::Vault(view) = &next.0 {
-                let settings = self.store.load();
-                view.update(cx, |v, _| {
-                    v.set_password_options(settings.generator);
-                    v.set_pinned(settings.pinned_items.clone());
-                });
+                self.configure_vault(view, cx);
             }
             self.set_screen(next, cx);
             if let Some(request) = self.pending_autotype.take() {
@@ -674,7 +712,15 @@ impl ScoutVaultApp {
                     VaultEvent::Lock(session) => this.show_locked(session.clone(), window, cx),
                     VaultEvent::OpenSettings => this.open_settings(window, cx),
                     VaultEvent::OpenGenerator => this.open_generator(window, cx),
-                    VaultEvent::Synced(session) => crate::saved_session::save(&this.store, session),
+                    VaultEvent::Synced(session) => {
+                        crate::saved_session::save(&this.store, session);
+                        if crate::quick_unlock::password_changed(&this.store, session) {
+                            crate::toast::info(
+                                "A senha mestra mudou. Na próxima vez, o app vai pedir a nova.",
+                                cx,
+                            );
+                        }
+                    }
                     VaultEvent::PinsChanged(ids) => {
                         let mut settings = this.store.load();
                         settings.pinned_items = ids.clone();

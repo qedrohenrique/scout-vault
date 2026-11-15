@@ -49,6 +49,16 @@ pub struct Settings {
     /// Tema, cor de destaque e afins.
     #[serde(default)]
     pub appearance: Appearance,
+    /// Abrir o app sem pedir a senha mestra por tantos dias depois de digitá-la
+    /// (0 = pedir sempre). A chave fica no Gerenciador de Credenciais.
+    #[serde(default)]
+    pub unlock_memory_days: u32,
+    /// Pedir login completo (e-mail, senha, 2FA) a cada tantos dias (0 = nunca).
+    #[serde(default = "default_relogin_days")]
+    pub relogin_days: u32,
+    /// Bloquear depois de tantos minutos sem uso (0 = nunca).
+    #[serde(default = "default_auto_lock_minutes")]
+    pub auto_lock_minutes: u32,
     /// Fechar a janela deixa o app rodando na bandeja do Windows.
     #[serde(default = "yes")]
     pub close_to_tray: bool,
@@ -102,11 +112,22 @@ impl Default for Settings {
             remember_session: true,
             pinned_items: Vec::new(),
             close_to_tray: true,
+            unlock_memory_days: 0,
+            relogin_days: default_relogin_days(),
+            auto_lock_minutes: default_auto_lock_minutes(),
             tray_hint_shown: false,
             browser_fill: false,
             autotype: AutoTypeSettings::default(),
         }
     }
+}
+
+fn default_relogin_days() -> u32 {
+    30
+}
+
+fn default_auto_lock_minutes() -> u32 {
+    5
 }
 
 fn yes() -> bool {

@@ -28,6 +28,16 @@ pub struct Session {
     pub access_token: String,
     pub refresh_token: String,
     pub sync: Arc<SyncResponse>,
+    /// Quando foi o último login completo (e-mail, senha, 2FA), em segundos Unix.
+    pub logged_in_at: u64,
+}
+
+/// Agora, em segundos Unix.
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Cofre aberto: sessão + chaves + dados decifrados.
@@ -280,6 +290,7 @@ async fn finish_login(
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
             sync,
+            logged_in_at: now_secs(),
         },
         keys,
         vault,
@@ -523,6 +534,15 @@ pub enum WriteOp {
     },
     /// Apaga a pasta; os itens dela ficam sem pasta.
     DeleteFolder(String),
+    /// Leva o item para outra pasta (`None` = sem pasta).
+    MoveItem {
+        item_id: String,
+        folder_id: Option<String>,
+    },
+    /// Renomeia várias pastas de uma vez (mover uma pasta, com as subpastas,
+    /// para dentro de outra: no Bitwarden a hierarquia é o nome "Pai/Filha").
+    /// O id devolvido é o da primeira.
+    RenameFolders(Vec<(String, String)>),
 }
 
 fn base_cipher(
@@ -599,6 +619,21 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
         ),
         _ => None,
     };
+    let renamed = match &op {
+        WriteOp::RenameFolders(list) => list
+            .iter()
+            .map(|(id, name)| {
+                scout_vault_core::edit::encrypt_folder_name(name, &keys)
+                    .map(|enc| (id.clone(), enc))
+                    .map_err(|e| SyncError::Other(format!("Não foi possível salvar a pasta: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => Vec::new(),
+    };
+    let favorite = match &op {
+        WriteOp::MoveItem { item_id, .. } => base_cipher(&session, item_id)?.favorite,
+        _ => false,
+    };
     let body = match &op {
         WriteOp::Save(item, _) => {
             let base = (!item.id.is_empty())
@@ -608,6 +643,11 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
             if !item.id.is_empty() && base.is_none() {
                 return Err(SyncError::Other(
                     "Este item não está mais no cofre. Sincronize e tente de novo.".into(),
+                ));
+            }
+            if item.organization_id.is_some() && item.collection_ids.is_empty() {
+                return Err(SyncError::Other(
+                    "Escolha pelo menos uma coleção da organização.".into(),
                 ));
             }
             let raw = scout_vault_core::edit::encrypt_item(item, base.as_ref(), &keys)
@@ -620,6 +660,24 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
         _ => None,
     };
     let file_keys = keys.clone();
+    // Item de organização editado: as coleções mudaram?
+    let collections_changed = match &op {
+        WriteOp::Save(item, _) if !item.id.is_empty() => {
+            let mut before: Vec<String> = session
+                .sync
+                .ciphers
+                .iter()
+                .find(|c| c.id == item.id)
+                .and_then(|c| c.extra.get("collectionIds"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let mut after = item.collection_ids.clone();
+            before.sort();
+            after.sort();
+            before != after
+        }
+        _ => false,
+    };
     let (access, refresh, sync, saved_id, warnings) = {
         let client = session.client.clone();
         let refresh_token = session.refresh_token.clone();
@@ -631,10 +689,22 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                 WriteOp::Nothing => None,
                 WriteOp::Save(item, files) => {
                     let body = body.expect("cifrado acima");
-                    let saved = if item.id.is_empty() {
+                    let in_org = item.organization_id.is_some();
+                    let saved = if item.id.is_empty() && in_org {
+                        // Item novo de organização: nasce já nas coleções escolhidas.
+                        client
+                            .create_cipher_in_org(token, &body, &item.collection_ids)
+                            .await?
+                    } else if item.id.is_empty() {
                         client.create_cipher(token, &body).await?
                     } else {
-                        client.update_cipher(token, &item.id, &body).await?
+                        let saved = client.update_cipher(token, &item.id, &body).await?;
+                        if in_org && collections_changed {
+                            client
+                                .update_collections(token, &item.id, &item.collection_ids)
+                                .await?;
+                        }
+                        saved
                     };
                     // Arquivos novos vão depois do item existir, com a chave dele.
                     // Uma falha aqui não desfaz o item: vira aviso.
@@ -679,6 +749,18 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                 WriteOp::DeleteFolder(id) => {
                     client.delete_folder(token, &id).await?;
                     None
+                }
+                WriteOp::MoveItem { item_id, folder_id } => {
+                    client
+                        .move_cipher_to_folder(token, &item_id, folder_id.as_deref(), favorite)
+                        .await?;
+                    Some(item_id)
+                }
+                WriteOp::RenameFolders(_) => {
+                    for (id, name) in &renamed {
+                        client.rename_folder(token, id, name).await?;
+                    }
+                    renamed.first().map(|(id, _)| id.clone())
                 }
             };
             let sync = client.sync(token).await?;

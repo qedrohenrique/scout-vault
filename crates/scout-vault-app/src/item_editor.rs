@@ -15,6 +15,24 @@ use scout_vault_core::Secret;
 use crate::flow::NewFile;
 use crate::ui::{self, Segment};
 
+/// Onde um item pode morar: pastas pessoais, organizações e as coleções delas.
+#[derive(Clone, Default)]
+pub struct Places {
+    pub folders: Vec<(String, String)>,
+    pub orgs: Vec<(String, String)>,
+    pub collections: Vec<scout_vault_core::vault::Collection>,
+}
+
+impl Places {
+    /// Coleções em que dá para pôr itens, de uma organização.
+    fn writable(&self, org: &str) -> Vec<&scout_vault_core::vault::Collection> {
+        self.collections
+            .iter()
+            .filter(|c| c.organization_id == org && !c.read_only)
+            .collect()
+    }
+}
+
 pub enum EditorEvent {
     /// O item e os arquivos novos a anexar.
     Save(Box<Item>, Vec<NewFile>),
@@ -88,7 +106,10 @@ pub struct ItemEditor {
     ssh_private: Option<Entity<TextareaState>>,
     folder_id: Option<String>,
     favorite: bool,
-    folders: Vec<(String, String)>,
+    places: Places,
+    /// Organização dona do item (`None` = cofre pessoal).
+    owner: Option<String>,
+    collection_ids: Vec<String>,
     generator: PasswordOptions,
     saving: bool,
     error: Option<SharedString>,
@@ -190,25 +211,41 @@ fn layout(kind: &ItemKind) -> &'static [&'static [(&'static str, Option<f32>)]] 
 impl ItemEditor {
     pub fn edit(
         item: &Item,
-        folders: Vec<(String, String)>,
+        places: Places,
         generator: PasswordOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::build(item.clone(), false, folders, generator, window, cx)
+        Self::build(item.clone(), false, places, generator, window, cx)
     }
 
+    /// Item novo. `owner`: organização (e coleção) já escolhidas pelo filtro atual.
     pub fn create(
         kind: NewKind,
         folder_id: Option<String>,
-        folders: Vec<(String, String)>,
+        owner: Option<(String, Option<String>)>,
+        places: Places,
         generator: PasswordOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (organization_id, collection_ids) = match owner {
+            Some((org, col)) => {
+                let cols = match col {
+                    Some(c) => vec![c],
+                    None => places
+                        .writable(&org)
+                        .first()
+                        .map(|c| vec![c.id.clone()])
+                        .unwrap_or_default(),
+                };
+                (Some(org), cols)
+            }
+            None => (None, Vec::new()),
+        };
         let item = Item {
             id: String::new(),
-            organization_id: None,
+            organization_id,
             folder_id,
             name: String::new(),
             notes: None,
@@ -217,16 +254,17 @@ impl ItemEditor {
             deleted: false,
             revision_date: None,
             attachments: Vec::new(),
+            collection_ids,
             fields: Vec::new(),
             kind: kind.empty(),
         };
-        Self::build(item, true, folders, generator, window, cx)
+        Self::build(item, true, places, generator, window, cx)
     }
 
     fn build(
         base: Item,
         is_new: bool,
-        folders: Vec<(String, String)>,
+        places: Places,
         generator: PasswordOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -415,6 +453,8 @@ impl ItemEditor {
             .collect();
         name.update(cx, |n, cx| n.focus(window, cx));
         Self {
+            owner: base.organization_id.clone(),
+            collection_ids: base.collection_ids.clone(),
             folder_id: base.folder_id.clone(),
             favorite: base.favorite,
             base,
@@ -425,7 +465,7 @@ impl ItemEditor {
             fields,
             notes,
             ssh_private,
-            folders,
+            places,
             generator,
             saving: false,
             error: None,
@@ -435,6 +475,10 @@ impl ItemEditor {
 
     pub fn is_new(&self) -> bool {
         self.is_new
+    }
+
+    pub fn is_saving(&self) -> bool {
+        self.saving
     }
 
     pub fn set_saving(&mut self, saving: bool, error: Option<String>, cx: &mut Context<Self>) {
@@ -451,14 +495,7 @@ impl ItemEditor {
         let mut draft = self.to_item(cx);
         draft.kind = kind.empty();
         let files = std::mem::take(&mut self.files);
-        *self = Self::build(
-            draft,
-            true,
-            self.folders.clone(),
-            self.generator,
-            window,
-            cx,
-        );
+        *self = Self::build(draft, true, self.places.clone(), self.generator, window, cx);
         self.files = files;
         cx.notify();
     }
@@ -496,6 +533,12 @@ impl ItemEditor {
         let notes = self.notes.read(cx).value().to_string();
         item.notes = (!notes.trim().is_empty()).then(|| Secret::new(notes));
         item.folder_id = self.folder_id.clone();
+        item.organization_id = self.owner.clone();
+        item.collection_ids = if self.owner.is_some() {
+            self.collection_ids.clone()
+        } else {
+            Vec::new()
+        };
         item.favorite = self.favorite;
         item.fields = self
             .fields
@@ -568,6 +611,11 @@ impl ItemEditor {
             return;
         }
         let item = self.to_item(cx);
+        if item.organization_id.is_some() && item.collection_ids.is_empty() {
+            self.error = Some("Escolha pelo menos uma coleção da organização.".into());
+            cx.notify();
+            return;
+        }
         if item.name.is_empty() {
             self.error = Some("Dê um nome ao item.".into());
             cx.notify();
@@ -758,6 +806,188 @@ impl ItemEditor {
         Self::labeled(line.label, control, cx)
     }
 
+    /// Organização escolhida para o item (para os testes).
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
+    }
+
+    pub fn collections(&self) -> &[String] {
+        &self.collection_ids
+    }
+
+    /// Escolhe o dono de um item novo: o cofre pessoal ou uma organização
+    /// (já com a primeira coleção em que dá para escrever).
+    pub fn set_owner(&mut self, org: Option<String>, cx: &mut Context<Self>) {
+        if !self.is_new {
+            return;
+        }
+        self.collection_ids = match &org {
+            Some(o) => self
+                .places
+                .writable(o)
+                .first()
+                .map(|c| vec![c.id.clone()])
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        self.owner = org;
+        cx.notify();
+    }
+
+    pub fn toggle_collection(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(pos) = self.collection_ids.iter().position(|c| c == id) {
+            self.collection_ids.remove(pos);
+        } else {
+            self.collection_ids.push(id.to_owned());
+        }
+        cx.notify();
+    }
+
+    /// Botão-etiqueta que acende quando escolhido.
+    fn chip(
+        id: SharedString,
+        label: String,
+        selected: bool,
+        locked: bool,
+        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let accent = crate::appearance::accent(cx);
+        let tint = crate::appearance::accent_tint(cx, 0.1);
+        let chip_id = id.clone();
+        div()
+            .id(id)
+            .test_support()
+            .role(Role::Button)
+            .aria_label(SharedString::from(label.clone()))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2p5()
+            .py_1()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .text_sm()
+            .when(!locked, |d| d.cursor_pointer().active(|el| el.opacity(0.7)))
+            .when(locked, |d| d.opacity(0.6))
+            .when(selected, |d| {
+                d.border_color(accent).text_color(accent).bg(tint)
+            })
+            .when(!selected, |d| d.border_color(cx.theme().border))
+            .when(locked, |d| d.child(Icon::new(IconName::Lock).xsmall()))
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !locked {
+                    on_click(this, cx)
+                }
+            }))
+            .with_animation(
+                crate::motion::key("chip", format!("{chip_id}:{selected}")),
+                Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
+                move |el, t| {
+                    if selected {
+                        el.bg(tint.opacity(tint.a * t))
+                    } else {
+                        el
+                    }
+                },
+            )
+    }
+
+    /// Dono (cofre pessoal ou organização) e coleções do item.
+    fn render_owner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let orgs: Vec<(String, String)> = self
+            .places
+            .orgs
+            .iter()
+            .filter(|(id, _)| {
+                !self.places.writable(id).is_empty() || self.owner.as_deref() == Some(id)
+            })
+            .cloned()
+            .collect();
+        if orgs.is_empty() && self.owner.is_none() {
+            return None;
+        }
+        let mut col = v_flex().gap_2();
+        if self.is_new {
+            let mut row = h_flex().flex_wrap().gap_2().child(Self::chip(
+                "editor-owner-personal".into(),
+                "Meu cofre".into(),
+                self.owner.is_none(),
+                false,
+                |this, cx| this.set_owner(None, cx),
+                cx,
+            ));
+            for (id, name) in orgs {
+                let selected = self.owner.as_deref() == Some(id.as_str());
+                let org = id.clone();
+                row = row.child(Self::chip(
+                    format!("editor-owner-{id}").into(),
+                    name,
+                    selected,
+                    false,
+                    move |this, cx| this.set_owner(Some(org.clone()), cx),
+                    cx,
+                ));
+            }
+            col = col.child(row);
+        } else if let Some(org) = &self.owner {
+            let name = self
+                .places
+                .orgs
+                .iter()
+                .find(|(id, _)| id == org)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default();
+            col = col.child(
+                h_flex()
+                    .gap_1p5()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Icon::new(IconName::Building2).small())
+                    .child(name),
+            );
+        } else {
+            return None;
+        }
+        if let Some(org) = self.owner.clone() {
+            let mut cols = h_flex().flex_wrap().gap_2();
+            for c in self
+                .places
+                .collections
+                .iter()
+                .filter(|c| c.organization_id == org)
+            {
+                let selected = self.collection_ids.contains(&c.id);
+                // Só leitura: mostra se o item já está nela, mas não deixa mexer.
+                if c.read_only && !selected {
+                    continue;
+                }
+                let cid = c.id.clone();
+                cols = cols.child(Self::chip(
+                    format!("editor-col-{}", c.id).into(),
+                    c.name.clone(),
+                    selected,
+                    c.read_only,
+                    move |this, cx| this.toggle_collection(&cid, cx),
+                    cx,
+                ));
+            }
+            col = col.child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Coleções (quem tem acesso a elas vê o item)"),
+                    )
+                    .child(cols),
+            );
+        }
+        Some(col.into_any_element())
+    }
+
     fn render_folders(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let chip = |id: SharedString,
                     label: String,
@@ -809,7 +1039,7 @@ impl ItemEditor {
             self.folder_id.is_none(),
             cx,
         ));
-        for (id, name) in self.folders.clone() {
+        for (id, name) in self.places.folders.clone() {
             let selected = self.folder_id.as_deref() == Some(id.as_str());
             row = row.child(chip(
                 format!("editor-folder-{id}").into(),
@@ -860,6 +1090,10 @@ impl Render for ItemEditor {
             Input::new(&self.name).id("editor-name").disabled(busy),
             cx,
         ));
+        // Dono logo abaixo do nome: define quem vê o item.
+        if let Some(owner) = self.render_owner(cx) {
+            form = form.child(Self::labeled("Dono", owner, cx));
+        }
 
         let rows = layout(&self.base.kind);
         let mut placed: Vec<&str> = Vec::new();

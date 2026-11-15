@@ -320,7 +320,6 @@ pub fn encrypt(
 }
 
 /// Acolchoa uma chave serializada até pelo menos 65 bytes (o inverso de [`unpad`]).
-#[cfg(test)]
 pub(crate) fn pad_key(bytes: &[u8]) -> Vec<u8> {
     let n = 65usize.saturating_sub(bytes.len()).max(1);
     let mut out = bytes.to_vec();
@@ -328,27 +327,32 @@ pub(crate) fn pad_key(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Serializa uma chave simétrica como `COSE_Key` (kty 4), com o `kid` se houver.
+pub(crate) fn encode_cose_key_with_kid(alg: i64, key: &[u8], kid: Option<&[u8]>) -> Vec<u8> {
+    use ciborium::value::Integer;
+    let mut map = vec![(
+        Value::Integer(Integer::from(1)),
+        Value::Integer(Integer::from(4)),
+    )];
+    if let Some(kid) = kid {
+        map.push((Value::Integer(Integer::from(2)), Value::Bytes(kid.to_vec())));
+    }
+    map.push((
+        Value::Integer(Integer::from(3)),
+        Value::Integer(Integer::from(alg)),
+    ));
+    map.push((
+        Value::Integer(Integer::from(-1)),
+        Value::Bytes(key.to_vec()),
+    ));
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(&Value::Map(map), &mut out).expect("mapa simples serializa");
+    out
+}
+
 #[cfg(test)]
 pub(crate) fn encode_cose_key(alg: i64, key: &[u8]) -> Vec<u8> {
-    use ciborium::value::Integer;
-    let map = Value::Map(vec![
-        (
-            Value::Integer(Integer::from(1)),
-            Value::Integer(Integer::from(4)),
-        ),
-        (Value::Integer(Integer::from(2)), Value::Bytes(vec![0; 16])),
-        (
-            Value::Integer(Integer::from(3)),
-            Value::Integer(Integer::from(alg)),
-        ),
-        (
-            Value::Integer(Integer::from(-1)),
-            Value::Bytes(key.to_vec()),
-        ),
-    ]);
-    let mut out = Vec::new();
-    ciborium::ser::into_writer(&map, &mut out).unwrap();
-    out
+    encode_cose_key_with_kid(alg, key, Some(&[0; 16]))
 }
 
 /// Cifra uma mensagem v2 com XChaCha20-Poly1305 — só para testes (o app não escreve).
