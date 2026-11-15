@@ -65,6 +65,9 @@ jobs:
           # Os testes fazem vários logins seguidos.
           LOGIN_RATELIMIT_SECONDS: "1"
           LOGIN_RATELIMIT_MAX_BURST: "1000"
+          # Versões novas recusam subir sem volume em /data; aqui o servidor é
+          # descartável de propósito.
+          I_REALLY_WANT_VOLATILE_STORAGE: "true"
     steps:
       - uses: actions/checkout@v4
         with:
