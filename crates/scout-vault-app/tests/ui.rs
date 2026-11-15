@@ -2534,3 +2534,94 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
     .unwrap();
     wait_until(cx, |cx| item_state(cx, &item_name).is_none());
 }
+
+/// Menu da bandeja: reflete bloqueio e acesso rápido; copiar, gerar e
+/// sincronizar funcionam sem abrir o item.
+#[gpui_kit::test]
+fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
+    use scout_vault_app::tray::{Command, PinnedEntry};
+    use scout_vault_app::vault_view::CopyShortcut;
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    let menu = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).tray_menu_state(cx));
+
+    // Aberto, sem fixados.
+    let state = menu(cx);
+    assert!(state.unlocked);
+    assert!(state.pinned.is_empty());
+
+    // Fixa um login: aparece com usuário e senha.
+    cx.update(|cx| vault.update(cx, |v, _| v.set_pinned(vec!["login-1".into()])));
+    assert_eq!(
+        menu(cx).pinned,
+        [PinnedEntry {
+            id: "login-1".into(),
+            name: "Meu Banco".into(),
+            has_username: true,
+            has_password: true,
+            has_totp: true,
+        }]
+    );
+
+    // Copiar a senha pelo menu, sem abrir o item.
+    let copy = |what| Command::Copy {
+        item_id: "login-1".into(),
+        what,
+    };
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.handle_tray(copy(CopyShortcut::Password), window, cx)
+        });
+    })
+    .unwrap();
+    assert_eq!(texts(cx), ["Copiado: Senha · some em 30 s"]);
+    assert!(cx.update(|cx| vault.read(cx).selected().is_none()));
+    // Campo que o item não tem.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            let missing = Command::Copy {
+                item_id: "identity-1".into(),
+                what: CopyShortcut::Password,
+            };
+            a.handle_tray(missing, window, cx)
+        });
+    })
+    .unwrap();
+    assert!(texts(cx).contains(&"Este item não tem senha.".to_owned()));
+
+    // Gerar e copiar.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.handle_tray(Command::GeneratePassword, window, cx)
+        });
+    })
+    .unwrap();
+    assert!(texts(cx).contains(&"Senha gerada e copiada · some em 30 s".to_owned()));
+
+    // Sincronizar começa na hora.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.handle_tray(Command::Sync, window, cx));
+    })
+    .unwrap();
+    assert!(cx.update(|cx| vault.read(cx).is_busy()));
+    // Espera a tentativa terminar (sem servidor, falha) antes de seguir.
+    wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
+
+    // Bloqueado: menu sem acesso rápido, e copiar pede o desbloqueio.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.handle_tray(Command::Lock, window, cx));
+    })
+    .unwrap();
+    let state = menu(cx);
+    assert!(!state.unlocked);
+    assert!(state.pinned.is_empty());
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.handle_tray(copy(CopyShortcut::Password), window, cx)
+        });
+    })
+    .unwrap();
+    assert!(texts(cx).contains(&"Desbloqueie o cofre para copiar.".to_owned()));
+}

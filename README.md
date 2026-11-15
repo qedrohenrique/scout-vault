@@ -97,8 +97,10 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 
 **Bandeja do Windows**
 - Fechar a janela (X ou Alt+F4) deixa o app rodando no ícone perto do relógio: `Ctrl+Alt+A` e o
-  preenchimento no navegador continuam funcionando. Clique no ícone para abrir; botão direito
-  para **Abrir**, **Bloquear** ou **Sair**. Abrir o executável de novo só mostra a janela que já
+  preenchimento no navegador continuam funcionando. Clique no ícone para abrir. O botão direito
+  abre um menu com **Abrir**, o **Acesso rápido** (copiar usuário, senha ou código dos itens
+  fixados sem abrir a janela), **Gerar e copiar senha**, **Sincronizar agora**,
+  **Bloquear**/**Desbloquear…** e **Sair**. Abrir o executável de novo só mostra a janela que já
   existe. Dá para desligar em Configurações → Sessão.
 
 **Sessão e bloqueio**

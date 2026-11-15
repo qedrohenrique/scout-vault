@@ -2,20 +2,160 @@
 //!
 //! Fechar a janela só a esconde: o app segue rodando — o atalho `Ctrl+Alt+A`
 //! e o preenchimento no navegador continuam funcionando. Pelo ícone:
-//! clique abre a janela; botão direito mostra **Abrir**, **Bloquear** e **Sair**.
+//! clique abre a janela; o botão direito abre um menu com **Abrir**, o
+//! **acesso rápido** (copiar usuário, senha ou código dos itens fixados, sem
+//! abrir a janela), **Gerar e copiar senha**, **Sincronizar agora**,
+//! **Bloquear**/**Desbloquear…** e **Sair**.
+//!
+//! O menu é descrito por [`entries`] a partir de um [`MenuState`] que o app
+//! mantém atualizado; os nomes dos itens fixados ficam só na memória.
 //!
 //! O ícone vive numa thread própria com uma janela invisível do Win32 (como o
 //! atalho global), e os comandos chegam ao app por um canal.
 //! Abrir o executável de novo com o app já rodando só mostra a janela existente.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+use crate::vault_view::CopyShortcut;
 
 /// O que a bandeja pede ao app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Show,
     Lock,
     Quit,
+    Sync,
+    GeneratePassword,
+    Copy { item_id: String, what: CopyShortcut },
+}
+
+/// Um item fixado no acesso rápido, como o menu precisa dele.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PinnedEntry {
+    pub id: String,
+    pub name: String,
+    pub has_username: bool,
+    pub has_password: bool,
+    pub has_totp: bool,
+}
+
+/// O que o menu mostra: depende de o cofre estar aberto e do acesso rápido.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MenuState {
+    pub unlocked: bool,
+    pub pinned: Vec<PinnedEntry>,
+}
+
+/// Uma linha do menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    Action {
+        label: String,
+        command: Command,
+        default: bool,
+    },
+    Separator,
+    Submenu {
+        label: String,
+        entries: Vec<Entry>,
+    },
+}
+
+fn action(label: impl Into<String>, command: Command) -> Entry {
+    Entry::Action {
+        label: label.into(),
+        command,
+        default: false,
+    }
+}
+
+/// Maior nome de item mostrado no menu (o resto vira "…").
+const MAX_LABEL: usize = 40;
+
+/// Nome pronto para o menu do Win32: encurtado e com `&` escapado (sozinho,
+/// `&` sublinha a letra seguinte como atalho).
+pub fn menu_label(name: &str) -> String {
+    let name = name.trim();
+    let short: String = if name.chars().count() > MAX_LABEL {
+        let mut cut: String = name.chars().take(MAX_LABEL - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        name.to_owned()
+    };
+    short.replace('&', "&&")
+}
+
+/// O menu do botão direito para este estado.
+pub fn entries(state: &MenuState) -> Vec<Entry> {
+    let mut out = vec![Entry::Action {
+        label: "Abrir Scout Vault".into(),
+        command: Command::Show,
+        default: true,
+    }];
+    if state.unlocked {
+        let quick: Vec<Entry> = state
+            .pinned
+            .iter()
+            .filter_map(|p| {
+                let mut copy = Vec::new();
+                for (has, label, what) in [
+                    (p.has_username, "Copiar usuário", CopyShortcut::Username),
+                    (p.has_password, "Copiar senha", CopyShortcut::Password),
+                    (p.has_totp, "Copiar código", CopyShortcut::TotpCode),
+                ] {
+                    if has {
+                        copy.push(action(
+                            label,
+                            Command::Copy {
+                                item_id: p.id.clone(),
+                                what,
+                            },
+                        ));
+                    }
+                }
+                (!copy.is_empty()).then(|| Entry::Submenu {
+                    label: menu_label(&p.name),
+                    entries: copy,
+                })
+            })
+            .collect();
+        out.push(Entry::Separator);
+        if !quick.is_empty() {
+            out.push(Entry::Submenu {
+                label: "Acesso rápido".into(),
+                entries: quick,
+            });
+        }
+        out.push(action("Gerar e copiar senha", Command::GeneratePassword));
+        out.push(action("Sincronizar agora", Command::Sync));
+        out.push(Entry::Separator);
+        out.push(action("Bloquear", Command::Lock));
+    } else {
+        out.push(action("Desbloquear…", Command::Show));
+    }
+    out.push(Entry::Separator);
+    out.push(action("Sair", Command::Quit));
+    out
+}
+
+static MENU: Mutex<MenuState> = Mutex::new(MenuState {
+    unlocked: false,
+    pinned: Vec::new(),
+});
+
+/// Atualiza o que o menu mostra (o app chama a cada mudança de tela ou de pinos).
+pub fn set_menu_state(state: MenuState) {
+    let mut current = MENU.lock().unwrap_or_else(|e| e.into_inner());
+    if *current != state {
+        *current = state;
+    }
+}
+
+/// O estado atual do menu (os testes conferem por aqui).
+pub fn menu_state() -> MenuState {
+    MENU.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 static SYSTEM: AtomicBool = AtomicBool::new(false);
@@ -95,7 +235,7 @@ mod platform {
     };
     use windows::Win32::UI::WindowsAndMessaging::*;
 
-    use super::Command;
+    use super::{Command, Entry};
 
     const CLASS: PCWSTR = w!("ScoutVaultTray");
     /// Mensagem do ícone (cliques).
@@ -103,9 +243,6 @@ mod platform {
     /// Mensagem de outra instância: "apareça".
     const WM_WAKE: u32 = WM_APP + 2;
     const ID: u32 = 1;
-    const MENU_OPEN: usize = 1;
-    const MENU_LOCK: usize = 2;
-    const MENU_QUIT: usize = 3;
 
     thread_local! {
         static TX: RefCell<Option<Sender<Command>>> = const { RefCell::new(None) };
@@ -150,13 +287,50 @@ mod platform {
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }
 
+    fn wide_z(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Monta o menu nativo; `commands[id - 1]` é o comando de cada linha.
+    unsafe fn build(menu: HMENU, entries: &[Entry], commands: &mut Vec<Command>) {
+        for entry in entries {
+            match entry {
+                Entry::Separator => {
+                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+                Entry::Action {
+                    label,
+                    command,
+                    default,
+                } => {
+                    commands.push(command.clone());
+                    let id = commands.len();
+                    let text = wide_z(label);
+                    let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(text.as_ptr()));
+                    if *default {
+                        let _ = SetMenuDefaultItem(menu, id as u32, 0);
+                    }
+                }
+                Entry::Submenu { label, entries } => {
+                    let Ok(sub) = CreatePopupMenu() else { continue };
+                    build(sub, entries, commands);
+                    let text = wide_z(label);
+                    // O submenu passa a ser do menu pai (sai junto no DestroyMenu).
+                    let _ = AppendMenuW(
+                        menu,
+                        MF_STRING | MF_POPUP,
+                        sub.0 as usize,
+                        PCWSTR(text.as_ptr()),
+                    );
+                }
+            }
+        }
+    }
+
     unsafe fn show_menu(hwnd: HWND) {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, MENU_OPEN, w!("Abrir Scout Vault"));
-        let _ = AppendMenuW(menu, MF_STRING, MENU_LOCK, w!("Bloquear"));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Sair"));
-        let _ = SetMenuDefaultItem(menu, MENU_OPEN as u32, 0);
+        let mut commands = Vec::new();
+        build(menu, &super::entries(&super::menu_state()), &mut commands);
         let mut pt = Default::default();
         let _ = GetCursorPos(&mut pt);
         // Sem isso o menu não fecha ao clicar fora (comportamento documentado do Win32).
@@ -171,11 +345,11 @@ mod platform {
             None,
         );
         let _ = DestroyMenu(menu);
-        match chosen.0 as usize {
-            MENU_OPEN => send(Command::Show),
-            MENU_LOCK => send(Command::Lock),
-            MENU_QUIT => send(Command::Quit),
-            _ => {}
+        if let Some(command) = (chosen.0 as usize)
+            .checked_sub(1)
+            .and_then(|i| commands.get(i))
+        {
+            send(command.clone());
         }
     }
 
@@ -343,5 +517,108 @@ mod tests {
         drop(tray);
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(!super::wake_existing_instance(), "o ícone saiu junto");
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::{entries, menu_label, Command, Entry, MenuState, PinnedEntry};
+    use crate::vault_view::CopyShortcut;
+
+    fn labels(entries: &[Entry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|e| match e {
+                Entry::Action { label, .. } | Entry::Submenu { label, .. } => label.clone(),
+                Entry::Separator => "-".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn locked_menu_only_opens_and_quits() {
+        let menu = entries(&MenuState::default());
+        assert_eq!(
+            labels(&menu),
+            ["Abrir Scout Vault", "Desbloquear…", "-", "Sair"]
+        );
+        assert!(matches!(
+            &menu[0],
+            Entry::Action {
+                command: Command::Show,
+                default: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unlocked_menu_has_quick_access_with_only_existing_fields() {
+        let state = MenuState {
+            unlocked: true,
+            pinned: vec![
+                PinnedEntry {
+                    id: "a".into(),
+                    name: "Banco & Cia".into(),
+                    has_username: true,
+                    has_password: true,
+                    has_totp: false,
+                },
+                // Nota sem nada para copiar: não aparece.
+                PinnedEntry {
+                    id: "n".into(),
+                    name: "Nota".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let menu = entries(&state);
+        assert_eq!(
+            labels(&menu),
+            [
+                "Abrir Scout Vault",
+                "-",
+                "Acesso rápido",
+                "Gerar e copiar senha",
+                "Sincronizar agora",
+                "-",
+                "Bloquear",
+                "-",
+                "Sair"
+            ]
+        );
+        let Entry::Submenu { entries: quick, .. } = &menu[2] else {
+            panic!()
+        };
+        assert_eq!(labels(quick), ["Banco && Cia"]);
+        let Entry::Submenu { entries: copy, .. } = &quick[0] else {
+            panic!()
+        };
+        assert_eq!(labels(copy), ["Copiar usuário", "Copiar senha"]);
+        assert!(matches!(
+            &copy[1],
+            Entry::Action {
+                command: Command::Copy {
+                    item_id,
+                    what: CopyShortcut::Password
+                },
+                ..
+            } if item_id == "a"
+        ));
+        // Sem itens fixados, sem submenu.
+        let menu = entries(&MenuState {
+            unlocked: true,
+            pinned: Vec::new(),
+        });
+        assert!(!labels(&menu).contains(&"Acesso rápido".to_owned()));
+    }
+
+    #[test]
+    fn long_names_are_cut_and_ampersands_escaped() {
+        assert_eq!(menu_label("  A&B  "), "A&&B");
+        let long = "x".repeat(60);
+        let cut = menu_label(&long);
+        assert_eq!(cut.chars().count(), 40);
+        assert!(cut.ends_with('…'));
     }
 }

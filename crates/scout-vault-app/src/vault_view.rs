@@ -562,7 +562,47 @@ impl VaultView {
     }
 
     fn copy_field(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = &self.selected else { return };
+        let _ = window;
+        let Some(item) = self.selected.clone() else {
+            return;
+        };
+        self.copy_from(&item, key, cx);
+    }
+
+    /// Copia um campo de qualquer item (pelo menu da bandeja), sem abri-lo.
+    pub fn copy_item_field(&mut self, id: &str, what: CopyShortcut, cx: &mut Context<Self>) {
+        let item = self
+            .list
+            .read(cx)
+            .delegate()
+            .vault()
+            .items
+            .iter()
+            .find(|i| i.id == id && !i.deleted)
+            .cloned();
+        let Some(item) = item else {
+            crate::toast::error("Este item não está mais no cofre.", cx);
+            return;
+        };
+        if field_rows(&item).iter().any(|r| r.key == what.key()) {
+            self.copy_from(&item, what.key(), cx);
+        } else {
+            crate::toast::info(what.missing(), cx);
+        }
+    }
+
+    /// O que dá para copiar do item: (usuário, senha, código TOTP).
+    pub fn copyable(item: &Item) -> (bool, bool, bool) {
+        let rows = field_rows(item);
+        let has = |what: CopyShortcut| rows.iter().any(|r| r.key == what.key());
+        (
+            has(CopyShortcut::Username),
+            has(CopyShortcut::Password),
+            has(CopyShortcut::TotpCode),
+        )
+    }
+
+    fn copy_from(&mut self, item: &Item, key: &str, cx: &mut Context<Self>) {
         let Some(row) = field_rows(item).into_iter().find(|r| r.key == key) else {
             return;
         };
@@ -598,7 +638,6 @@ impl VaultView {
         } else {
             format!("Copiado: {}", row.label)
         };
-        let _ = window;
         crate::toast::success(message, cx);
     }
 
@@ -608,6 +647,11 @@ impl VaultView {
 
     fn sync(&mut self, cx: &mut Context<Self>) {
         self.run_write(WriteOp::Nothing, cx);
+    }
+
+    /// Sincroniza agora (botão da barra lateral ou menu da bandeja).
+    pub fn sync_now(&mut self, cx: &mut Context<Self>) {
+        self.sync(cx);
     }
 
     pub fn set_password_options(&mut self, options: PasswordOptions) {
@@ -722,7 +766,7 @@ impl VaultView {
     }
 
     /// Itens fixados que ainda existem (fora da lixeira), na ordem de fixação.
-    fn pinned_items(&self, cx: &App) -> Vec<Item> {
+    pub fn pinned_items(&self, cx: &App) -> Vec<Item> {
         let vault = self.list.read(cx).delegate().vault();
         self.pinned
             .iter()

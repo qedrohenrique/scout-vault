@@ -256,18 +256,78 @@ impl ScoutVaultApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        use crate::tray::Command;
         match command {
-            crate::tray::Command::Show => crate::tray::show_window(window),
-            crate::tray::Command::Lock => {
+            Command::Show => crate::tray::show_window(window),
+            Command::Lock => {
                 self.lock(window, cx);
                 crate::toast::info("Cofre bloqueado", cx);
             }
-            crate::tray::Command::Quit => {
+            Command::Quit => {
                 // Sai de vez: solta o ícone antes de encerrar.
                 self.tray = None;
                 cx.quit();
             }
+            Command::GeneratePassword => {
+                let options = self.store.load().generator;
+                let password = scout_vault_core::generator::password(&options);
+                crate::clipboard::copy_and_clear_later(&password, cx);
+                crate::toast::success(
+                    format!(
+                        "Senha gerada e copiada · some em {} s",
+                        crate::clipboard::CLEAR_AFTER.as_secs()
+                    ),
+                    cx,
+                );
+            }
+            Command::Sync => match &self.screen {
+                Screen::Vault(view) => view.update(cx, |v, cx| v.sync_now(cx)),
+                _ => {
+                    crate::tray::show_window(window);
+                    crate::toast::info("Desbloqueie o cofre para sincronizar.", cx);
+                }
+            },
+            Command::Copy { item_id, what } => match &self.screen {
+                Screen::Vault(view) => {
+                    view.update(cx, |v, cx| v.copy_item_field(&item_id, what, cx));
+                    self.record_activity();
+                }
+                _ => {
+                    crate::tray::show_window(window);
+                    crate::toast::info("Desbloqueie o cofre para copiar.", cx);
+                }
+            },
         }
+    }
+
+    /// O que o menu da bandeja deve mostrar agora.
+    pub fn tray_menu_state(&self, cx: &App) -> crate::tray::MenuState {
+        let Screen::Vault(view) = &self.screen else {
+            return crate::tray::MenuState::default();
+        };
+        let pinned = view
+            .read(cx)
+            .pinned_items(cx)
+            .iter()
+            .map(|item| {
+                let (has_username, has_password, has_totp) = VaultView::copyable(item);
+                crate::tray::PinnedEntry {
+                    id: item.id.clone(),
+                    name: item.name.clone(),
+                    has_username,
+                    has_password,
+                    has_totp,
+                }
+            })
+            .collect();
+        crate::tray::MenuState {
+            unlocked: true,
+            pinned,
+        }
+    }
+
+    fn refresh_tray_menu(&self, cx: &App) {
+        crate::tray::set_menu_state(self.tray_menu_state(cx));
     }
 
     /// Liga ou desliga o pipe do navegador conforme a configuração.
@@ -720,11 +780,13 @@ impl ScoutVaultApp {
                                 cx,
                             );
                         }
+                        this.refresh_tray_menu(cx);
                     }
                     VaultEvent::PinsChanged(ids) => {
                         let mut settings = this.store.load();
                         settings.pinned_items = ids.clone();
                         this.store.save(&settings);
+                        this.refresh_tray_menu(cx);
                     }
                     VaultEvent::SessionExpired => {
                         crate::saved_session::clear(&this.store);
@@ -748,6 +810,8 @@ impl Render for ScoutVaultApp {
         if window.focused(cx).is_none() {
             self.focus.focus(window, cx);
         }
+        // Bloqueado/desbloqueado e acesso rápido no menu da bandeja.
+        self.refresh_tray_menu(cx);
         let content: AnyView = match (&self.settings, &self.screen) {
             _ if self.autotype_picker.is_some() => self.autotype_view().unwrap().clone().into(),
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
