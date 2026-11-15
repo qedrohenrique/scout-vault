@@ -208,6 +208,8 @@ copiando o texto selecionado na busca.
 
 ## Segurança
 
+Achou uma falha? Relate em particular, como explica o [SECURITY.md](SECURITY.md).
+
 - **Nada decifrado vai para o disco.** Os segredos vivem em memória dentro de `Secret`/`Zeroizing`
   e são apagados quando liberados. O `Debug` deles nunca mostra o conteúdo.
 - O `settings.json` (`%APPDATA%\Scout Vault\settings.json` no Windows e `~/.config/scout-vault/settings.json` nos
