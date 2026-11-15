@@ -1,0 +1,62 @@
+name: Algo não funciona
+description: Um erro, travamento ou comportamento estranho do app ou da extensão.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por relatar! **Nunca cole senhas, códigos, tokens ou o conteúdo do cofre aqui.**
+        Falha de segurança? Use o relato privado (veja o SECURITY.md), não esta issue.
+  - type: input
+    id: versao
+    attributes:
+      label: Versão
+      description: "Nome do zip da release (ex.: scout-vault-0.3.0-windows-x64.zip) ou o commit."
+    validations:
+      required: true
+  - type: dropdown
+    id: servidor
+    attributes:
+      label: Servidor
+      options:
+        - bitwarden.com
+        - bitwarden.eu
+        - Vaultwarden
+        - Outro auto-hospedado
+    validations:
+      required: true
+  - type: dropdown
+    id: onde
+    attributes:
+      label: Onde aconteceu
+      multiple: true
+      options:
+        - Login / desbloqueio
+        - Cofre (lista, detalhe, edição)
+        - Anexos
+        - Pastas / organizações
+        - Extensão do navegador
+        - Preencher em apps (Ctrl+Alt+A)
+        - Bandeja / Windows Hello
+        - Outro
+  - type: textarea
+    id: passos
+    attributes:
+      label: O que você fez
+      description: Passo a passo para acontecer de novo.
+      placeholder: |
+        1. Abri…
+        2. Cliquei em…
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: O que esperava e o que aconteceu
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows e navegador
+      placeholder: Windows 11 24H2, Chrome 142
