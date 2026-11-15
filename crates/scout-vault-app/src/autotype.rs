@@ -184,7 +184,13 @@ impl Drop for Listener {
 /// Liga o atalho global; cada uso manda um [`Request`] por `tx`.
 /// Falha se outro programa já usa o mesmo atalho.
 pub fn listen(tx: std::sync::mpsc::Sender<Request>) -> Result<Listener, String> {
-    platform::listen(tx).map(|thread_id| Listener { thread_id })
+    platform::listen(tx, platform::Hotkey::AutoType).map(|thread_id| Listener { thread_id })
+}
+
+/// Liga o atalho da busca rápida (`Ctrl+Shift+Espaço`); o [`Request`] traz a
+/// janela que estava em foco (onde digitar, se a pessoa escolher preencher).
+pub fn listen_quick_search(tx: std::sync::mpsc::Sender<Request>) -> Result<Listener, String> {
+    platform::listen(tx, platform::Hotkey::QuickSearch).map(|thread_id| Listener { thread_id })
 }
 
 #[cfg(windows)]
@@ -201,8 +207,37 @@ mod platform {
 
     use super::{Key, Request};
 
-    const HOTKEY_ID: i32 = 0xC0F;
     const VK_A: u32 = 0x41;
+
+    /// Qual atalho global (cada um numa thread própria).
+    #[derive(Clone, Copy)]
+    pub enum Hotkey {
+        AutoType,
+        QuickSearch,
+    }
+
+    impl Hotkey {
+        fn id(self) -> i32 {
+            match self {
+                Hotkey::AutoType => 0xC0F,
+                Hotkey::QuickSearch => 0xC10,
+            }
+        }
+
+        fn keys(self) -> (HOT_KEY_MODIFIERS, u32) {
+            match self {
+                Hotkey::AutoType => (MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_A),
+                Hotkey::QuickSearch => (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE.0 as u32),
+            }
+        }
+
+        fn label(self) -> &'static str {
+            match self {
+                Hotkey::AutoType => super::HOTKEY_LABEL,
+                Hotkey::QuickSearch => crate::quick_search::HOTKEY_LABEL,
+            }
+        }
+    }
 
     fn foreground() -> HWND {
         // SAFETY: sem parâmetros.
@@ -232,16 +267,16 @@ mod platform {
         let _ = unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
     }
 
-    pub fn listen(tx: std::sync::mpsc::Sender<Request>) -> Result<u32, String> {
+    pub fn listen(tx: std::sync::mpsc::Sender<Request>, hotkey: Hotkey) -> Result<u32, String> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let hotkey_id = hotkey.id();
+        let (mods, vk) = hotkey.keys();
         std::thread::Builder::new()
             .name("scout-vault-autotype-hotkey".into())
             .spawn(move || {
                 // O atalho pertence a esta thread; as mensagens chegam na fila dela.
                 // SAFETY: registro simples, sem janela.
-                let registered = unsafe {
-                    RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_A)
-                };
+                let registered = unsafe { RegisterHotKey(None, hotkey_id, mods, vk) };
                 let ok = registered.is_ok();
                 // SAFETY: sem parâmetros.
                 let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
@@ -252,7 +287,7 @@ mod platform {
                 let mut msg = MSG::default();
                 // SAFETY: laço de mensagens padrão desta thread.
                 while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
-                    if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
+                    if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == hotkey_id {
                         let hwnd = foreground();
                         let request = Request {
                             window: hwnd.0 as isize,
@@ -265,14 +300,14 @@ mod platform {
                     }
                 }
                 // SAFETY: mesmo id registrado acima.
-                let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
+                let _ = unsafe { UnregisterHotKey(None, hotkey_id) };
             })
             .map_err(|e| e.to_string())?;
         match ready_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Ok(thread_id)) => Ok(thread_id),
             Ok(Err(e)) => Err(format!(
                 "O atalho {} já está em uso por outro programa ({e}).",
-                super::HOTKEY_LABEL
+                hotkey.label()
             )),
             Err(_) => Err("O atalho global não respondeu.".into()),
         }
@@ -366,7 +401,13 @@ mod platform {
 mod platform {
     use super::{Key, Request};
 
-    pub fn listen(_: std::sync::mpsc::Sender<Request>) -> Result<u32, String> {
+    #[derive(Clone, Copy)]
+    pub enum Hotkey {
+        AutoType,
+        QuickSearch,
+    }
+
+    pub fn listen(_: std::sync::mpsc::Sender<Request>, _: Hotkey) -> Result<u32, String> {
         Err("O preenchimento em apps só funciona no Windows por enquanto.".into())
     }
 

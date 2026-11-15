@@ -61,6 +61,12 @@ pub struct ScoutVaultApp {
     reprompt_counter: u64,
     /// Atalho global registrado (soltar desliga).
     hotkey: Option<autotype::Listener>,
+    /// Atalho da busca rápida (`Ctrl+Shift+Espaço`).
+    quick_hotkey: Option<autotype::Listener>,
+    quick_tx: std::sync::mpsc::Sender<Request>,
+    /// Janela da busca rápida aberta e o app onde digitar.
+    quick_search: Option<(AnyWindowHandle, Entity<crate::quick_search::QuickSearch>)>,
+    quick_target: Option<Request>,
     autotype_tx: std::sync::mpsc::Sender<Request>,
     /// Servidor do pipe do navegador (soltar desliga).
     browser_server: Option<crate::io::Background>,
@@ -156,6 +162,7 @@ impl ScoutVaultApp {
         });
         // Pedidos do atalho global chegam por um canal (a thread do atalho não é a da UI).
         let (autotype_tx, autotype_rx) = std::sync::mpsc::channel::<Request>();
+        let (quick_tx, quick_rx) = std::sync::mpsc::channel::<Request>();
         let (browser_tx, browser_rx) = std::sync::mpsc::channel::<crate::browser::Incoming>();
         // Bloqueio/suspensão do Windows (só no app de verdade, como a bandeja).
         let (os_tx, os_rx) = std::sync::mpsc::channel::<crate::windows_events::OsEvent>();
@@ -170,6 +177,9 @@ impl ScoutVaultApp {
             let alive = this.update_in(cx, |this, window, cx| {
                 while let Ok(request) = autotype_rx.try_recv() {
                     this.handle_autotype(request, window, cx);
+                }
+                while let Ok(request) = quick_rx.try_recv() {
+                    this.open_quick_search(request, window, cx);
                 }
                 while let Ok(incoming) = browser_rx.try_recv() {
                     this.handle_browser(incoming, window, cx);
@@ -212,6 +222,10 @@ impl ScoutVaultApp {
             reprompt_counter: 0,
             hotkey: None,
             autotype_tx,
+            quick_hotkey: None,
+            quick_tx,
+            quick_search: None,
+            quick_target: None,
             browser_server: None,
             browser_tx,
             tray: None,
@@ -339,6 +353,39 @@ impl ScoutVaultApp {
                 }
             },
             Command::OpenMenu { x, y } => self.open_tray_menu((x, y), cx),
+            Command::Fill { item_id } => {
+                self.close_quick_search(cx);
+                let Some(request) = self.quick_target.take() else {
+                    return;
+                };
+                let item = match &self.screen {
+                    Screen::Vault(view) => view
+                        .read(cx)
+                        .list()
+                        .read(cx)
+                        .delegate()
+                        .vault()
+                        .items
+                        .iter()
+                        .find(|i| i.id == item_id && !i.deleted)
+                        .cloned(),
+                    _ => None,
+                };
+                match item {
+                    Some(item) => self.type_item(&item, request, window, cx),
+                    None => {
+                        crate::tray::show_window(window);
+                        crate::toast::info("Desbloqueie o cofre para preencher.", cx);
+                    }
+                }
+            }
+            Command::OpenItem { item_id } => {
+                self.close_quick_search(cx);
+                crate::tray::show_window(window);
+                if let Screen::Vault(view) = &self.screen {
+                    view.update(cx, |v, cx| v.open_pinned(&item_id, window, cx));
+                }
+            }
             Command::Copy { item_id, what } => match &self.screen {
                 Screen::Vault(view) => {
                     // Item que pede a senha mestra: mostra a janela com o pedido.
@@ -579,7 +626,8 @@ impl ScoutVaultApp {
 
     /// Registra ou solta o atalho global conforme a configuração.
     fn refresh_hotkey(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wanted = self.store.load().autotype.enabled && autotype::system_hotkey_enabled();
+        let settings = self.store.load();
+        let wanted = settings.autotype.enabled && autotype::system_hotkey_enabled();
         if !wanted {
             self.hotkey = None;
         } else if self.hotkey.is_none() {
@@ -590,6 +638,108 @@ impl ScoutVaultApp {
                 Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
             }
         }
+        let quick = settings.quick_search && autotype::system_hotkey_enabled();
+        if !quick {
+            self.quick_hotkey = None;
+        } else if self.quick_hotkey.is_none() {
+            match autotype::listen_quick_search(self.quick_tx.clone()) {
+                Ok(listener) => self.quick_hotkey = Some(listener),
+                Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
+            }
+        }
+    }
+
+    /// `Ctrl+Shift+Espaço`: abre a busca rápida por cima de tudo (ou, com o
+    /// cofre bloqueado, o app pedindo a senha).
+    pub fn open_quick_search(
+        &mut self,
+        request: Request,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.store.load().quick_search {
+            return;
+        }
+        self.close_quick_search(cx);
+        let Screen::Vault(view) = &self.screen else {
+            crate::tray::show_window(window);
+            crate::toast::info("Desbloqueie o cofre para usar a busca rápida.", cx);
+            return;
+        };
+        let items: Vec<crate::quick_search::QuickItem> = view
+            .read(cx)
+            .list()
+            .read(cx)
+            .delegate()
+            .vault()
+            .items
+            .iter()
+            .filter(|i| {
+                !i.deleted && !matches!(i.kind, scout_vault_core::vault::ItemKind::Unknown(_))
+            })
+            .map(crate::quick_search::QuickItem::from_item)
+            .collect();
+        // Usado no próprio Scout Vault: não há outro app para digitar.
+        let target = (!request.own_window).then(|| request.title.clone());
+        self.quick_target = (!request.own_window).then_some(request);
+        let size = size(
+            px(crate::quick_search::WIDTH),
+            px(crate::quick_search::HEIGHT),
+        );
+        // Centralizada, no terço de cima da área de trabalho (como os lançadores).
+        let (work, scale) = crate::tray::work_area_and_scale();
+        let (wx, wy, ww, wh) = (
+            work.0 as f32 / scale,
+            work.1 as f32 / scale,
+            (work.2 - work.0) as f32 / scale,
+            (work.3 - work.1) as f32 / scale,
+        );
+        let origin = point(
+            px(wx + (ww - f32::from(size.width)) / 2.),
+            px(wy + (wh * 0.22).max(0.)),
+        );
+        let options = WindowOptions {
+            titlebar: None,
+            kind: WindowKind::PopUp,
+            focus: true,
+            show: true,
+            is_movable: false,
+            is_resizable: false,
+            is_minimizable: false,
+            window_background: WindowBackgroundAppearance::Transparent,
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, size))),
+            ..Default::default()
+        };
+        let tx = self.tray_tx.clone();
+        let opened = gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| crate::quick_search::QuickSearch::new(items, target, tx, window, cx))
+        });
+        match opened {
+            Ok((handle, view)) => {
+                handle
+                    .update(cx, |_, window, _| window.activate_window())
+                    .ok();
+                self.quick_search = Some((handle, view));
+            }
+            Err(e) => {
+                crate::toast::error(format!("Não foi possível abrir a busca rápida: {e}"), cx)
+            }
+        }
+    }
+
+    fn close_quick_search(&mut self, cx: &mut App) {
+        if let Some((handle, _)) = self.quick_search.take() {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+    }
+
+    /// A busca rápida aberta agora (testes).
+    pub fn quick_search(
+        &self,
+    ) -> Option<(AnyWindowHandle, Entity<crate::quick_search::QuickSearch>)> {
+        self.quick_search.clone()
     }
 
     /// Troca o digitador (os testes usam um falso que só registra o que digitaria).

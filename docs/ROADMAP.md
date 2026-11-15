@@ -47,7 +47,7 @@ desktop + extensão** no Windows. Recursos variam por plano; ✅ tem, 🟡 parci
 | Salvar/atualizar login pelo navegador | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Preencher em apps do desktop (auto-type) | ✅ | ❌ | 🟡 | ✅ | ❌ |
 | Passkeys (criar e usar) | ❌ (preserva) | ✅ | ✅ | ✅ | ✅ |
-| Busca rápida global (atalho no sistema) | ❌ | ❌ | ✅ Quick Access | 🟡 | ❌ |
+| Busca rápida global (atalho no sistema) | ✅ | ❌ | ✅ Quick Access | 🟡 | ❌ |
 | Desbloquear com Windows Hello | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Bloquear junto com o Windows | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Re-prompt da senha em itens sensíveis | ✅ | ✅ | 🟡 | ❌ | ❌ |
@@ -93,7 +93,7 @@ senhas, instalador (Windows Hello, bloqueio com o Windows, re-prompt e salvar lo
 - Publicar nas lojas (Chrome Web Store, Edge Add-ons) para não precisar do modo desenvolvedor.
 
 ### Fase C — Produtividade de desktop
-- **Busca rápida global** (`Ctrl+Shift+Espaço`): janela flutuante para achar, copiar e preencher sem abrir o app.
+- ~~Busca rápida global~~ — feito: `Ctrl+Shift+Espaço` abre uma janela flutuante para achar, copiar e preencher sem abrir o app.
 - **Ícones dos sites** na lista (serviço de ícones do servidor, com cache e opção de desligar).
 - Auto-type: **sequência por item** (`{USERNAME}{TAB}{PASSWORD}{ENTER}`, `{TOTP}`, atrasos) e janelas de admin.
 - Atalhos configuráveis; paleta de comandos (`Ctrl+K`).

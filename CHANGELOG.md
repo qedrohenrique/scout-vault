@@ -7,6 +7,14 @@ Todas as mudanças que importam para quem usa o Scout Vault. O formato segue o
 
 ## [Ainda não lançado]
 
+### Adicionado
+- **Busca rápida global** (`Ctrl+Shift+Espaço`): em qualquer app, uma janelinha para achar um
+  item e preencher (`Enter`), copiar senha, usuário ou código (`Ctrl+P`/`Ctrl+U`/`Ctrl+T`) ou
+  abrir no Scout Vault (`Ctrl+O`). Itens que pedem a senha mestra continuam pedindo.
+
+### Mudado
+- Ações do GitHub atualizadas (checkout, setup-python, upload/download-artifact, CodeQL).
+
 ## [0.3.0] - 2026-11-15
 
 ### Adicionado

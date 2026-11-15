@@ -28,6 +28,7 @@ pub mod item_editor;
 pub mod item_list;
 pub mod login;
 pub mod motion;
+pub mod quick_search;
 pub mod quick_unlock;
 pub mod saved_session;
 pub mod secrets;

@@ -71,6 +71,9 @@ pub struct Settings {
     /// Sincronizar sozinho quando o cofre muda em outro aparelho.
     #[serde(default = "yes")]
     pub background_sync: bool,
+    /// Busca rápida global (`Ctrl+Shift+Espaço`).
+    #[serde(default = "yes")]
+    pub quick_search: bool,
     /// O aviso "continua na bandeja" já foi mostrado uma vez.
     #[serde(default)]
     pub tray_hint_shown: bool,
@@ -124,6 +127,7 @@ impl Default for Settings {
             lock_with_windows: true,
             windows_hello: false,
             background_sync: true,
+            quick_search: true,
             unlock_memory_days: 0,
             relogin_days: default_relogin_days(),
             auto_lock_minutes: default_auto_lock_minutes(),

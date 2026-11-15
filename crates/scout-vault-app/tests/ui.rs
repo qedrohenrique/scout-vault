@@ -3568,3 +3568,104 @@ fn theme_change_without_motion_is_instant(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+/// Busca rápida: acha, copia, preenche no app de destino, respeita o pedido de
+/// senha mestra e, com o cofre bloqueado, manda desbloquear.
+#[gpui_kit::test]
+fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
+    use scout_vault_app::vault_view::CopyShortcut;
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let typed = fake_typer(&app, cx);
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    let open = |cx: &mut TestAppContext, title: &str, own: bool| {
+        let mut r = request(title);
+        r.own_window = own;
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |a, cx| a.open_quick_search(r, window, cx))
+        })
+        .unwrap();
+        cx.update(|cx| app.read(cx).quick_search())
+            .expect("busca rápida aberta")
+    };
+
+    // Achar e copiar a senha (sem abrir o item no app).
+    let (popup, quick) = open(cx, "Entrar - Banco", false);
+    popup
+        .update(cx, |_, window, cx| {
+            quick.update(cx, |q, cx| q.set_query("banco", window, cx));
+            let first = quick.read(cx).selected().unwrap().clone();
+            assert_eq!(first.name, "Meu Banco");
+            assert_eq!(first.detail, "pessoa");
+            quick.update(cx, |q, cx| q.copy(CopyShortcut::Password, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(texts(cx).contains(&"Copiado: Senha · some em 30 s".to_owned()));
+    assert!(cx.update(|cx| vault.read(cx).selected().is_none()));
+    // Mostra "Senha copiada" e fecha sozinha.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(popup.update(cx, |_, _, _| ()).is_err(), "a janela fechou");
+
+    // Enter: digita no app que estava em foco.
+    let (popup, quick) = open(cx, "Entrar - Banco", false);
+    popup
+        .update(cx, |_, window, cx| {
+            quick.update(cx, |q, cx| {
+                q.set_query("meu banco", window, cx);
+                q.activate(window, cx);
+            });
+        })
+        .unwrap();
+    wait_until(cx, |_| !typed.lock().unwrap().is_empty());
+    let (target, keys) = typed.lock().unwrap()[0].clone();
+    assert_eq!(target, 42, "digita na janela que estava em foco");
+    assert_eq!(keys[0], "pessoa");
+    assert_eq!(keys[2], "s3nh@-ção");
+    typed.lock().unwrap().clear();
+
+    // Item que pede a senha mestra: nada é digitado antes de confirmar.
+    let (popup, quick) = open(cx, "Outro app", false);
+    popup
+        .update(cx, |_, window, cx| {
+            quick.update(cx, |q, cx| {
+                q.set_query("chave", window, cx);
+                q.activate(window, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(typed.lock().unwrap().is_empty());
+    assert!(cx.update(|cx| vault.read(cx).reprompt_open()));
+
+    // Usada dentro do próprio Scout Vault: Enter abre o item no app.
+    let (popup, quick) = open(cx, "Scout Vault", true);
+    popup
+        .update(cx, |_, window, cx| {
+            quick.update(cx, |q, cx| {
+                q.set_query("identidade", window, cx);
+                assert_eq!(q.selected().unwrap().id, "identity-1");
+                q.activate(window, cx);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| vault.read(cx).selected().map(|i| i.id.clone())),
+        Some("identity-1".into())
+    );
+
+    // Bloqueado: não abre a janelinha; pede para desbloquear.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.lock(window, cx);
+            a.open_quick_search(request("Qualquer"), window, cx)
+        })
+    })
+    .unwrap();
+    assert!(cx.update(|cx| app.read(cx).quick_search().is_none()));
+    assert!(texts(cx).contains(&"Desbloqueie o cofre para usar a busca rápida.".to_owned()));
+}

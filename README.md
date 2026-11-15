@@ -54,6 +54,10 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
   (Win+V) nem na área de transferência na nuvem**.
 - **Gerador de senhas** (`Ctrl+G` ou o ícone de dados): tamanho, conjuntos de caracteres e opção
   de evitar caracteres parecidos. As opções ficam salvas; a senha gerada, não.
+- **Busca rápida** (`Ctrl+Shift+Espaço`, em qualquer janela): uma janelinha por cima de tudo para
+  achar um item pelo nome, usuário ou site e **preencher** no app em foco, **copiar** usuário, senha
+  ou código, ou **abrir** no Scout Vault — sem trocar de janela. Itens que pedem a senha mestra
+  continuam pedindo. Liga/desliga em Configurações › Sessão.
 - **Preencher em outros apps** (`Ctrl+Alt+A`, em qualquer janela): o Scout Vault escolhe o login pelo
   título da janela (nome do item ou site) e **digita** `usuário ⇥ senha ↵` nela, sem passar pela
   área de transferência. Se o título não decidir, mostra a lista para escolher; com o cofre
@@ -191,6 +195,7 @@ o bloqueio automático segue valendo.
 |---|---|---|
 | `Ctrl+,` | qualquer tela | Abre/fecha as configurações |
 | `Ctrl+Alt+A` | **qualquer app do Windows** | Preenche usuário e senha na janela em foco |
+| `Ctrl+Shift+Espaço` | **qualquer app do Windows** | Busca rápida: acha um item e preenche (`Enter`), copia senha/usuário/código (`Ctrl+P`/`Ctrl+U`/`Ctrl+T`) ou abre no app (`Ctrl+O`) |
 | `Ctrl+G` | qualquer tela | Abre/fecha o gerador de senhas |
 | `Esc` | configurações, gerador, lista de preenchimento | Fecha |
 | `Ctrl+F` | cofre | Vai para a busca |

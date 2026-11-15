@@ -27,6 +27,7 @@ pub struct SettingsView {
     lock_with_windows: bool,
     windows_hello: bool,
     background_sync: bool,
+    quick_search: bool,
     unlock_memory_days: u32,
     relogin_days: u32,
     auto_lock_minutes: u32,
@@ -48,6 +49,7 @@ impl SettingsView {
             lock_with_windows: loaded.lock_with_windows,
             windows_hello: loaded.windows_hello,
             background_sync: loaded.background_sync,
+            quick_search: loaded.quick_search,
             unlock_memory_days: loaded.unlock_memory_days,
             relogin_days: loaded.relogin_days,
             auto_lock_minutes: loaded.auto_lock_minutes,
@@ -137,6 +139,14 @@ impl SettingsView {
             },
             cx,
         )
+    }
+
+    pub fn set_quick_search(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.quick_search = on;
+        let mut settings = self.store.load();
+        settings.quick_search = on;
+        self.store.save(&settings);
+        cx.notify();
     }
 
     pub fn set_background_sync(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -623,6 +633,16 @@ impl Render for SettingsView {
                     "Bloquear sem uso após",
                     "Tempo sem mexer no teclado ou no mouse até o cofre bloquear.",
                     lock_control,
+                    cx,
+                ),
+                Self::row(
+                    "Busca rápida (Ctrl+Shift+Espaço)",
+                    "Em qualquer app, abre uma janelinha para achar um item e preencher, copiar o usuário, a senha ou o código, sem abrir o Scout Vault.",
+                    Switch::new("quick-search-setting")
+                        .checked(self.quick_search)
+                        .on_click(cx.listener(|this, v: &bool, _, cx| {
+                            this.set_quick_search(*v, cx)
+                        })),
                     cx,
                 ),
                 Self::row(

@@ -31,6 +31,14 @@ pub enum Command {
         item_id: String,
         what: CopyShortcut,
     },
+    /// Busca rápida: digitar este item no app que estava em foco.
+    Fill {
+        item_id: String,
+    },
+    /// Busca rápida: mostrar este item no Scout Vault.
+    OpenItem {
+        item_id: String,
+    },
     /// Botão direito no ícone: abrir o menu com o canto no cursor (pixels de tela).
     OpenMenu {
         x: i32,
