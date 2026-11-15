@@ -106,6 +106,8 @@ pub struct ItemEditor {
     ssh_private: Option<Entity<TextareaState>>,
     folder_id: Option<String>,
     favorite: bool,
+    /// "Pedir a senha mestra" para mostrar, copiar, editar ou preencher.
+    reprompt: bool,
     places: Places,
     /// Organização dona do item (`None` = cofre pessoal).
     owner: Option<String>,
@@ -457,6 +459,7 @@ impl ItemEditor {
             collection_ids: base.collection_ids.clone(),
             folder_id: base.folder_id.clone(),
             favorite: base.favorite,
+            reprompt: base.reprompt,
             base,
             is_new,
             name,
@@ -475,6 +478,12 @@ impl ItemEditor {
 
     pub fn is_new(&self) -> bool {
         self.is_new
+    }
+
+    /// Liga/desliga "pedir a senha mestra" neste item.
+    pub fn set_reprompt(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.reprompt = on;
+        cx.notify();
     }
 
     pub fn is_saving(&self) -> bool {
@@ -540,6 +549,7 @@ impl ItemEditor {
             Vec::new()
         };
         item.favorite = self.favorite;
+        item.reprompt = self.reprompt;
         item.fields = self
             .fields
             .iter()
@@ -1242,14 +1252,27 @@ impl Render for ItemEditor {
             .child(Self::labeled("Anexos", self.render_files(busy, cx), cx))
             .child(Self::labeled("Pasta", self.render_folders(cx), cx))
             .child(
-                Checkbox::new("editor-favorite")
-                    .label("Favorito")
-                    .checked(self.favorite)
-                    .disabled(busy)
-                    .on_change(cx.listener(|this, v: &bool, _, cx| {
-                        this.favorite = *v;
-                        cx.notify();
-                    })),
+                h_flex()
+                    .gap_6()
+                    .child(
+                        Checkbox::new("editor-favorite")
+                            .label("Favorito")
+                            .checked(self.favorite)
+                            .disabled(busy)
+                            .on_change(cx.listener(|this, v: &bool, _, cx| {
+                                this.favorite = *v;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Checkbox::new("editor-reprompt")
+                            .label("Pedir a senha mestra")
+                            .checked(self.reprompt)
+                            .disabled(busy)
+                            .on_change(
+                                cx.listener(|this, v: &bool, _, cx| this.set_reprompt(*v, cx)),
+                            ),
+                    ),
             );
 
         let title = if self.is_new {

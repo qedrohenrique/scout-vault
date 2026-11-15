@@ -62,6 +62,15 @@ pub struct Settings {
     /// Fechar a janela deixa o app rodando na bandeja do Windows.
     #[serde(default = "yes")]
     pub close_to_tray: bool,
+    /// Bloquear o cofre quando o Windows bloqueia (`Win+L`) ou suspende.
+    #[serde(default = "yes")]
+    pub lock_with_windows: bool,
+    /// Desbloquear com Windows Hello (a chave fica cifrada pelo Hello).
+    #[serde(default)]
+    pub windows_hello: bool,
+    /// Sincronizar sozinho quando o cofre muda em outro aparelho.
+    #[serde(default = "yes")]
+    pub background_sync: bool,
     /// O aviso "continua na bandeja" já foi mostrado uma vez.
     #[serde(default)]
     pub tray_hint_shown: bool,
@@ -112,6 +121,9 @@ impl Default for Settings {
             remember_session: true,
             pinned_items: Vec::new(),
             close_to_tray: true,
+            lock_with_windows: true,
+            windows_hello: false,
+            background_sync: true,
             unlock_memory_days: 0,
             relogin_days: default_relogin_days(),
             auto_lock_minutes: default_auto_lock_minutes(),

@@ -23,6 +23,7 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 - [Servidor de desenvolvimento](#servidor-de-desenvolvimento)
 - [Testes](#testes)
 - [Como acrescentar uma configuração](#como-acrescentar-uma-configuração)
+- [Novidades e releases](#novidades)
 - [Roadmap](#roadmap)
 
 ---
@@ -94,11 +95,16 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
 - A senha só sai do app quando você clica, e só para um item com endereço do mesmo site.
   A extensão fala com o app por *native messaging* e um canal local que só o seu usuário do
   Windows acessa. Com o cofre bloqueado, o app aparece pedindo a senha.
+- **Salvar logins:** ao entrar num site com um login que o cofre ainda não tem (ou com uma senha
+  nova), aparece no canto da página "Salvar este login no Scout Vault?" (ou "Atualizar a senha
+  de …?"). Nada é salvo sem o clique; a senha antiga vai para o histórico do item. Com o cofre
+  bloqueado, o app pede a senha e salva em seguida. Para isso a extensão roda em todos os sites
+  (o navegador avisa ao instalar); ela só lê o formulário quando ele é enviado.
 
 **Bandeja do Windows**
 - Fechar a janela (X ou Alt+F4) deixa o app rodando no ícone perto do relógio: `Ctrl+Alt+A` e o
   preenchimento no navegador continuam funcionando. Clique no ícone para abrir. O botão direito
-  abre um menu com **Abrir**, o **Acesso rápido** (copiar usuário, senha ou código dos itens
+  abre o menu do próprio app (com o tema e a cor de destaque, ícones e animação), com **Abrir**, o **Acesso rápido** (copiar usuário, senha ou código dos itens
   fixados sem abrir a janela), **Gerar e copiar senha**, **Sincronizar agora**,
   **Bloquear**/**Desbloquear…** e **Sair**. Abrir o executável de novo só mostra a janela que já
   existe. Dá para desligar em Configurações → Sessão.
@@ -114,8 +120,20 @@ abrir, buscar, copiar e fechar, sem o peso de um app Electron.
     descartada se a senha mestra for trocada (o app percebe no sync).
   - *Pedir login completo a cada*: 7, 30 (padrão) ou 90 dias, ou nunca.
   - *Bloquear sem uso após*: 1, 5 (padrão), 15 ou 60 minutos, ou nunca.
+  - *Sincronizar em segundo plano* (ligado por padrão): a cada minuto o app pergunta ao servidor
+    se o cofre mudou (só a data da última mudança, sem baixar nada) e, se mudou em outro
+    aparelho, sincroniza sozinho e avisa. Com um formulário aberto, espera.
+  - *Desbloquear com Windows Hello* (desligado por padrão): rosto, digital ou PIN no lugar da
+    senha mestra. O Windows Hello assina um desafio com uma chave que não sai do TPM; essa
+    assinatura cifra a user key, e só a versão cifrada fica no Gerenciador de Credenciais. Trocar
+    a senha mestra ou sair da conta apaga a configuração.
+  - *Bloquear junto com o Windows* (ligado por padrão): ao bloquear o computador (Win+L) ou ao
+    suspender/hibernar, o cofre bloqueia também.
 - Bloqueia pelo botão de cadeado, por `Ctrl+L`, pela bandeja ou sozinho, sem uso.
 - Ao bloquear, o cofre decifrado sai da memória. Para desbloquear basta a senha mestra, sem rede.
+- **Pedir a senha mestra** (opção do item, como no Bitwarden): mostrar, copiar ou editar os dados
+  secretos e digitar com `Ctrl+Alt+A` pedem a senha de novo; a liberação vale até trocar de item.
+  A conferência é local (sem rede). O navegador não preenche esses itens.
 
 ## Aparência e configurações
 
@@ -139,7 +157,8 @@ entram suaves, a barra lateral entra em cascata, o filtro escolhido acende, a se
 envolve o ícone do item, mensagens de erro dão uma leve sacudida, "Entrando…" pulsa, uma barra
 fina corre enquanto sincroniza ou salva, o ícone de sincronizar gira e vira ✓ e o botão de copiar
 vira ✓. Avisos ("Copiado", "Item criado", erros) aparecem como **toasts** que sobem do pé da
-janela, ficam alguns segundos e descem sumindo. **Configurações → Movimento → Parado** desliga tudo isso e a arte.
+janela, ficam alguns segundos e descem sumindo. Ao trocar o tema, a cor de destaque, o texto ou os cantos, a interface se transforma no lugar: cada
+cor vai da antiga à nova (nada some), e entre claro e escuro uma onda sai do botão clicado. **Configurações → Movimento → Parado** desliga tudo isso e a arte.
 
 ![Tela de entrada com a arte de fundo](docs/imagens/fundo-animado-previa.png)
 
@@ -316,7 +335,22 @@ janela real.
    outro `Self::group(...)`.
 4. Escreva um teste em `tests/ui.rs` que clique no controle e confira o efeito.
 
+## Novidades
+O que mudou em cada versão está no [CHANGELOG.md](CHANGELOG.md); os downloads ficam nas
+[Releases](https://github.com/qedrohenrique/scout-vault/releases).
+
+**Publicar uma versão** (o workflow `.github/workflows/release.yml` faz o resto):
+1. No `CHANGELOG.md`, troque `## [Ainda não lançado]` por `## [X.Y.Z] - AAAA-MM-DD` e ajuste os
+   links do fim do arquivo.
+2. Ponha `X.Y.Z` em `[workspace.package]` no `Cargo.toml` (e em `extension/manifest.json`).
+3. Confira as notas com `python tools/release_notes.py X.Y.Z`, faça o commit e envie a tag:
+   `git tag vX.Y.Z` e `git push origin vX.Y.Z`.
+
+O GitHub Actions roda os testes, compila, monta o zip (`tools/package_release.py`) com o
+`.sha256` e cria a release com as notas daquela seção do changelog (versões 0.x saem como
+pré-release). Se a tag não bater com o `Cargo.toml` ou faltar a seção, nada é publicado.
+
 ## Roadmap
 Veja [docs/ROADMAP.md](docs/ROADMAP.md), que inclui um comparativo com Bitwarden, 1Password,
-KeePassXC e Proton Pass. Os próximos passos são Windows Hello e bloqueio junto com o Windows,
-salvar logins pelo navegador, a busca rápida por atalho global e o relatório de saúde das senhas.
+KeePassXC e Proton Pass. Windows Hello, bloqueio junto com o Windows e re-prompt já entraram; os próximos passos são
+o preenchimento direto no campo do site, a busca rápida por atalho global e o relatório de saúde das senhas.

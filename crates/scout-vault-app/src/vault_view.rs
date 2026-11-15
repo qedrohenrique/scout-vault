@@ -31,7 +31,33 @@ pub enum VaultEvent {
     /// O "Acesso rápido" mudou: ids para guardar nas configurações.
     PinsChanged(Vec<String>),
     OpenGenerator,
+    /// A senha mestra pedida por um item foi confirmada para uma ação do app
+    /// (ex.: digitar com `Ctrl+Alt+A`); leva o número que o app passou.
+    RepromptPassed(u64),
 }
+
+/// Ação num item que pede a senha mestra, guardada até a senha ser confirmada.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guarded {
+    Reveal(String),
+    Copy(String),
+    Edit,
+    /// Ação do app (digitar, preencher); o número volta em [`VaultEvent::RepromptPassed`].
+    External(u64),
+}
+
+/// O pedido de senha mestra aberto no detalhe do item.
+struct RepromptPrompt {
+    item_id: String,
+    input: Entity<InputState>,
+    _sub: Subscription,
+    pending: Option<Guarded>,
+    error: Option<SharedString>,
+    checking: bool,
+}
+
+/// De quanto em quanto tempo o app pergunta ao servidor se o cofre mudou.
+pub const BACKGROUND_SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// O que os atalhos de cópia copiam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,6 +386,12 @@ pub struct VaultView {
     _subscriptions: Vec<Subscription>,
     /// Redesenha a cada segundo enquanto o item aberto tem código TOTP.
     _ticker: Task<()>,
+    /// Pergunta ao servidor, de tempos em tempos, se o cofre mudou.
+    _poller: Task<()>,
+    /// Sincronizar sozinho quando o cofre muda em outro aparelho.
+    background_sync: bool,
+    /// Data de revisão do cofre no último sync (ms), para comparar.
+    last_revision: Option<i64>,
     /// Editor aberto no lugar do detalhe (novo item ou edição).
     editor: Option<(Entity<ItemEditor>, Subscription)>,
     /// "Apagar de vez" pede um segundo clique.
@@ -390,6 +422,10 @@ pub struct VaultView {
     downloading: Option<String>,
     /// Cópias temporárias abertas com outro programa; apagadas ao bloquear.
     temp_files: Vec<std::path::PathBuf>,
+    /// Pedido de senha mestra de um item com "pedir a senha mestra".
+    reprompt: Option<RepromptPrompt>,
+    /// Itens liberados com a senha mestra (até trocar de item ou bloquear).
+    reprompt_ok: HashSet<String>,
 }
 
 impl Drop for VaultView {
@@ -420,6 +456,23 @@ impl VaultView {
                 cx.notify();
             }
             ListEvent::Cancel => {}
+        });
+        // Sync em segundo plano: uma pergunta barata ao servidor ("mudou?") e,
+        // se mudou, um sync completo.
+        let poller = cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(BACKGROUND_SYNC_EVERY).await;
+            let session = match this.update(cx, |this, _| this.poll_session()) {
+                Ok(session) => session,
+                Err(_) => break,
+            };
+            let Some(session) = session else { continue };
+            let result = flow::check_revision(&session).await;
+            if this
+                .update(cx, |this, cx| this.revision_checked(result, cx))
+                .is_err()
+            {
+                break;
+            }
         });
         let ticker = cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -453,8 +506,13 @@ impl VaultView {
             sync_count: 0,
             downloading: None,
             temp_files: Vec::new(),
+            reprompt: None,
+            reprompt_ok: HashSet::new(),
             password_options: PasswordOptions::default(),
             _ticker: ticker,
+            _poller: poller,
+            background_sync: true,
+            last_revision: None,
             session,
             keys: Arc::new(keys),
             list,
@@ -472,6 +530,109 @@ impl VaultView {
             this.sync(cx);
         }
         this
+    }
+
+    /// Itens que a pessoa pode alterar (fora da lixeira; org só se permitir).
+    pub fn editable_items(&self, cx: &App) -> Vec<Item> {
+        self.list
+            .read(cx)
+            .delegate()
+            .vault()
+            .items
+            .iter()
+            .filter(|i| !i.deleted && self.can_edit(i))
+            .cloned()
+            .collect()
+    }
+
+    /// Salva um item que veio de fora (o navegador). Não mexe num formulário
+    /// aberto: com um aberto (ou sincronizando), recusa e explica.
+    pub fn save_external(
+        &mut self,
+        item: Item,
+        message: String,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.editor.is_some() {
+            return Err(
+                "Há um formulário aberto no Scout Vault. Salve ou cancele e tente de novo.".into(),
+            );
+        }
+        if self.syncing {
+            return Err("O Scout Vault está sincronizando. Tente de novo em instantes.".into());
+        }
+        self.run_write_with(WriteOp::Save(Box::new(item), Vec::new()), Some(message), cx);
+        Ok(())
+    }
+
+    pub fn set_background_sync(&mut self, on: bool) {
+        self.background_sync = on;
+    }
+
+    pub fn last_revision(&self) -> Option<i64> {
+        self.last_revision
+    }
+
+    /// Sessão para a checagem em segundo plano — ou `None` se agora não é hora
+    /// (opção desligada, já sincronizando, formulário aberto).
+    fn poll_session(&self) -> Option<Session> {
+        (self.background_sync && !self.syncing && self.editor.is_none())
+            .then(|| self.session.clone())
+    }
+
+    fn revision_checked(
+        &mut self,
+        result: Result<flow::Revision, flow::SyncError>,
+        cx: &mut Context<Self>,
+    ) {
+        // Sem rede ou servidor fora do ar: tenta de novo na próxima vez, sem avisar.
+        let Ok(flow::Revision { date, tokens }) = result else {
+            return;
+        };
+        if let Some((access, refresh)) = tokens {
+            self.session.access_token = access;
+            if let Some(refresh) = refresh {
+                self.session.refresh_token = refresh;
+            }
+            cx.emit(VaultEvent::Synced(self.session.clone()));
+        }
+        self.on_revision(date, cx);
+    }
+
+    /// Pergunta agora (sem esperar o próximo minuto) se o cofre mudou.
+    pub fn check_now(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.poll_session() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = flow::check_revision(&session).await;
+            this.update(cx, |this, cx| this.revision_checked(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// O servidor disse que o cofre está na revisão `date`: se mudou desde o
+    /// último sync (em outro aparelho, no cofre web…), sincroniza agora.
+    pub fn on_revision(&mut self, date: i64, cx: &mut Context<Self>) {
+        match self.last_revision {
+            None => self.last_revision = Some(date),
+            Some(last) if last != date => {
+                if self.poll_session().is_some() {
+                    self.run_write_with(
+                        WriteOp::Nothing,
+                        Some("Cofre atualizado com mudanças de outro aparelho".into()),
+                        cx,
+                    );
+                }
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Chaves do cofre aberto (para ligar o Windows Hello).
+    pub fn keys(&self) -> Arc<Keys> {
+        self.keys.clone()
     }
 
     pub fn session(&self) -> &Session {
@@ -509,6 +670,7 @@ impl VaultView {
     /// edição) e os "clique de novo para confirmar". Enquanto o formulário está
     /// salvando, ele fica — o resultado ainda vai aparecer nele.
     fn leave_editor(&mut self, cx: &mut Context<Self>) {
+        self.forget_reprompt();
         self.confirm_delete = false;
         self.confirm_remove_attachment = None;
         if let Some((editor, _)) = &self.editor {
@@ -526,11 +688,155 @@ impl VaultView {
         });
         self.selected = None;
         self.revealed.clear();
+        self.forget_reprompt();
         cx.notify();
     }
 
-    fn toggle_reveal(&mut self, key: &str, cx: &mut Context<Self>) {
-        if !self.revealed.remove(key) {
+    /// Outro item (ou filtro): o item volta a pedir a senha mestra.
+    fn forget_reprompt(&mut self) {
+        let keep = self.selected.as_ref().map(|i| i.id.clone());
+        if self.reprompt.as_ref().map(|r| Some(&r.item_id)) != Some(keep.as_ref()) {
+            self.reprompt = None;
+        }
+        self.reprompt_ok.retain(|id| Some(id) == keep.as_ref());
+    }
+
+    /// O item aberto pede a senha mestra e ela ainda não foi confirmada?
+    pub fn needs_reprompt(&self, item: &Item) -> bool {
+        item.reprompt && !self.reprompt_ok.contains(&item.id)
+    }
+
+    pub fn reprompt_open(&self) -> bool {
+        self.reprompt.is_some()
+    }
+
+    /// Libera `action` no item aberto, ou abre o pedido de senha mestra e
+    /// guarda a ação para depois. `true` = pode seguir agora.
+    fn guard(&mut self, action: Guarded, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(item) = self.selected.clone() else {
+            return false;
+        };
+        if !self.needs_reprompt(&item) {
+            return true;
+        }
+        self.start_reprompt(window, cx);
+        if let Some(prompt) = &mut self.reprompt {
+            prompt.pending = Some(action);
+        }
+        false
+    }
+
+    /// Abre (ou foca) o campo de senha mestra do item aberto.
+    pub fn start_reprompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = &self.selected else { return };
+        let item_id = item.id.clone();
+        if let Some(prompt) = self.reprompt.as_ref().filter(|p| p.item_id == item_id) {
+            prompt.input.update(cx, |i, cx| i.focus(window, cx));
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("Senha mestra")
+        });
+        let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.confirm_reprompt(window, cx);
+            }
+        });
+        input.update(cx, |i, cx| i.focus(window, cx));
+        self.reprompt = Some(RepromptPrompt {
+            item_id,
+            input,
+            _sub: sub,
+            pending: None,
+            error: None,
+            checking: false,
+        });
+        cx.notify();
+    }
+
+    fn cancel_reprompt(&mut self, cx: &mut Context<Self>) {
+        self.reprompt = None;
+        cx.notify();
+    }
+
+    /// Confere a senha digitada; certa, libera o item e faz a ação guardada.
+    pub fn confirm_reprompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = &mut self.reprompt else {
+            return;
+        };
+        if prompt.checking {
+            return;
+        }
+        let password = zeroize::Zeroizing::new(prompt.input.read(cx).value().to_string());
+        if password.is_empty() {
+            prompt.error = Some("Digite a senha mestra.".into());
+            cx.notify();
+            return;
+        }
+        prompt.checking = true;
+        prompt.error = None;
+        let item_id = prompt.item_id.clone();
+        cx.notify();
+        let session = self.session.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let ok = flow::check_master_password(&session, password).await;
+            this.update_in(cx, |this, window, cx| {
+                // Trocou de item enquanto conferia: não libera nada.
+                if this.reprompt.as_ref().map(|p| &p.item_id) != Some(&item_id) {
+                    return;
+                }
+                if !ok {
+                    if let Some(prompt) = &mut this.reprompt {
+                        prompt.checking = false;
+                        prompt.error = Some("Senha mestra incorreta.".into());
+                        prompt.input.update(cx, |i, cx| i.set_value("", window, cx));
+                    }
+                    cx.notify();
+                    return;
+                }
+                let pending = this.reprompt.take().and_then(|p| p.pending);
+                this.reprompt_ok.insert(item_id);
+                match pending {
+                    Some(Guarded::Reveal(key)) => {
+                        this.revealed.insert(key);
+                    }
+                    Some(Guarded::Copy(key)) => {
+                        if let Some(item) = this.selected.clone() {
+                            this.copy_from(&item, &key, cx);
+                        }
+                    }
+                    Some(Guarded::Edit) => this.edit_selected(window, cx),
+                    Some(Guarded::External(token)) => cx.emit(VaultEvent::RepromptPassed(token)),
+                    None => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Para uma ação do app (digitar, por exemplo) num item que pede a senha
+    /// mestra: abre o item e o pedido. `true` = não precisa, pode seguir.
+    pub fn request_reprompt(
+        &mut self,
+        item_id: &str,
+        token: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.open_pinned(item_id, window, cx);
+        self.guard(Guarded::External(token), window, cx)
+    }
+
+    fn toggle_reveal(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.revealed.remove(key) {
+            cx.notify();
+            return;
+        }
+        if self.guard(Guarded::Reveal(key.to_owned()), window, cx) {
             self.revealed.insert(key.to_owned());
         }
         cx.notify();
@@ -562,15 +868,26 @@ impl VaultView {
     }
 
     fn copy_field(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = window;
         let Some(item) = self.selected.clone() else {
             return;
         };
+        let secret = field_rows(&item).iter().any(|r| r.key == key && r.secret);
+        if secret && !self.guard(Guarded::Copy(key.to_owned()), window, cx) {
+            return;
+        }
         self.copy_from(&item, key, cx);
     }
 
     /// Copia um campo de qualquer item (pelo menu da bandeja), sem abri-lo.
-    pub fn copy_item_field(&mut self, id: &str, what: CopyShortcut, cx: &mut Context<Self>) {
+    /// Se o item pede a senha mestra, abre ele com o pedido e devolve `true`:
+    /// o app precisa mostrar a janela.
+    pub fn copy_item_field(
+        &mut self,
+        id: &str,
+        what: CopyShortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let item = self
             .list
             .read(cx)
@@ -582,13 +899,19 @@ impl VaultView {
             .cloned();
         let Some(item) = item else {
             crate::toast::error("Este item não está mais no cofre.", cx);
-            return;
+            return false;
         };
-        if field_rows(&item).iter().any(|r| r.key == what.key()) {
-            self.copy_from(&item, what.key(), cx);
-        } else {
+        let Some(row) = field_rows(&item).into_iter().find(|r| r.key == what.key()) else {
             crate::toast::info(what.missing(), cx);
+            return false;
+        };
+        if row.secret && item.reprompt {
+            self.open_pinned(id, window, cx);
+            self.guard(Guarded::Copy(what.key().to_owned()), window, cx);
+            return true;
         }
+        self.copy_from(&item, what.key(), cx);
+        false
     }
 
     /// O que dá para copiar do item: (usuário, senha, código TOTP).
@@ -1028,6 +1351,9 @@ impl VaultView {
         if self.syncing || self.editor.is_some() || item.deleted || !self.can_edit(&item) {
             return;
         }
+        if !self.guard(Guarded::Edit, window, cx) {
+            return;
+        }
         let places = self.places(cx);
         let options = self.password_options;
         let editor = cx.new(|cx| ItemEditor::edit(&item, places, options, window, cx));
@@ -1383,7 +1709,11 @@ impl VaultView {
                         vault,
                         saved_id,
                         warnings,
+                        revision,
                     }) => {
+                        if revision.is_some() {
+                            this.last_revision = revision;
+                        }
                         for w in &warnings {
                             crate::toast::error(format!("Anexo não enviado — {w}"), cx);
                         }
@@ -2080,6 +2410,110 @@ impl VaultView {
             ))
     }
 
+    /// Cartão "este item pede a senha mestra", no topo do detalhe.
+    fn render_reprompt(&self, item: &Item, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !item.reprompt {
+            return None;
+        }
+        let accent = appearance::accent(cx);
+        let theme = cx.theme();
+        if !self.needs_reprompt(item) {
+            return Some(
+                h_flex()
+                    .id("reprompt-ok")
+                    .test_support()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::LockOpen).xsmall())
+                    .child("Liberado com a senha mestra até você trocar de item.")
+                    .into_any_element(),
+            );
+        }
+        let prompt = self.reprompt.as_ref().filter(|p| p.item_id == item.id);
+        let card = v_flex()
+            .id("reprompt-card")
+            .test_support()
+            .gap_3()
+            .p_4()
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(accent.opacity(0.45))
+            .bg(accent.opacity(0.06))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .font_medium()
+                    .child(Icon::new(IconName::LockKeyhole).small().text_color(accent))
+                    .child("Este item pede a senha mestra"),
+            )
+            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                "Para mostrar, copiar, editar ou preencher os dados secretos, confirme que é você.",
+            ));
+        let card = match prompt {
+            None => card.child(
+                h_flex().child(
+                    Button::new("reprompt-start")
+                        .outline()
+                        .small()
+                        .icon(IconName::KeyRound)
+                        .label("Digitar a senha mestra")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_reprompt(window, cx)),
+                        ),
+                ),
+            ),
+            Some(prompt) => card
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(&prompt.input)
+                                    .id("reprompt-password")
+                                    .small()
+                                    .disabled(prompt.checking),
+                            ),
+                        )
+                        .child(
+                            Button::new("reprompt-confirm")
+                                .primary()
+                                .small()
+                                .label(if prompt.checking {
+                                    "Conferindo…"
+                                } else {
+                                    "Confirmar"
+                                })
+                                .loading(prompt.checking)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.confirm_reprompt(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("reprompt-cancel")
+                                .ghost()
+                                .small()
+                                .label("Cancelar")
+                                .on_click(cx.listener(|this, _, _, cx| this.cancel_reprompt(cx))),
+                        ),
+                )
+                .children(prompt.error.clone().map(|e| {
+                    motion::shake(
+                        div()
+                            .id("reprompt-error")
+                            .test_support()
+                            .aria_label(e.clone())
+                            .text_xs()
+                            .text_color(cx.theme().danger)
+                            .child(e.clone()),
+                        motion::key("reprompt-erro", &e),
+                    )
+                })),
+        };
+        Some(motion::rise(card, motion::key("reprompt", &item.id), 6.).into_any_element())
+    }
+
     fn render_detail(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some((editor, _)) = &self.editor {
             return motion::slide(
@@ -2253,17 +2687,10 @@ impl VaultView {
             )
             .child(actions);
 
-        let has_badges = item.deleted || item.reprompt || matches!(item.kind, ItemKind::Unknown(_));
+        let has_badges = item.deleted || matches!(item.kind, ItemKind::Unknown(_));
         let mut badges = h_flex().gap_2();
         if item.deleted {
             badges = badges.child(Tag::danger().small().child("Na lixeira"));
-        }
-        if item.reprompt {
-            badges = badges.child(
-                Tag::warning()
-                    .small()
-                    .child("Pede a senha mestra (ainda não suportado)"),
-            );
         }
         if let ItemKind::Unknown(code) = item.kind {
             badges = badges.child(
@@ -2345,8 +2772,8 @@ impl VaultView {
                                 IconName::Eye
                             })
                             .tooltip(if revealed { "Ocultar" } else { "Mostrar" })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_reveal(&reveal_key, cx)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.toggle_reveal(&reveal_key, window, cx)
                             })),
                     )
                 })
@@ -2401,6 +2828,7 @@ impl VaultView {
                     .gap_6()
                     .child(header)
                     .when(has_badges, |el| el.child(badges))
+                    .children(self.render_reprompt(item, cx))
                     .when(total > 0, |el| el.child(fields))
                     .children(attachments),
             );

@@ -45,7 +45,7 @@
       "FolderId": "folder-1",
       "OrganizationId": null,
       "Favorite": true,
-      "Reprompt": 1,
+      "Reprompt": 0,
       "Name": "2.C0wYkWln9ppGHBsGiaMGNQ==|3y+Dscapdo1CNk5up1axRA==|loKRygKx6x/0k9E2g4zKv6rLFVxRiA3foXYoWXrSkdA=",
       "Notes": "2.0LHFZt/fIodZSsELS9DEvg==|3RkbozaSiRRowZvD7b6fzw6DskYgtmBsV2dHlb0kLKA=|FLGeLtWWnXRU3CM7/At7Y/CjcJZ7RQXsowpgyDVUayw=",
       "Login": {
@@ -71,6 +71,7 @@
     {
       "id": "login-item-key",
       "type": 1,
+      "reprompt": 1,
       "name": "2.jxgXbvbKBGmAe9lhseNQaQ==|xfARSLDULFpNaj7uvQluLtgdV20WPVzmF1D95zYbPJY=|FWlauAIWh7E0CafciKa1R4PRaT7K7BU4qHJLY9wfHKY=",
       "key": "2.61nSvvyACHzpQDCr0E2rZg==|1Sx5ADp8P7seYjVSVTiPD2Qirv5xcluCMkJ7Jl+CtTTq18HtybkDbMvCrVCwFFYqqkpf4+RoCLnJCrp8S+j//b1T9CJFi48Yp6YCDvKG5tc=|sNEo1tnHe0i3GSAENjW1XVOryA1KnNnt3dVi+dZpnMQ=",
       "login": {

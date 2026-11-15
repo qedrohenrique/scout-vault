@@ -765,6 +765,25 @@ impl Client {
     }
 
     /// `GET /api/sync` — cofre inteiro, ainda cifrado.
+    /// `GET /api/accounts/revision-date` — quando o cofre mudou pela última vez
+    /// (ms desde 1970). Barato: serve para saber se vale sincronizar.
+    pub async fn revision_date(&self, access_token: &str) -> Result<i64, ApiError> {
+        let res = self
+            .http
+            .get(format!("{}/accounts/revision-date", self.urls.api))
+            .bearer_auth(access_token)
+            .send()
+            .await?;
+        let value: serde_json::Value = read_json(res).await?;
+        value
+            .as_i64()
+            .or_else(|| value.as_f64().map(|f| f as i64))
+            .ok_or_else(|| ApiError::Status {
+                status: 200,
+                body: format!("revision-date inesperado: {value}"),
+            })
+    }
+
     pub async fn sync(&self, access_token: &str) -> Result<crate::sync::SyncResponse, ApiError> {
         let res = self
             .http

@@ -14,12 +14,16 @@ pub enum UnlockEvent {
     Unlocked(Handoff),
     LogOut,
     OpenSettings,
+    /// Pediu para abrir com o Windows Hello (o app conduz).
+    UseHello,
 }
 
 pub struct UnlockView {
     session: Session,
     password: Entity<InputState>,
     busy: bool,
+    /// O botão "Usar Windows Hello" aparece (opção ligada e configurada).
+    hello: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -46,6 +50,7 @@ impl UnlockView {
             session,
             password,
             busy: false,
+            hello: false,
             error: None,
             _subscriptions: vec![sub],
         }
@@ -53,6 +58,27 @@ impl UnlockView {
 
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
+    }
+
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    pub fn set_hello(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.hello = on;
+        cx.notify();
+    }
+
+    /// Andamento do Windows Hello (o app avisa ao começar e ao terminar).
+    pub fn set_hello_progress(
+        &mut self,
+        busy: bool,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.busy = busy;
+        self.error = error.map(Into::into);
+        cx.notify();
     }
 
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -101,6 +127,7 @@ impl Render for UnlockView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status: SharedString = match (&self.error, self.busy) {
             (Some(e), _) => e.clone(),
+            (None, true) if self.hello => "Confirme no Windows Hello…".into(),
             (None, true) => "Abrindo o cofre…".into(),
             (None, false) => "".into(),
         };
@@ -130,6 +157,19 @@ impl Render for UnlockView {
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     )
+                    .when(self.hello, |el| {
+                        el.child(
+                            Button::new("unlock-hello")
+                                .outline()
+                                .w_full()
+                                .icon(gpui_kit::assets::IconName::ScanFace)
+                                .label("Usar Windows Hello")
+                                .disabled(self.busy)
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::UseHello)),
+                                ),
+                        )
+                    })
                     .child(
                         Button::new("unlock-logout")
                             .ghost()

@@ -291,6 +291,7 @@ async fn cleanup_test_leftovers() {
         "Pela UI ",
         "Anexo UI ",
         "Arrastado ",
+        "teste-salvar-",
     ];
     const FOLDER_PREFIXES: &[&str] = &["Arrasto ", "Pasta UI ", "Pasta teste "];
     let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
@@ -360,10 +361,14 @@ async fn folder_create_rename_delete() {
     let keys = Keys::unlock(&mk, &profile).unwrap();
 
     let name = format!("Pasta teste {}", std::process::id());
+    let before = client.revision_date(&token).await.unwrap();
     let folder = client
         .create_folder(&token, &encrypt_folder_name(&name, &keys).unwrap())
         .await
         .unwrap();
+    // A data de revisão anda quando o cofre muda (base do sync em segundo plano).
+    let after = client.revision_date(&token).await.unwrap();
+    assert!(after > before, "revisão {before} → {after}");
     let note = Item {
         id: String::new(),
         organization_id: None,

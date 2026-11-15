@@ -505,6 +505,40 @@ pub struct Written {
     pub saved_id: Option<String>,
     /// Problemas que não desfazem a operação (ex.: um anexo recusado).
     pub warnings: Vec<String>,
+    /// Data de revisão do cofre logo depois deste sync (base do sync em segundo plano).
+    pub revision: Option<i64>,
+}
+
+/// Resultado de "o cofre mudou no servidor?".
+pub struct Revision {
+    /// Data de revisão (ms).
+    pub date: i64,
+    /// Tokens renovados no caminho (o access token tinha vencido).
+    pub tokens: Option<(String, Option<String>)>,
+}
+
+/// Pergunta ao servidor quando o cofre mudou (barato; não baixa o cofre).
+/// Usa o access token atual e só renova se ele tiver vencido.
+pub async fn check_revision(session: &Session) -> Result<Revision, SyncError> {
+    let client = session.client.clone();
+    let (access, refresh_token) = (session.access_token.clone(), session.refresh_token.clone());
+    io::run(async move {
+        if !access.is_empty() {
+            match client.revision_date(&access).await {
+                Ok(date) => return Ok(Revision { date, tokens: None }),
+                Err(ApiError::Unauthorized) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let t = client.refresh(&refresh_token).await?;
+        let date = client.revision_date(&t.access_token).await?;
+        Ok(Revision {
+            date,
+            tokens: Some((t.access_token, t.refresh_token)),
+        })
+    })
+    .await
+    .map_err(sync_error)
 }
 
 /// Uma alteração no cofre.
@@ -558,6 +592,18 @@ fn base_cipher(
         .ok_or_else(|| {
             SyncError::Other("Este item não está mais no cofre. Sincronize e tente de novo.".into())
         })
+}
+
+/// Confere a senha mestra sem rede: deriva a chave e vê se ela abre a user key
+/// do perfil (para itens que pedem a senha de novo). A KDF roda fora da UI.
+pub async fn check_master_password(session: &Session, password: Zeroizing<String>) -> bool {
+    let (email, kdf, sync) = (session.email.clone(), session.kdf, session.sync.clone());
+    io::blocking(move || {
+        MasterKey::derive(&password, &email, kdf)
+            .ok()
+            .is_some_and(|mk| Keys::unlock(&mk, &sync.profile).is_ok())
+    })
+    .await
 }
 
 /// Baixa e decifra um anexo. O conteúdo só existe em memória.
@@ -678,7 +724,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
         }
         _ => false,
     };
-    let (access, refresh, sync, saved_id, warnings) = {
+    let (access, refresh, sync, saved_id, warnings, revision) = {
         let client = session.client.clone();
         let refresh_token = session.refresh_token.clone();
         io::run(async move {
@@ -764,7 +810,16 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                 }
             };
             let sync = client.sync(token).await?;
-            Ok::<_, ApiError>((t.access_token, t.refresh_token, sync, saved_id, warnings))
+            // Base para o sync em segundo plano (se falhar, a próxima checagem acerta).
+            let revision = client.revision_date(token).await.ok();
+            Ok::<_, ApiError>((
+                t.access_token,
+                t.refresh_token,
+                sync,
+                saved_id,
+                warnings,
+                revision,
+            ))
         })
         .await
         .map_err(sync_error)?
@@ -788,6 +843,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
         vault,
         saved_id,
         warnings,
+        revision,
     })
 }
 
@@ -830,7 +886,7 @@ pub fn describe_api_error(e: ApiError) -> String {
             let detail = server_message(&body);
             let lower = detail.as_deref().unwrap_or_default().to_ascii_lowercase();
             if lower.contains("premium") {
-                return "Anexos exigem Bitwarden Premium (ou uma organização). Na conta gratuita                         do bitwarden.com não dá para enviar arquivos."
+                return "Anexos exigem Bitwarden Premium (ou uma organização). Na conta gratuita do bitwarden.com não dá para enviar arquivos."
                     .into();
             }
             if lower.contains("storage") || status == 413 {
@@ -957,6 +1013,32 @@ pub fn supported_providers(providers: &[TwoFactorProvider]) -> Vec<TwoFactorProv
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mensagens para a pessoa não podem ter um buraco de espaços no meio
+    /// (sobra de uma quebra de linha mal feita no código vira lacuna no toast).
+    #[test]
+    fn messages_have_no_runs_of_spaces() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut bad = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (n, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                // Partes ímpares de uma linha cortada em `"` são o conteúdo das strings.
+                let in_string = line.split('"').skip(1).step_by(2);
+                if in_string.into_iter().any(|s| s.trim().contains("   ")) {
+                    bad.push(format!("{}:{}", path.display(), n + 1));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "espaços sobrando em: {bad:?}");
+    }
 
     #[test]
     fn supported_providers_filters_and_orders() {

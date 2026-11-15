@@ -2,20 +2,20 @@
 //!
 //! Fechar a janela só a esconde: o app segue rodando — o atalho `Ctrl+Alt+A`
 //! e o preenchimento no navegador continuam funcionando. Pelo ícone:
-//! clique abre a janela; o botão direito abre um menu com **Abrir**, o
-//! **acesso rápido** (copiar usuário, senha ou código dos itens fixados, sem
-//! abrir a janela), **Gerar e copiar senha**, **Sincronizar agora**,
+//! clique abre a janela; o botão direito abre o menu do app
+//! ([`crate::tray_menu`]), com o tema e a cor de destaque: **acesso rápido**
+//! (copiar usuário, senha ou código dos itens fixados, sem abrir a janela),
+//! **Abrir**, **Gerar e copiar senha**, **Sincronizar agora**,
 //! **Bloquear**/**Desbloquear…** e **Sair**.
-//!
-//! O menu é descrito por [`entries`] a partir de um [`MenuState`] que o app
-//! mantém atualizado; os nomes dos itens fixados ficam só na memória.
 //!
 //! O ícone vive numa thread própria com uma janela invisível do Win32 (como o
 //! atalho global), e os comandos chegam ao app por um canal.
 //! Abrir o executável de novo com o app já rodando só mostra a janela existente.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+
+use gpui_kit::assets::IconName;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::vault_view::CopyShortcut;
 
@@ -27,7 +27,15 @@ pub enum Command {
     Quit,
     Sync,
     GeneratePassword,
-    Copy { item_id: String, what: CopyShortcut },
+    Copy {
+        item_id: String,
+        what: CopyShortcut,
+    },
+    /// Botão direito no ícone: abrir o menu com o canto no cursor (pixels de tela).
+    OpenMenu {
+        x: i32,
+        y: i32,
+    },
 }
 
 /// Um item fixado no acesso rápido, como o menu precisa dele.
@@ -38,6 +46,8 @@ pub struct PinnedEntry {
     pub has_username: bool,
     pub has_password: bool,
     pub has_totp: bool,
+    /// Ícone do tipo do item.
+    pub icon: Option<IconName>,
 }
 
 /// O que o menu mostra: depende de o cofre estar aberto e do acesso rápido.
@@ -47,115 +57,30 @@ pub struct MenuState {
     pub pinned: Vec<PinnedEntry>,
 }
 
-/// Uma linha do menu.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Entry {
-    Action {
-        label: String,
-        command: Command,
-        default: bool,
-    },
-    Separator,
-    Submenu {
-        label: String,
-        entries: Vec<Entry>,
-    },
-}
-
-fn action(label: impl Into<String>, command: Command) -> Entry {
-    Entry::Action {
-        label: label.into(),
-        command,
-        default: false,
+/// Onde pôr o menu (canto de cima à esquerda, em pixels físicos) para que ele
+/// abra junto do cursor e caiba na área de trabalho. Na bandeja de baixo ele
+/// sobe a partir do cursor; com a barra de tarefas em cima ou à esquerda, desce
+/// ou vai para a direita.
+pub fn place_menu(cursor: (i32, i32), size: (i32, i32), work: (i32, i32, i32, i32)) -> (i32, i32) {
+    let (left, top, right, bottom) = work;
+    let (w, h) = size;
+    let mut x = cursor.0 - w;
+    if x < left {
+        x = cursor.0;
     }
-}
-
-/// Maior nome de item mostrado no menu (o resto vira "…").
-const MAX_LABEL: usize = 40;
-
-/// Nome pronto para o menu do Win32: encurtado e com `&` escapado (sozinho,
-/// `&` sublinha a letra seguinte como atalho).
-pub fn menu_label(name: &str) -> String {
-    let name = name.trim();
-    let short: String = if name.chars().count() > MAX_LABEL {
-        let mut cut: String = name.chars().take(MAX_LABEL - 1).collect();
-        cut.push('…');
-        cut
-    } else {
-        name.to_owned()
-    };
-    short.replace('&', "&&")
-}
-
-/// O menu do botão direito para este estado.
-pub fn entries(state: &MenuState) -> Vec<Entry> {
-    let mut out = vec![Entry::Action {
-        label: "Abrir Scout Vault".into(),
-        command: Command::Show,
-        default: true,
-    }];
-    if state.unlocked {
-        let quick: Vec<Entry> = state
-            .pinned
-            .iter()
-            .filter_map(|p| {
-                let mut copy = Vec::new();
-                for (has, label, what) in [
-                    (p.has_username, "Copiar usuário", CopyShortcut::Username),
-                    (p.has_password, "Copiar senha", CopyShortcut::Password),
-                    (p.has_totp, "Copiar código", CopyShortcut::TotpCode),
-                ] {
-                    if has {
-                        copy.push(action(
-                            label,
-                            Command::Copy {
-                                item_id: p.id.clone(),
-                                what,
-                            },
-                        ));
-                    }
-                }
-                (!copy.is_empty()).then(|| Entry::Submenu {
-                    label: menu_label(&p.name),
-                    entries: copy,
-                })
-            })
-            .collect();
-        out.push(Entry::Separator);
-        if !quick.is_empty() {
-            out.push(Entry::Submenu {
-                label: "Acesso rápido".into(),
-                entries: quick,
-            });
-        }
-        out.push(action("Gerar e copiar senha", Command::GeneratePassword));
-        out.push(action("Sincronizar agora", Command::Sync));
-        out.push(Entry::Separator);
-        out.push(action("Bloquear", Command::Lock));
-    } else {
-        out.push(action("Desbloquear…", Command::Show));
+    let mut y = cursor.1 - h;
+    if y < top {
+        y = cursor.1;
     }
-    out.push(Entry::Separator);
-    out.push(action("Sair", Command::Quit));
-    out
+    (
+        x.clamp(left, (right - w).max(left)),
+        y.clamp(top, (bottom - h).max(top)),
+    )
 }
 
-static MENU: Mutex<MenuState> = Mutex::new(MenuState {
-    unlocked: false,
-    pinned: Vec::new(),
-});
-
-/// Atualiza o que o menu mostra (o app chama a cada mudança de tela ou de pinos).
-pub fn set_menu_state(state: MenuState) {
-    let mut current = MENU.lock().unwrap_or_else(|e| e.into_inner());
-    if *current != state {
-        *current = state;
-    }
-}
-
-/// O estado atual do menu (os testes conferem por aqui).
-pub fn menu_state() -> MenuState {
-    MENU.lock().unwrap_or_else(|e| e.into_inner()).clone()
+/// Área de trabalho (sem a barra de tarefas) e escala do monitor principal.
+pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
+    platform::work_area_and_scale()
 }
 
 static SYSTEM: AtomicBool = AtomicBool::new(false);
@@ -189,7 +114,7 @@ impl Tray {
 }
 
 /// Cria o ícone. Cada clique/menu manda um [`Command`] por `tx`.
-pub fn start(tx: std::sync::mpsc::Sender<Command>) -> Result<Tray, String> {
+pub fn start(tx: UnboundedSender<Command>) -> Result<Tray, String> {
     platform::start(tx).map(|hwnd| Tray { hwnd })
 }
 
@@ -224,18 +149,21 @@ fn hwnd_of(window: &gpui_kit::Window) -> Option<isize> {
 #[cfg(windows)]
 mod platform {
     use std::cell::RefCell;
-    use std::sync::mpsc::Sender;
+
+    use tokio::sync::mpsc::UnboundedSender as Sender;
 
     use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::HiDpi::GetDpiForSystem;
     use windows::Win32::UI::Shell::{
         Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
         NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
     };
     use windows::Win32::UI::WindowsAndMessaging::*;
 
-    use super::{Command, Entry};
+    use super::Command;
 
     const CLASS: PCWSTR = w!("ScoutVaultTray");
     /// Mensagem do ícone (cliques).
@@ -287,70 +215,13 @@ mod platform {
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }
 
-    fn wide_z(text: &str) -> Vec<u16> {
-        text.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    /// Monta o menu nativo; `commands[id - 1]` é o comando de cada linha.
-    unsafe fn build(menu: HMENU, entries: &[Entry], commands: &mut Vec<Command>) {
-        for entry in entries {
-            match entry {
-                Entry::Separator => {
-                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-                }
-                Entry::Action {
-                    label,
-                    command,
-                    default,
-                } => {
-                    commands.push(command.clone());
-                    let id = commands.len();
-                    let text = wide_z(label);
-                    let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(text.as_ptr()));
-                    if *default {
-                        let _ = SetMenuDefaultItem(menu, id as u32, 0);
-                    }
-                }
-                Entry::Submenu { label, entries } => {
-                    let Ok(sub) = CreatePopupMenu() else { continue };
-                    build(sub, entries, commands);
-                    let text = wide_z(label);
-                    // O submenu passa a ser do menu pai (sai junto no DestroyMenu).
-                    let _ = AppendMenuW(
-                        menu,
-                        MF_STRING | MF_POPUP,
-                        sub.0 as usize,
-                        PCWSTR(text.as_ptr()),
-                    );
-                }
-            }
-        }
-    }
-
-    unsafe fn show_menu(hwnd: HWND) {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let mut commands = Vec::new();
-        build(menu, &super::entries(&super::menu_state()), &mut commands);
+    /// Pede ao app para abrir o menu no cursor. Trazer a janela invisível para
+    /// a frente dá ao app o direito de focar o menu (regra do Windows).
+    unsafe fn request_menu(hwnd: HWND) {
         let mut pt = Default::default();
         let _ = GetCursorPos(&mut pt);
-        // Sem isso o menu não fecha ao clicar fora (comportamento documentado do Win32).
         let _ = SetForegroundWindow(hwnd);
-        let chosen = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-            pt.x,
-            pt.y,
-            None,
-            hwnd,
-            None,
-        );
-        let _ = DestroyMenu(menu);
-        if let Some(command) = (chosen.0 as usize)
-            .checked_sub(1)
-            .and_then(|i| commands.get(i))
-        {
-            send(command.clone());
-        }
+        send(Command::OpenMenu { x: pt.x, y: pt.y });
     }
 
     unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -358,7 +229,7 @@ mod platform {
             WM_TRAY => {
                 match (lp.0 as u32) & 0xffff {
                     WM_LBUTTONUP => send(Command::Show),
-                    WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd),
+                    WM_RBUTTONUP | WM_CONTEXTMENU => request_menu(hwnd),
                     _ => {}
                 }
                 LRESULT(0)
@@ -467,6 +338,24 @@ mod platform {
         }
     }
 
+    pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
+        let mut rect = RECT::default();
+        // SAFETY: só lê a área de trabalho e o DPI do sistema.
+        unsafe {
+            let _ = SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some(&mut rect as *mut RECT as *mut _),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+            let scale = GetDpiForSystem() as f32 / 96.;
+            (
+                (rect.left, rect.top, rect.right, rect.bottom),
+                if scale > 0. { scale } else { 1. },
+            )
+        }
+    }
+
     pub fn show(hwnd: isize, visible: bool) {
         let hwnd = HWND(hwnd as *mut _);
         // SAFETY: HWND da própria janela do app.
@@ -488,7 +377,7 @@ mod platform {
 mod platform {
     use super::Command;
 
-    pub fn start(_: std::sync::mpsc::Sender<Command>) -> Result<isize, String> {
+    pub fn start(_: tokio::sync::mpsc::UnboundedSender<Command>) -> Result<isize, String> {
         Err("bandeja só no Windows por enquanto".into())
     }
     pub fn remove(_: isize) {}
@@ -497,6 +386,9 @@ mod platform {
         false
     }
     pub fn show(_: isize, _: bool) {}
+    pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
+        ((0, 0, 1920, 1080), 1.)
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -506,14 +398,19 @@ mod tests {
     #[test]
     #[ignore]
     fn tray_icon_starts_is_found_and_goes_away() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let tray = super::start(tx).expect("criar o ícone");
         // A "segunda instância" acha a primeira e pede para aparecer.
         assert!(super::wake_existing_instance());
-        assert_eq!(
-            rx.recv_timeout(std::time::Duration::from_secs(2)),
-            Ok(super::Command::Show)
-        );
+        let mut got = None;
+        for _ in 0..200 {
+            if let Ok(c) = rx.try_recv() {
+                got = Some(c);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(got, Some(super::Command::Show));
         drop(tray);
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(!super::wake_existing_instance(), "o ícone saiu junto");
@@ -522,103 +419,25 @@ mod tests {
 
 #[cfg(test)]
 mod menu_tests {
-    use super::{entries, menu_label, Command, Entry, MenuState, PinnedEntry};
-    use crate::vault_view::CopyShortcut;
+    use super::place_menu;
 
-    fn labels(entries: &[Entry]) -> Vec<String> {
-        entries
-            .iter()
-            .map(|e| match e {
-                Entry::Action { label, .. } | Entry::Submenu { label, .. } => label.clone(),
-                Entry::Separator => "-".into(),
-            })
-            .collect()
+    const WORK: (i32, i32, i32, i32) = (0, 0, 1920, 1040);
+
+    #[test]
+    fn opens_above_and_left_of_the_cursor_in_the_tray() {
+        assert_eq!(place_menu((1800, 1060), (300, 400), WORK), (1500, 640));
     }
 
     #[test]
-    fn locked_menu_only_opens_and_quits() {
-        let menu = entries(&MenuState::default());
+    fn stays_inside_the_work_area() {
+        // Cursor no canto de cima (barra de tarefas em cima): desce.
         assert_eq!(
-            labels(&menu),
-            ["Abrir Scout Vault", "Desbloquear…", "-", "Sair"]
+            place_menu((1800, 10), (300, 400), (0, 40, 1920, 1080)),
+            (1500, 40)
         );
-        assert!(matches!(
-            &menu[0],
-            Entry::Action {
-                command: Command::Show,
-                default: true,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn unlocked_menu_has_quick_access_with_only_existing_fields() {
-        let state = MenuState {
-            unlocked: true,
-            pinned: vec![
-                PinnedEntry {
-                    id: "a".into(),
-                    name: "Banco & Cia".into(),
-                    has_username: true,
-                    has_password: true,
-                    has_totp: false,
-                },
-                // Nota sem nada para copiar: não aparece.
-                PinnedEntry {
-                    id: "n".into(),
-                    name: "Nota".into(),
-                    ..Default::default()
-                },
-            ],
-        };
-        let menu = entries(&state);
-        assert_eq!(
-            labels(&menu),
-            [
-                "Abrir Scout Vault",
-                "-",
-                "Acesso rápido",
-                "Gerar e copiar senha",
-                "Sincronizar agora",
-                "-",
-                "Bloquear",
-                "-",
-                "Sair"
-            ]
-        );
-        let Entry::Submenu { entries: quick, .. } = &menu[2] else {
-            panic!()
-        };
-        assert_eq!(labels(quick), ["Banco && Cia"]);
-        let Entry::Submenu { entries: copy, .. } = &quick[0] else {
-            panic!()
-        };
-        assert_eq!(labels(copy), ["Copiar usuário", "Copiar senha"]);
-        assert!(matches!(
-            &copy[1],
-            Entry::Action {
-                command: Command::Copy {
-                    item_id,
-                    what: CopyShortcut::Password
-                },
-                ..
-            } if item_id == "a"
-        ));
-        // Sem itens fixados, sem submenu.
-        let menu = entries(&MenuState {
-            unlocked: true,
-            pinned: Vec::new(),
-        });
-        assert!(!labels(&menu).contains(&"Acesso rápido".to_owned()));
-    }
-
-    #[test]
-    fn long_names_are_cut_and_ampersands_escaped() {
-        assert_eq!(menu_label("  A&B  "), "A&&B");
-        let long = "x".repeat(60);
-        let cut = menu_label(&long);
-        assert_eq!(cut.chars().count(), 40);
-        assert!(cut.ends_with('…'));
+        // Perto da borda esquerda: vai para a direita do cursor.
+        assert_eq!(place_menu((100, 1060), (300, 400), WORK), (100, 640));
+        // Menu maior que a tela não sai pela esquerda/topo.
+        assert_eq!(place_menu((50, 50), (3000, 3000), WORK), (0, 0));
     }
 }

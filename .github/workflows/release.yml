@@ -1,0 +1,86 @@
+name: Release
+
+# Publicar uma versão:
+#   1. No CHANGELOG.md, troque "## [Ainda não lançado]" por "## [X.Y.Z] - AAAA-MM-DD"
+#      (e abra uma seção "Ainda não lançado" vazia em cima, se quiser).
+#   2. Ponha a mesma versão em [workspace.package] no Cargo.toml (e no manifest da extensão).
+#   3. Commit, `git tag vX.Y.Z` e `git push origin vX.Y.Z`.
+# Este workflow testa, compila, empacota e cria a release com as notas daquela
+# seção do CHANGELOG. Versões 0.x saem como pré-release.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: Compilar e empacotar (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Primeiro as notas: se a tag não bate com o Cargo.toml ou falta a seção
+      # no CHANGELOG, para aqui antes de gastar minutos compilando.
+      - name: Notas da release (CHANGELOG.md)
+        shell: bash
+        run: python tools/release_notes.py "${GITHUB_REF_NAME}" --out release-notes.md
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Testes
+        run: cargo test --workspace --locked
+      - name: Compilar
+        run: cargo build --release --locked -p scout-vault-app
+      - name: Empacotar
+        shell: bash
+        run: python tools/package_release.py "${GITHUB_REF_NAME}" --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            release-notes.md
+          if-no-files-found: error
+
+  publish:
+    name: Publicar no GitHub
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Só este job escreve no repositório (cria a release).
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - name: Criar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          version="${TAG#v}"
+          flags=()
+          # 0.x = versão de teste.
+          if [[ "$version" == 0.* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --repo "$REPO" --verify-tag \
+            --title "Scout Vault $version" \
+            --notes-file release-notes.md \
+            "${flags[@]}" \
+            dist/*.zip dist/*.sha256

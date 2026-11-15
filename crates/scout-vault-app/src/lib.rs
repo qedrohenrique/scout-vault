@@ -22,6 +22,7 @@ pub mod clipboard;
 pub mod dnd;
 pub mod flow;
 pub mod generator_view;
+pub mod hello;
 mod io;
 pub mod item_editor;
 pub mod item_list;
@@ -33,12 +34,15 @@ pub mod secrets;
 pub mod settings;
 pub mod settings_view;
 pub mod sso;
+pub mod theme_fx;
 pub mod toast;
 pub mod tray;
+pub mod tray_menu;
 mod ui;
 pub mod unlock;
 pub mod vault_view;
 pub mod webauthn;
+pub mod windows_events;
 
 use gpui_kit::*;
 
@@ -64,6 +68,8 @@ pub fn run() {
             autotype::enable_system_hotkey();
             // Fechar a janela deixa o app na bandeja do Windows.
             tray::enable_system();
+            // Desbloquear com Windows Hello (se configurado no Windows).
+            hello::install_system(cx);
             let options = WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Scout Vault".into()),

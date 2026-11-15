@@ -14,6 +14,10 @@
 //! - O pipe recusa conexões remotas e tem ACL só para o usuário atual.
 //! - A lista mostra nomes e usuários; a **senha só sai** quando a pessoa clica
 //!   num login, e só se o item tiver um endereço do mesmo site da aba.
+//! - **Salvar logins:** quando um formulário de login é enviado num site, a
+//!   extensão pergunta ao app (`check`) se aquilo é novo ou uma senha nova;
+//!   a resposta não traz senha nenhuma. Só depois do "Salvar"/"Atualizar" da
+//!   pessoa a extensão manda `save`, e o app decide de novo o que fazer.
 
 use std::io::{BufRead, BufReader, Read, Write};
 
@@ -41,8 +45,120 @@ pub const EXTENSION_ID: &str = "emnfjpfkonpjndbkkhamknedgdljjnoe";
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Request {
     Status,
-    List { url: String },
-    Fill { id: String, url: String },
+    List {
+        url: String,
+    },
+    Fill {
+        id: String,
+        url: String,
+    },
+    /// Um login foi enviado num site: é novo, é uma senha nova ou já está salvo?
+    Check {
+        url: String,
+        username: String,
+        password: String,
+    },
+    /// A pessoa confirmou: salvar (ou atualizar a senha d)o login.
+    Save {
+        url: String,
+        username: String,
+        password: String,
+    },
+}
+
+/// O que fazer com um login enviado num site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveDecision {
+    /// Já está salvo assim (ou não dá para salvar).
+    Nothing,
+    New,
+    /// Mesmo usuário neste site com outra senha.
+    Update {
+        id: String,
+        name: String,
+    },
+}
+
+/// Decide entre salvar, atualizar ou nada, olhando os logins **editáveis** do site.
+pub fn decide_save(items: &[Item], url: &str, username: &str, password: &str) -> SaveDecision {
+    if password.is_empty() || host_of(url).is_none() {
+        return SaveDecision::Nothing;
+    }
+    let user = username.trim().to_lowercase();
+    let mut same_user: Option<&Item> = None;
+    for item in items {
+        let Some(login) = login_for(item, url) else {
+            continue;
+        };
+        let saved_user = login
+            .username
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if saved_user != user {
+            continue;
+        }
+        if login.password.as_ref().map(|p| p.expose()) == Some(password) {
+            return SaveDecision::Nothing;
+        }
+        same_user.get_or_insert(item);
+    }
+    match same_user {
+        Some(item) => SaveDecision::Update {
+            id: item.id.clone(),
+            name: item.name.clone(),
+        },
+        None => SaveDecision::New,
+    }
+}
+
+/// Endereço salvo no login novo: esquema + host (sem caminho nem parâmetros).
+fn origin_of(url: &str) -> String {
+    let url = url.trim();
+    let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    )
+}
+
+/// Login novo a partir do que foi enviado no site.
+pub fn new_login(url: &str, username: &str, password: &str) -> Item {
+    let host = host_of(url).unwrap_or_default();
+    let username = username.trim();
+    Item {
+        id: String::new(),
+        organization_id: None,
+        folder_id: None,
+        name: host,
+        notes: None,
+        favorite: false,
+        reprompt: false,
+        deleted: false,
+        revision_date: None,
+        attachments: Vec::new(),
+        collection_ids: Vec::new(),
+        fields: Vec::new(),
+        kind: ItemKind::Login(scout_vault_core::vault::Login {
+            username: (!username.is_empty()).then(|| username.to_owned()),
+            password: Some(scout_vault_core::Secret::new(password.to_owned())),
+            totp: None,
+            uris: vec![origin_of(url)],
+        }),
+    }
+}
+
+/// O mesmo login com a senha nova (o histórico guarda a antiga ao salvar).
+pub fn with_password(item: &Item, password: &str) -> Item {
+    let mut item = item.clone();
+    if let ItemKind::Login(login) = &mut item.kind {
+        login.password = Some(scout_vault_core::Secret::new(password.to_owned()));
+    }
+    item
 }
 
 /// Pedido vindo do navegador + onde responder.
@@ -143,6 +259,9 @@ pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
             json!({ "locked": false, "items": list })
         }
         Request::Fill { id, url } => match items.iter().find(|i| &i.id == id) {
+            Some(item) if item.reprompt => json!({
+                "error": "Este item pede a senha mestra. Use o Scout Vault para copiar ou digitar (Ctrl+Alt+A)."
+            }),
             Some(item) => match login_for(item, url) {
                 Some(l) => json!({
                     "username": l.username,
@@ -152,6 +271,17 @@ pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
             },
             None => json!({ "error": "Login não encontrado." }),
         },
+        Request::Check {
+            url,
+            username,
+            password,
+        } => match decide_save(items, url, username, password) {
+            SaveDecision::Nothing => json!({ "action": "none" }),
+            SaveDecision::New => json!({ "action": "save" }),
+            SaveDecision::Update { name, .. } => json!({ "action": "update", "name": name }),
+        },
+        // Salvar mexe no cofre: quem atende é o app (`ScoutVaultApp::handle_browser`).
+        Request::Save { .. } => json!({ "error": "Pedido desconhecido." }),
     }
 }
 
@@ -532,6 +662,102 @@ mod tests {
                 totp: None,
                 uris: uris.iter().map(|u| u.to_string()).collect(),
             }),
+        }
+    }
+
+    #[test]
+    fn save_decision_new_update_or_nothing() {
+        let items = vec![
+            login("a", &["https://github.com"]),
+            login("b", &["https://gitlab.com"]),
+        ];
+        let url = "https://github.com/session";
+        // Já salvo igual (usuário sem diferença de maiúsculas/espaços).
+        assert_eq!(
+            decide_save(&items, url, " USER-A ", "senha-a"),
+            SaveDecision::Nothing
+        );
+        // Mesmo usuário, senha nova: atualizar.
+        assert_eq!(
+            decide_save(&items, url, "user-a", "nova"),
+            SaveDecision::Update {
+                id: "a".into(),
+                name: "Item a".into()
+            }
+        );
+        // Outro usuário no mesmo site, ou site sem login salvo: novo.
+        assert_eq!(decide_save(&items, url, "outra", "x"), SaveDecision::New);
+        assert_eq!(
+            decide_save(&items, "https://example.org", "user-a", "senha-a"),
+            SaveDecision::New
+        );
+        // Sem senha ou sem site: nada.
+        assert_eq!(
+            decide_save(&items, url, "user-a", ""),
+            SaveDecision::Nothing
+        );
+        assert_eq!(
+            decide_save(&items, "javascript:alert(1)", "u", "p"),
+            SaveDecision::Nothing
+        );
+        // A resposta do `check` nunca leva senha.
+        let r = handle(
+            &Request::Check {
+                url: url.into(),
+                username: "user-a".into(),
+                password: "nova".into(),
+            },
+            Some(&items),
+        );
+        assert_eq!(r, json!({ "action": "update", "name": "Item a" }));
+        assert_eq!(
+            handle(
+                &Request::Check {
+                    url: url.into(),
+                    username: "u".into(),
+                    password: "p".into()
+                },
+                None
+            ),
+            json!({ "locked": true })
+        );
+    }
+
+    #[test]
+    fn new_logins_keep_only_the_site_origin() {
+        let item = new_login(
+            "https://Login.Example.com:8443/entrar?next=/x#y",
+            " eu ",
+            "pw",
+        );
+        assert_eq!(item.name, "login.example.com");
+        let ItemKind::Login(l) = &item.kind else {
+            panic!()
+        };
+        assert_eq!(l.username.as_deref(), Some("eu"));
+        assert_eq!(l.password.as_ref().unwrap().expose(), "pw");
+        assert_eq!(l.uris, ["https://login.example.com:8443"]);
+        let no_user = new_login("http://intranet.local/", "", "pw");
+        let ItemKind::Login(l) = &no_user.kind else {
+            panic!()
+        };
+        assert_eq!(l.username, None);
+        assert_eq!(l.uris, ["http://intranet.local"]);
+        let updated = with_password(&login("a", &["https://github.com"]), "nova");
+        let ItemKind::Login(l) = &updated.kind else {
+            panic!()
+        };
+        assert_eq!(l.password.as_ref().unwrap().expose(), "nova");
+        assert_eq!(updated.id, "a");
+    }
+
+    #[test]
+    fn bridge_accepts_check_and_save() {
+        for message in [
+            json!({ "type": "check", "url": "https://a.com", "username": "u", "password": "p" }),
+            json!({ "type": "save", "url": "https://a.com", "username": "u", "password": "p" }),
+        ] {
+            assert!(serde_json::from_value::<Request>(message).is_ok());
         }
     }
 

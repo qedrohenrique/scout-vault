@@ -6,7 +6,7 @@ use gpui_kit::component::{button::*, *};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::appearance::{self, Accent, Appearance, Corners, Motion, TextSize, ThemeChoice};
+use crate::appearance::{Accent, Appearance, Corners, Motion, TextSize, ThemeChoice};
 use crate::autotype;
 use crate::settings::{AutoTypeSettings, SettingsStore};
 use crate::ui::{self, Segment};
@@ -14,6 +14,8 @@ use gpui_kit::component::switch::Switch;
 
 pub enum SettingsEvent {
     Close,
+    /// Ligou/desligou o Windows Hello (o app cria ou apaga a chave).
+    WindowsHello(bool),
 }
 
 pub struct SettingsView {
@@ -22,6 +24,9 @@ pub struct SettingsView {
     autotype: AutoTypeSettings,
     remember_session: bool,
     close_to_tray: bool,
+    lock_with_windows: bool,
+    windows_hello: bool,
+    background_sync: bool,
     unlock_memory_days: u32,
     relogin_days: u32,
     auto_lock_minutes: u32,
@@ -40,6 +45,9 @@ impl SettingsView {
             autotype: loaded.autotype,
             remember_session: loaded.remember_session,
             close_to_tray: loaded.close_to_tray,
+            lock_with_windows: loaded.lock_with_windows,
+            windows_hello: loaded.windows_hello,
+            background_sync: loaded.background_sync,
             unlock_memory_days: loaded.unlock_memory_days,
             relogin_days: loaded.relogin_days,
             auto_lock_minutes: loaded.auto_lock_minutes,
@@ -53,15 +61,23 @@ impl SettingsView {
     }
 
     /// Aplica na hora e grava.
-    pub fn set_appearance(&mut self, next: Appearance, window: &Window, cx: &mut Context<Self>) {
+    pub fn set_appearance(
+        &mut self,
+        next: Appearance,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if next == self.appearance {
             return;
         }
+        let prev = self.appearance;
         self.appearance = next;
         let mut settings = self.store.load();
         settings.appearance = next;
         self.store.save(&settings);
-        appearance::apply(&next, Some(window), cx);
+        // Com transição: claro↔escuro "pinta" a janela a partir do clique; o resto, fade.
+        let origin = window.mouse_position();
+        crate::theme_fx::change(&prev, &next, origin, window, cx);
         cx.notify();
     }
 
@@ -123,6 +139,37 @@ impl SettingsView {
         )
     }
 
+    pub fn set_background_sync(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.background_sync = on;
+        let mut settings = self.store.load();
+        settings.background_sync = on;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
+    /// Liga/desliga o desbloqueio com Windows Hello (o app faz o resto).
+    pub fn set_windows_hello(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.show_windows_hello(on, cx);
+        let mut settings = self.store.load();
+        settings.windows_hello = on;
+        self.store.save(&settings);
+        cx.emit(SettingsEvent::WindowsHello(on));
+    }
+
+    /// Só atualiza a chave na tela (o app desfez a opção, por exemplo).
+    pub fn show_windows_hello(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.windows_hello = on;
+        cx.notify();
+    }
+
+    pub fn set_lock_with_windows(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.lock_with_windows = on;
+        let mut settings = self.store.load();
+        settings.lock_with_windows = on;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
     pub fn set_close_to_tray(&mut self, on: bool, cx: &mut Context<Self>) {
         self.close_to_tray = on;
         let mut settings = self.store.load();
@@ -182,7 +229,7 @@ impl SettingsView {
     fn update(
         &mut self,
         edit: impl FnOnce(&mut Appearance),
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut next = self.appearance;
@@ -576,6 +623,41 @@ impl Render for SettingsView {
                     "Bloquear sem uso após",
                     "Tempo sem mexer no teclado ou no mouse até o cofre bloquear.",
                     lock_control,
+                    cx,
+                ),
+                Self::row(
+                    "Sincronizar em segundo plano",
+                    "A cada minuto o app pergunta ao servidor se o cofre mudou (no celular, no cofre web…) e, se mudou, atualiza sozinho. A pergunta não baixa o cofre.",
+                    Switch::new("background-sync")
+                        .checked(self.background_sync)
+                        .on_click(cx.listener(|this, v: &bool, _, cx| {
+                            this.set_background_sync(*v, cx)
+                        })),
+                    cx,
+                ),
+                Self::row(
+                    "Desbloquear com Windows Hello",
+                    if crate::hello::available(cx) {
+                        "Rosto, digital ou PIN do Windows no lugar da senha mestra. A chave fica cifrada pelo Windows Hello; se a senha mestra mudar, ligue de novo."
+                    } else {
+                        "O Windows Hello não está configurado neste computador (Configurações do Windows › Contas › Opções de entrada)."
+                    },
+                    Switch::new("windows-hello")
+                        .checked(self.windows_hello)
+                        .disabled(!crate::hello::available(cx) && !self.windows_hello)
+                        .on_click(cx.listener(|this, v: &bool, _, cx| {
+                            this.set_windows_hello(*v, cx)
+                        })),
+                    cx,
+                ),
+                Self::row(
+                    "Bloquear junto com o Windows",
+                    "Ao bloquear o computador (Win+L) ou ao suspender/hibernar, o cofre também bloqueia.",
+                    Switch::new("lock-with-windows")
+                        .checked(self.lock_with_windows)
+                        .on_click(cx.listener(|this, v: &bool, _, cx| {
+                            this.set_lock_with_windows(*v, cx)
+                        })),
                     cx,
                 ),
                 Self::row(

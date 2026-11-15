@@ -7,7 +7,8 @@ desktop Electron no uso diário — e que vá além dele onde um app nativo de d
 
 **Princípios**
 - Nada decifrado vai para o disco (exceção explícita e opcional: a user key no Gerenciador de
-  Credenciais para "abrir sem senha por N dias"). Segredos vivem em memória com `zeroize`.
+  Credenciais para "abrir sem senha por N dias"; com Windows Hello ela fica cifrada pelo Hello).
+  Segredos vivem em memória com `zeroize`.
 - `scout-vault-core` não conhece UI: protocolo e criptografia testáveis sozinhos.
 - Desenvolvimento contra um **Vaultwarden local** (`dev/`); conta real só para validação manual.
 - Implementar a partir das especificações e de projetos MIT (ex.: [`rbw`](https://github.com/doy/rbw));
@@ -21,7 +22,7 @@ desktop Electron no uso diário — e que vá além dele onde um app nativo de d
 | Área | Feito |
 |---|---|
 | **Conta** | Login (PBKDF2/Argon2id), 2FA (autenticador, e-mail, YubiKey, FIDO2/Windows Hello, Duo), novo dispositivo, "lembrar dispositivo", SSO com senha mestra, contas v2 (COSE), captcha/limite de tentativas explicados |
-| **Sessão** | Sessão lembrada e cache cifrado (abre offline), abrir sem senha por N dias, login completo a cada N dias, bloqueio por inatividade configurável, troca de senha detectada |
+| **Sessão** | Sessão lembrada e cache cifrado (abre offline), abrir sem senha por N dias, login completo a cada N dias, desbloqueio com Windows Hello, sync em segundo plano, bloqueio por inatividade configurável, bloqueio junto com o Windows (Win+L e suspensão), troca de senha detectada |
 | **Cofre** | Todos os tipos de item, busca, filtros, pastas (CRUD), organizações e coleções (criar/escolher/trocar), acesso rápido (itens fixados), TOTP ao vivo, lixeira, anexos (enviar/abrir/salvar, arrastar e soltar), histórico de senha preservado |
 | **Escrita** | Criar/editar/lixeira/restaurar/apagar, preservando passkeys, regras de URI e campos desconhecidos |
 | **Windows** | Preencher em apps (`Ctrl+Alt+A`), bandeja (fechar ≠ sair), instância única, área de transferência fora do Win+V, ícone/recursos do executável |
@@ -43,13 +44,13 @@ desktop + extensão** no Windows. Recursos variam por plano; ✅ tem, 🟡 parci
 | App nativo leve (sem Electron) | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Sincronização na nuvem / multi-dispositivo | ✅ (servidor Bitwarden) | ✅ | ✅ | ❌ (arquivo) | ✅ |
 | Preenchimento no navegador | 🟡 popup | ✅ inline + automático | ✅ | ✅ | ✅ |
-| Salvar/atualizar login pelo navegador | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Salvar/atualizar login pelo navegador | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Preencher em apps do desktop (auto-type) | ✅ | ❌ | 🟡 | ✅ | ❌ |
 | Passkeys (criar e usar) | ❌ (preserva) | ✅ | ✅ | ✅ | ✅ |
 | Busca rápida global (atalho no sistema) | ❌ | ❌ | ✅ Quick Access | 🟡 | ❌ |
-| Desbloquear com Windows Hello | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Bloquear junto com o Windows | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Re-prompt da senha em itens sensíveis | ❌ (aviso) | ✅ | 🟡 | ❌ | ❌ |
+| Desbloquear com Windows Hello | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Bloquear junto com o Windows | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Re-prompt da senha em itens sensíveis | ✅ | ✅ | 🟡 | ❌ | ❌ |
 | Saúde das senhas (fracas, repetidas, vazadas) | ❌ | ✅ relatórios | ✅ Watchtower | ✅ | ✅ |
 | Gerador de passphrase e de usuário | 🟡 só senha | ✅ | ✅ | ✅ | ✅ |
 | Aliases de e-mail (esconder e-mail) | ❌ | ✅ via serviços | ✅ | ❌ | ✅ nativo |
@@ -70,22 +71,22 @@ desktop + extensão** no Windows. Recursos variam por plano; ✅ tem, 🟡 parci
 área de transferência fora do histórico, interface animada e acessível pelo teclado, Vaultwarden
 como cidadão de primeira classe.
 
-**Lacunas que mais pesam no dia a dia:** salvar logins pelo navegador e preenchimento inline,
-Windows Hello e bloqueio com o Windows, passkeys, saúde das senhas, instalador.
+**Lacunas que mais pesam no dia a dia:** preenchimento inline no navegador, passkeys, saúde das
+senhas, instalador (Windows Hello, bloqueio com o Windows, re-prompt e salvar logins já entraram).
 
 ---
 
 ## Próximas fases (prioridade de cima para baixo)
 
 ### Fase A — Segurança do dia a dia
-- **Desbloquear com Windows Hello** (chave protegida por TPM/DPAPI, com fallback na senha).
-- **Bloquear ao bloquear/suspender o Windows** (`WTSRegisterSessionNotification`, `WM_POWERBROADCAST`).
-- **Re-prompt** da senha mestra para itens marcados (revelar, copiar, preencher, editar).
+- ~~Desbloquear com Windows Hello~~ — feito: a user key fica cifrada por uma assinatura do Hello (chave no TPM), com a senha mestra como alternativa.
+- ~~Bloquear ao bloquear/suspender o Windows~~ — feito (opção "Bloquear junto com o Windows", ligada por padrão).
+- ~~Re-prompt da senha mestra~~ — feito: itens marcados pedem a senha para revelar, copiar, editar e digitar; o navegador não recebe esses itens.
 - Bloquear ao minimizar (opcional) e "limpar área de transferência" com tempo configurável.
-- **Sync em segundo plano**: periódico e via notificações do servidor (`/notifications/hub`, SignalR).
+- ~~Sync em segundo plano~~ — feito: a cada minuto o app consulta `accounts/revision-date` (barato) e sincroniza só se o cofre mudou. Próximo passo: notificações em tempo real (`/notifications/hub`, SignalR via WebSocket).
 
 ### Fase B — Navegador de primeira linha
-- **Salvar e atualizar logins** a partir do formulário enviado no site.
+- ~~Salvar e atualizar logins~~ — feito: barra "Salvar/Atualizar no Scout Vault?" depois do envio do formulário; o app decide entre novo e atualização.
 - **Menu inline** no campo (ícone do Scout Vault dentro do input) e atalho de teclado na página.
 - Preenchimento de **cartões e identidades**; copiar TOTP automaticamente após preencher.
 - **Firefox** (manifest próprio, `allowed_extensions`).

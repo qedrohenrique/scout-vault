@@ -95,7 +95,8 @@ fn opens_the_whole_vault() {
     let banco = item("login-1");
     assert_eq!(banco.name, "Meu Banco");
     assert_eq!(banco.folder_id.as_deref(), Some("folder-1"));
-    assert!(banco.favorite && banco.reprompt && !banco.deleted);
+    assert!(banco.favorite && !banco.reprompt && !banco.deleted);
+    assert!(item("login-item-key").reprompt, "pede a senha mestra");
     assert_eq!(
         banco.notes.as_ref().unwrap().expose(),
         "nota com\nduas linhas"

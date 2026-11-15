@@ -31,7 +31,13 @@ gpui_kit::assets::icon_assets!(
         Check,
         Info,
         Pin,
-        PinOff
+        PinOff,
+        LockOpen,
+        Power,
+        WandSparkles,
+        Timer,
+        AppWindow,
+        ScanFace
     ]
 );
 
@@ -110,6 +116,13 @@ mod tests {
         IconName::Info,
         IconName::Pin,
         IconName::PinOff,
+        IconName::LockOpen,
+        IconName::Power,
+        IconName::WandSparkles,
+        IconName::Timer,
+        IconName::AppWindow,
+        IconName::ScanFace,
+        IconName::User,
     ];
 
     /// Nenhum ícone usado no código (`IconName::…`) pode faltar em `USED` (e, portanto, no binário).

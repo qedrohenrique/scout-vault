@@ -121,6 +121,9 @@ pub fn clear(store: &SettingsStore) {
         store
             .secrets()
             .delete(&quick_key(&saved.urls, &saved.email));
+        store
+            .secrets()
+            .delete(&crate::hello::key_name(&saved.urls.identity, &saved.email));
     }
     store.write_session_blob(None);
 }

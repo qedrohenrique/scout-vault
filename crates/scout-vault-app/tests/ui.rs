@@ -402,7 +402,13 @@ fn same_color(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> bool {
 
 #[gpui_kit::test]
 fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
+    use scout_vault_app::theme_fx;
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let settle = |cx: &mut TestAppContext| {
+        cx.executor().advance_clock(theme_fx::FLIP * 2);
+        cx.run_until_parked();
+    };
+    let mut light_bg = gpui_kit::Hsla::default();
 
     // Começa com a cor padrão (jade) aplicada.
     cx.update(|cx| {
@@ -420,22 +426,61 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert!(window.try_find("settings-close").is_some());
 
+        light_bg = cx.theme().background;
+        // Claro → escuro: a interface não some — o modo já é o novo, mas as
+        // cores começam de onde estavam…
         window.click("theme-dark", cx);
         assert!(cx.theme().is_dark());
-        window.click("accent-coral", cx);
-        assert!(same_color(cx.theme().primary, Accent::Coral.swatch(true)));
+        assert!(same_color(cx.theme().background, light_bg));
+        assert!(theme_fx::running(cx));
+    })
+    .unwrap();
+    // …no meio, cada cor é uma mistura das duas…
+    cx.executor().advance_clock(theme_fx::FLIP / 2);
+    cx.run_until_parked();
+    let mid = cx.update(|cx| cx.theme().background);
+    assert!(!same_color(mid, light_bg));
+    assert!(cx.update(|cx| theme_fx::running(cx)));
+    // …e no fim chega exatamente ao tema escuro.
+    settle(cx);
+    cx.update(|cx| {
+        assert!(cx.theme().background.l < mid.l);
+        assert!(!theme_fx::running(cx));
+    });
 
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        // A cor de destaque também se transforma (não pula).
+        window.click("accent-coral", cx);
+        assert!(theme_fx::running(cx));
+        assert!(!same_color(cx.theme().primary, Accent::Coral.swatch(true)));
+    })
+    .unwrap();
+    settle(cx);
+    cx.update(|cx| assert!(same_color(cx.theme().primary, Accent::Coral.swatch(true))));
+
+    // Outra troca no meio de uma transição continua dali para o novo alvo.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
         window.click("theme-light", cx);
+    })
+    .unwrap();
+    cx.executor().advance_clock(theme_fx::FLIP / 3);
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("text-large", cx);
+        window.click("corners-round", cx);
+    })
+    .unwrap();
+    settle(cx);
+    cx.update(|cx| {
         assert!(!cx.theme().is_dark());
         // A cor escolhida sobrevive à troca de modo.
         assert!(same_color(cx.theme().primary, Accent::Coral.swatch(false)));
-
-        window.click("text-large", cx);
         assert_eq!(cx.theme().font_size, gpui_kit::px(17.));
-        window.click("corners-round", cx);
         assert_eq!(cx.theme().radius, gpui_kit::px(10.));
-    })
-    .unwrap();
+    });
 
     cx.update(|cx| {
         let view = app.read(cx).settings_view().unwrap();
@@ -748,6 +793,16 @@ fn autotype_asks_when_the_title_does_not_decide(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert!(window.try_find("autotype-pick-login-1").is_none());
         window.click("autotype-pick-login-item-key", cx);
+    })
+    .unwrap();
+    // Este item pede a senha mestra: nada é digitado antes de confirmar.
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(typed.lock().unwrap().is_empty());
+        window.click("reprompt-password", cx);
+        window.input(&password, cx);
+        window.press("enter", cx);
     })
     .unwrap();
     wait_until(cx, |_| !typed.lock().unwrap().is_empty());
@@ -2562,6 +2617,7 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
             has_username: true,
             has_password: true,
             has_totp: true,
+            icon: Some(gpui_kit::assets::IconName::Globe),
         }]
     );
 
@@ -2624,4 +2680,891 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert!(texts(cx).contains(&"Desbloqueie o cofre para copiar.".to_owned()));
+}
+
+/// O menu da bandeja é uma janela do app: abre no cursor, cada linha faz a
+/// ação e fecha o menu; `Esc` fecha; bloqueado, só oferece desbloquear.
+#[gpui_kit::test]
+fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
+    use scout_vault_app::tray::Command;
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    cx.update(|cx| vault.update(cx, |v, _| v.set_pinned(vec!["login-1".into()])));
+    let open = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |a, cx| {
+                a.handle_tray(Command::OpenMenu { x: 1800, y: 1060 }, window, cx)
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| app.read(cx).tray_menu())
+            .expect("menu aberto")
+    };
+    let is_open = |cx: &mut TestAppContext, menu: AnyWindowHandle| {
+        cx.update_window(menu, |_, _, _| ()).is_ok()
+    };
+
+    // Aberto: acesso rápido com os botões de cada campo do item.
+    let (menu, view) = open(cx);
+    assert!(cx.update(|cx| view.read(cx).state().unlocked));
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        for id in [
+            "tray-pin-login-1",
+            "tray-pin-login-1-user",
+            "tray-pin-login-1-pass",
+            "tray-pin-login-1-code",
+            "tray-menu-open",
+            "tray-menu-generate",
+            "tray-menu-sync",
+            "tray-menu-lock",
+            "tray-menu-quit",
+        ] {
+            assert!(window.try_find(id).is_some(), "falta {id}");
+        }
+        assert!(window.try_find("tray-menu-unlock").is_none());
+        window.click("tray-pin-login-1-pass", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(texts(cx), ["Copiado: Senha · some em 30 s"]);
+    assert!(!is_open(cx, menu), "escolher fecha o menu");
+
+    // Abrir de novo troca o menu; Esc fecha.
+    let (menu, _) = open(cx);
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(!is_open(cx, menu));
+
+    // Gerar senha pelo menu.
+    let (menu, _) = open(cx);
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("tray-menu-generate", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(texts(cx).contains(&"Senha gerada e copiada · some em 30 s".to_owned()));
+
+    // Bloquear pelo menu; o próximo menu só oferece desbloquear e gerar.
+    let (menu, _) = open(cx);
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("tray-menu-lock", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| app.read(cx).screen_kind()),
+        ScreenKind::Locked
+    );
+    let (menu, view) = open(cx);
+    assert!(!cx.update(|cx| view.read(cx).state().unlocked));
+    cx.update_window(menu, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("tray-menu-unlock").is_some());
+        assert!(window.try_find("tray-menu-generate").is_some());
+        assert!(window.try_find("tray-pin-login-1").is_none());
+        assert!(window.try_find("tray-menu-lock").is_none());
+    })
+    .unwrap();
+}
+
+/// A janela do menu tem a altura exata das linhas (sem sobra nem corte).
+#[test]
+fn tray_menu_height_follows_its_rows() {
+    use scout_vault_app::tray::{MenuState, PinnedEntry};
+    use scout_vault_app::tray_menu::window_size;
+    let locked = window_size(&MenuState::default());
+    let empty = window_size(&MenuState {
+        unlocked: true,
+        pinned: Vec::new(),
+    });
+    let pin = |n: usize| MenuState {
+        unlocked: true,
+        pinned: (0..n)
+            .map(|i| PinnedEntry {
+                id: i.to_string(),
+                name: format!("Item {i}"),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    assert!(locked.height < empty.height);
+    assert!(window_size(&pin(2)).height > window_size(&pin(1)).height);
+    // Muitos fixados rolam dentro do menu em vez de crescer sem fim.
+    assert_eq!(window_size(&pin(6)).height, window_size(&pin(10)).height);
+    assert_eq!(locked.width, empty.width);
+}
+
+/// Bloquear o Windows (ou suspender) bloqueia o cofre — a não ser que a
+/// opção esteja desligada.
+#[gpui_kit::test]
+fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
+    use scout_vault_app::windows_events::OsEvent;
+    cx.update(gpui_kit::init);
+    let (dir, store) = file_store("lockwin");
+    let mut settings = store.load();
+    assert!(settings.lock_with_windows, "ligado por padrão");
+    // Desligado: nada muda.
+    settings.lock_with_windows = false;
+    store.save(&settings);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_os_event(OsEvent::SessionLocked, window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Vault);
+        })
+    })
+    .unwrap();
+    // Ligado: bloqueia ao bloquear o Windows…
+    settings.lock_with_windows = true;
+    store.save(&settings);
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_os_event(OsEvent::SessionLocked, window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Locked);
+        })
+    })
+    .unwrap();
+    // …e ao suspender.
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_os_event(OsEvent::Suspending, window, cx);
+            assert_eq!(app.screen_kind(), ScreenKind::Locked);
+        })
+    })
+    .unwrap();
+    // A opção aparece nas configurações.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| app.open_settings(window, cx));
+        window.render_frame(cx);
+        assert!(window.try_find("lock-with-windows").is_some());
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Item com "pedir a senha mestra": mostrar, copiar e editar esperam a senha;
+/// senha errada não libera; trocar de item volta a pedir.
+#[gpui_kit::test]
+fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("login-item-key", window, cx));
+        window.render_frame(cx);
+        assert!(window.try_find("reprompt-card").is_some());
+        // Mostrar a senha: abre o pedido em vez de revelar.
+        window.click("reveal-password", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("reprompt-password").is_some());
+        assert_eq!(window.find("value-password").label(), Some("••••••••"));
+        // Senha errada.
+        window.click("reprompt-password", cx);
+        window.input("errada", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("reprompt-error").is_some()
+        })
+        .unwrap()
+    });
+    cx.update_window(handle, |_, window, cx| {
+        assert_eq!(
+            window.find("reprompt-error").label(),
+            Some("Senha mestra incorreta.")
+        );
+        assert_eq!(window.find("value-password").label(), Some("••••••••"));
+        // Agora a certa: revela o que tinha sido pedido.
+        window.click("reprompt-password", cx);
+        window.input(&password, cx);
+        window.click("reprompt-confirm", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("value-password").label() == Some("item-key-pw")
+        })
+        .unwrap()
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("reprompt-ok").is_some());
+        // Liberado: copiar vai direto.
+        window.click("copy-password", cx);
+    })
+    .unwrap();
+    assert!(texts(cx).contains(&"Copiado: Senha · some em 30 s".to_owned()));
+
+    // Outro item e de volta: pede de novo; editar espera a senha.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.select_item("login-1", window, cx);
+            v.select_item("login-item-key", window, cx);
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("reprompt-card").is_some());
+        window.click("item-edit", cx);
+    })
+    .unwrap();
+    assert!(cx.update(|cx| vault.read(cx).editor().is_none()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("reprompt-password", cx);
+        window.input(&password, cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| cx.update(|cx| vault.read(cx).editor().is_some()));
+    // O formulário mostra a opção marcada.
+    let draft = cx.update(|cx| vault.read(cx).editor().unwrap().read(cx).to_item(cx));
+    assert!(draft.reprompt);
+
+    // Itens sem a opção não pedem nada.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("editor-cancel", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("login-1", window, cx));
+        window.render_frame(cx);
+        assert!(window.try_find("reprompt-card").is_none());
+        window.click("reveal-password", cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("value-password").label(), Some("s3nh@-ção"));
+    })
+    .unwrap();
+}
+
+/// Pela bandeja e pelo navegador, o item que pede a senha mestra não sai sem ela.
+#[gpui_kit::test]
+fn reprompt_guards_tray_copy_and_browser_fill(cx: &mut TestAppContext) {
+    use scout_vault_app::tray::Command;
+    use scout_vault_app::vault_view::CopyShortcut;
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.handle_tray(
+                Command::Copy {
+                    item_id: "login-item-key".into(),
+                    what: CopyShortcut::Password,
+                },
+                window,
+                cx,
+            )
+        });
+    })
+    .unwrap();
+    // Não copiou: abriu o item com o pedido.
+    assert!(texts(cx).is_empty());
+    cx.update(|cx| {
+        assert_eq!(
+            vault.read(cx).selected().map(|i| i.id.as_str()),
+            Some("login-item-key")
+        );
+        assert!(vault.read(cx).reprompt_open());
+    });
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("reprompt-password", cx);
+        window.input(&password, cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    // Confirmou: a cópia pedida acontece.
+    wait_until(cx, |cx| {
+        texts(cx).contains(&"Copiado: Senha · some em 30 s".to_owned())
+    });
+
+    // Navegador: recusa preencher.
+    let items = cx.update(|cx| {
+        vault
+            .read(cx)
+            .list()
+            .read(cx)
+            .delegate()
+            .vault()
+            .items
+            .clone()
+    });
+    let reply = scout_vault_app::browser::handle(
+        &scout_vault_app::browser::Request::Fill {
+            id: "login-item-key".into(),
+            url: "https://qualquer.example".into(),
+        },
+        Some(&items),
+    );
+    assert!(reply["error"]
+        .as_str()
+        .is_some_and(|e| e.contains("pede a senha mestra")));
+    assert!(reply.get("password").is_none());
+}
+
+/// Windows Hello (com um assinador falso no lugar do Windows): ligar com o
+/// cofre aberto guarda a chave cifrada; o botão abre o cofre; outra chave do
+/// Hello ou cancelar não abrem; sair da conta apaga.
+#[gpui_kit::test]
+fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
+    use scout_vault_app::hello;
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    cx.update(|cx| hello::install(cx, hello::fake_signer(b"tpm-1")));
+    let (dir, store) = file_store("hello");
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    let session = cx.update(|cx| {
+        app.read(cx)
+            .vault_view()
+            .unwrap()
+            .read(cx)
+            .session()
+            .clone()
+    });
+
+    // Liga nas configurações (com o cofre aberto, pede o Hello na hora).
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.open_settings(window, cx));
+        window.render_frame(cx);
+        assert!(window.try_find("windows-hello").is_some());
+        let view = app.read(cx).settings_view().cloned().unwrap();
+        view.update(cx, |v, cx| v.set_windows_hello(true, cx));
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        texts(cx).contains(&"Windows Hello ligado para desbloquear".to_owned())
+    });
+    assert!(store.load().windows_hello);
+    assert!(hello::is_enrolled(&store, &session));
+
+    // Bloqueia: aparece "Usar Windows Hello", e ele abre o cofre.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.close_settings(cx);
+            a.lock(window, cx)
+        });
+        window.render_frame(cx);
+        window.click("unlock-hello", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+
+    // Outra chave do Hello (ex.: outro usuário do Windows): não abre.
+    cx.update(|cx| hello::install(cx, hello::fake_signer(b"tpm-2")));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.lock(window, cx));
+        window.render_frame(cx);
+        window.click("unlock-hello", cx);
+    })
+    .unwrap();
+    let unlock = |cx: &mut TestAppContext| {
+        cx.update(|cx| match app.read(cx).unlock_view() {
+            Some(v) => v.read(cx).error().map(|e| e.to_string()),
+            None => None,
+        })
+    };
+    wait_until(cx, |cx| unlock(cx).is_some());
+    assert!(unlock(cx).unwrap().contains("ligue a opção de novo"));
+    assert_eq!(
+        cx.update(|cx| app.read(cx).screen_kind()),
+        ScreenKind::Locked
+    );
+
+    // Cancelar no Hello: explica e continua bloqueado.
+    cx.update(|cx| hello::install(cx, hello::canceling_signer()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("unlock-hello", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| unlock(cx).is_some_and(|e| e.contains("cancelado")));
+
+    // A senha mestra mudou no servidor: a chave do Hello é descartada.
+    let mut changed = session.clone();
+    let mut sync = (*changed.sync).clone();
+    sync.profile.key = Some("2.outra|chave|qualquer".into());
+    changed.sync = std::sync::Arc::new(sync);
+    assert!(hello::password_changed(&store, &changed));
+    assert!(!hello::is_enrolled(&store, &session));
+
+    // Senha mestra digitada com a opção ainda ligada: configura de novo sozinho.
+    cx.update(|cx| hello::install(cx, hello::fake_signer(b"tpm-1")));
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("unlock-password", cx);
+        window.input(&password, cx);
+        window.click("unlock-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |_| hello::is_enrolled(&store, &session));
+    // Sair da conta apaga.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.lock(window, cx));
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("unlock-logout", cx);
+    })
+    .unwrap();
+    assert!(!hello::is_enrolled(&store, &session));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Sem Windows Hello no computador: ligar a opção explica e volta a desligar.
+#[gpui_kit::test]
+fn windows_hello_without_support_turns_back_off(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (dir, store) = file_store("hello-off");
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.open_settings(window, cx));
+        let view = app.read(cx).settings_view().cloned().unwrap();
+        view.update(cx, |v, cx| v.set_windows_hello(true, cx));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(!store.load().windows_hello);
+    assert!(texts(cx).iter().any(|t| t.contains("não está configurado")));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Sync em segundo plano: só sincroniza quando a revisão do servidor muda, e
+/// não atrapalha um formulário aberto nem roda com a opção desligada.
+#[gpui_kit::test]
+fn background_sync_only_when_the_vault_changed(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let busy = |cx: &mut TestAppContext| cx.update(|cx| vault.read(cx).is_busy());
+    let revision = |cx: &mut TestAppContext, date: i64| {
+        cx.update(|cx| vault.update(cx, |v, cx| v.on_revision(date, cx)))
+    };
+    // Primeira resposta: vira a base, sem sync.
+    revision(cx, 100);
+    assert!(!busy(cx));
+    assert_eq!(cx.update(|cx| vault.read(cx).last_revision()), Some(100));
+    // Mesma revisão: nada.
+    revision(cx, 100);
+    assert!(!busy(cx));
+    // Formulário aberto: espera (não sincroniza por baixo da edição).
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.new_item(window, cx));
+    })
+    .unwrap();
+    revision(cx, 200);
+    assert!(!busy(cx));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-cancel", cx);
+    })
+    .unwrap();
+    // Opção desligada: nada.
+    cx.update(|cx| vault.update(cx, |v, _| v.set_background_sync(false)));
+    revision(cx, 200);
+    assert!(!busy(cx));
+    // Ligada e mudou: sincroniza.
+    cx.update(|cx| vault.update(cx, |v, _| v.set_background_sync(true)));
+    revision(cx, 200);
+    assert!(busy(cx));
+    // (o servidor do fixture não existe: o sync falha e a base continua a antiga)
+    wait_until(cx, |cx| !busy(cx));
+    assert_eq!(cx.update(|cx| vault.read(cx).last_revision()), Some(100));
+    // A opção aparece nas configurações e começa ligada.
+    assert!(cx.update(|cx| app.read(cx).store().load().background_sync));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.open_settings(window, cx));
+        window.render_frame(cx);
+        assert!(window.try_find("background-sync").is_some());
+    })
+    .unwrap();
+}
+
+/// Contra o Vaultwarden local: uma pasta criada "em outro aparelho" aparece
+/// sozinha depois da checagem de revisão.
+#[gpui_kit::test]
+#[ignore = "precisa de servidor; veja dev/test-account.env"]
+fn background_sync_picks_up_changes_from_elsewhere(cx: &mut TestAppContext) {
+    use scout_vault_core::api::{Client, DeviceInfo, ServerUrls};
+    use scout_vault_core::crypto::MasterKey;
+    use scout_vault_core::vault::Keys;
+    cx.executor().allow_parking();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let (handle, app) = open_app(cx, None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("login-server").click(2usize, cx);
+        window.click("login-server-url", cx);
+        window.input(&url, cx);
+        window.click("login-email", cx);
+        window.input(&email, cx);
+        window.click("login-password", cx);
+        window.input(&password, cx);
+        window.click("login-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    // Primeira checagem: base.
+    cx.update(|cx| vault.update(cx, |v, cx| v.check_now(cx)));
+    wait_until(cx, |cx| {
+        cx.update(|cx| vault.read(cx).last_revision().is_some())
+    });
+
+    // "Outro aparelho" cria uma pasta direto no servidor.
+    let name = format!("Pasta UI {} remota", std::process::id());
+    let (client_name, folder_id) = {
+        let name = name.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let client = Client::new(
+                    ServerUrls::self_hosted(&url),
+                    DeviceInfo::new("Scout Vault (teste, outro aparelho)"),
+                )
+                .unwrap();
+                let kdf = client.prelogin(&email).await.unwrap();
+                let mk = MasterKey::derive(&password, &email, kdf).unwrap();
+                let token = client
+                    .login_password(&email, &mk.server_hash(&password), None, None)
+                    .await
+                    .unwrap()
+                    .access_token;
+                let profile = client.sync(&token).await.unwrap().profile;
+                let keys = Keys::unlock(&mk, &profile).unwrap();
+                let enc = scout_vault_core::edit::encrypt_folder_name(&name, &keys).unwrap();
+                let folder = client.create_folder(&token, &enc).await.unwrap();
+                (name, folder.id)
+            })
+        })
+        .join()
+        .unwrap()
+    };
+
+    // A checagem percebe e sincroniza sozinha.
+    cx.update(|cx| vault.update(cx, |v, cx| v.check_now(cx)));
+    let has_folder = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .folders
+                .iter()
+                .any(|f| f.id == folder_id && f.name == client_name)
+        })
+    };
+    wait_until(cx, has_folder);
+    assert!(texts(cx).contains(&"Cofre atualizado com mudanças de outro aparelho".to_owned()));
+
+    // Limpeza.
+    wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(
+                scout_vault_app::item_list::Filter::Folder(Some(folder_id.clone())),
+                window,
+                cx,
+            );
+            v.delete_folder(cx);
+            v.delete_folder(cx);
+        });
+    })
+    .unwrap();
+    wait_until(cx, |cx| !has_folder(cx));
+}
+
+/// Salvar logins do navegador, sem servidor: o `check` responde sem senha e sem
+/// incomodar quando bloqueado; o `save` recusa com formulário aberto e, com o
+/// cofre bloqueado, espera o desbloqueio.
+#[gpui_kit::test]
+fn browser_save_checks_waits_for_unlock_and_spares_the_form(cx: &mut TestAppContext) {
+    use scout_vault_app::browser::Request;
+    use serde_json::json;
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    let (dir, store) = file_store("browser-save");
+    let mut settings = store.load();
+    settings.browser_fill = true;
+    store.save(&settings);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    let check = |url: &str, user: &str, pw: &str| Request::Check {
+        url: url.into(),
+        username: user.into(),
+        password: pw.into(),
+    };
+    let save = |url: &str, user: &str, pw: &str| Request::Save {
+        url: url.into(),
+        username: user.into(),
+        password: pw.into(),
+    };
+    let banco = "https://banco.example.com/entrar";
+    assert_eq!(
+        browser_ask(cx, handle, &app, check(banco, "pessoa", "s3nh@-ção")),
+        json!({ "action": "none" })
+    );
+    assert_eq!(
+        browser_ask(cx, handle, &app, check(banco, "pessoa", "nova")),
+        json!({ "action": "update", "name": "Meu Banco" })
+    );
+    assert_eq!(
+        browser_ask(cx, handle, &app, check("https://novo.example", "eu", "x")),
+        json!({ "action": "save" })
+    );
+
+    // Formulário aberto: não salva por baixo dele.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.new_item(window, cx));
+    })
+    .unwrap();
+    let r = browser_ask(cx, handle, &app, save("https://novo.example", "eu", "x"));
+    assert!(r["error"]
+        .as_str()
+        .is_some_and(|e| e.contains("formulário")));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("editor-cancel", cx);
+    })
+    .unwrap();
+
+    // Bloqueado: o `check` não chama atenção; o `save` espera o desbloqueio.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.lock(window, cx))
+    })
+    .unwrap();
+    let before = texts(cx).len();
+    assert_eq!(
+        browser_ask(cx, handle, &app, check("https://novo.example", "eu", "x")),
+        json!({ "locked": true })
+    );
+    assert_eq!(texts(cx).len(), before, "sem aviso a cada login nos sites");
+    assert_eq!(
+        browser_ask(cx, handle, &app, save("https://novo.example", "eu", "x")),
+        json!({ "queued": true })
+    );
+    assert!(texts(cx)
+        .iter()
+        .any(|t| t.contains("salvar o login de novo.example")));
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("unlock-password", cx);
+        window.input(&password, cx);
+        window.click("unlock-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    // Desbloqueou: o login guardado vai para o servidor (que no fixture não existe).
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    assert!(cx.update(|cx| vault.read(cx).is_busy()));
+    wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Contra o Vaultwarden local: salva um login novo pelo navegador, depois
+/// atualiza a senha dele, e confere o histórico de senhas.
+#[gpui_kit::test]
+#[ignore = "precisa de servidor; veja dev/test-account.env"]
+fn browser_save_and_update_through_the_app(cx: &mut TestAppContext) {
+    use scout_vault_app::browser::Request;
+    use scout_vault_core::vault::ItemKind;
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("defina {k}"));
+    let (url, email, password) = (
+        env("SCOUT_VAULT_TEST_URL"),
+        env("SCOUT_VAULT_TEST_EMAIL"),
+        env("SCOUT_VAULT_TEST_PASSWORD"),
+    );
+    let (dir, store) = file_store("browser-save-live");
+    let mut settings = store.load();
+    settings.browser_fill = true;
+    store.save(&settings);
+    let (handle, app) = open_with_store(cx, &store, None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("login-server").click(2usize, cx);
+        window.click("login-server-url", cx);
+        window.input(&url, cx);
+        window.click("login-email", cx);
+        window.input(&email, cx);
+        window.click("login-password", cx);
+        window.input(&password, cx);
+        window.click("login-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
+    });
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let site = format!("teste-salvar-{}.example", std::process::id());
+    let page = format!("https://{site}/login?x=1");
+    let find = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .items
+                .iter()
+                .find(|i| i.name == site && !i.deleted)
+                .cloned()
+        })
+    };
+    let idle =
+        |cx: &mut TestAppContext| wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
+
+    let r = browser_ask(
+        cx,
+        handle,
+        &app,
+        Request::Save {
+            url: page.clone(),
+            username: "eu@site".into(),
+            password: "primeira".into(),
+        },
+    );
+    assert_eq!(r, serde_json::json!({ "ok": true }));
+    wait_until(cx, |cx| find(cx).is_some());
+    idle(cx);
+    let item = find(cx).unwrap();
+    let ItemKind::Login(l) = &item.kind else {
+        panic!()
+    };
+    assert_eq!(l.username.as_deref(), Some("eu@site"));
+    assert_eq!(l.uris, [format!("https://{site}")]);
+
+    // Mesma senha: nada a fazer. Senha nova: atualiza o mesmo item.
+    assert_eq!(
+        browser_ask(
+            cx,
+            handle,
+            &app,
+            Request::Check {
+                url: page.clone(),
+                username: "eu@site".into(),
+                password: "primeira".into(),
+            },
+        ),
+        serde_json::json!({ "action": "none" })
+    );
+    browser_ask(
+        cx,
+        handle,
+        &app,
+        Request::Save {
+            url: page.clone(),
+            username: "eu@site".into(),
+            password: "segunda".into(),
+        },
+    );
+    wait_until(cx, |cx| {
+        find(cx).is_some_and(|i| match &i.kind {
+            ItemKind::Login(l) => l.password.as_ref().is_some_and(|p| p.expose() == "segunda"),
+            _ => false,
+        })
+    });
+    idle(cx);
+    assert_eq!(find(cx).unwrap().id, item.id, "atualizou, não duplicou");
+
+    // Limpeza.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item(&item.id, window, cx));
+        window.render_frame(cx);
+        window.click("item-trash", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| find(cx).is_none());
+    idle(cx);
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.set_filter(scout_vault_app::item_list::Filter::Trash, window, cx);
+            v.select_item(&item.id, window, cx);
+        });
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-delete-forever", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| {
+            vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .items
+                .iter()
+                .all(|i| i.id != item.id)
+        })
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Com "Movimento: Parado", trocar o tema é direto: sem círculo nem véu.
+#[gpui_kit::test]
+fn theme_change_without_motion_is_instant(cx: &mut TestAppContext) {
+    use scout_vault_app::theme_fx;
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("motion-off", cx);
+        window.render_frame(cx);
+        window.click("theme-dark", cx);
+        assert!(cx.theme().is_dark());
+        assert!(!theme_fx::running(cx));
+    })
+    .unwrap();
 }

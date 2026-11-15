@@ -54,6 +54,11 @@ pub struct ScoutVaultApp {
     autotype_picker: Option<(Entity<AutoTypeView>, Subscription)>,
     /// Pedido que chegou com o cofre bloqueado; atendido ao desbloquear.
     pending_autotype: Option<Request>,
+    /// Login do navegador esperando o desbloqueio para ser salvo (url, usuário, senha).
+    pending_browser_save: Option<(String, String, zeroize::Zeroizing<String>)>,
+    /// Digitação esperando a senha mestra de um item que a pede (número do pedido).
+    reprompt_autotype: Option<(u64, Item, Request)>,
+    reprompt_counter: u64,
     /// Atalho global registrado (soltar desliga).
     hotkey: Option<autotype::Listener>,
     autotype_tx: std::sync::mpsc::Sender<Request>,
@@ -62,9 +67,14 @@ pub struct ScoutVaultApp {
     browser_tx: std::sync::mpsc::Sender<crate::browser::Incoming>,
     /// Ícone na bandeja do Windows (soltar remove).
     tray: Option<crate::tray::Tray>,
-    tray_tx: std::sync::mpsc::Sender<crate::tray::Command>,
+    tray_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
+    /// Menu do botão direito da bandeja, se estiver aberto.
+    tray_menu: Option<(AnyWindowHandle, Entity<crate::tray_menu::TrayMenu>)>,
     typer: Typer,
     _autotype_task: Task<()>,
+    /// Escuta do bloqueio/suspensão do Windows (só no app de verdade).
+    _os_watcher: Option<crate::windows_events::Watcher>,
+    _tray_task: Task<()>,
 }
 
 impl ScoutVaultApp {
@@ -94,6 +104,7 @@ impl ScoutVaultApp {
         if let Screen::Vault(view) = &this.screen {
             this.configure_vault(view, cx);
         }
+        this.refresh_hello_button(cx);
         this
     }
 
@@ -103,6 +114,7 @@ impl ScoutVaultApp {
         view.update(cx, |v, _| {
             v.set_password_options(settings.generator);
             v.set_pinned(settings.pinned_items.clone());
+            v.set_background_sync(settings.background_sync);
         });
     }
 
@@ -145,7 +157,14 @@ impl ScoutVaultApp {
         // Pedidos do atalho global chegam por um canal (a thread do atalho não é a da UI).
         let (autotype_tx, autotype_rx) = std::sync::mpsc::channel::<Request>();
         let (browser_tx, browser_rx) = std::sync::mpsc::channel::<crate::browser::Incoming>();
-        let (tray_tx, tray_rx) = std::sync::mpsc::channel::<crate::tray::Command>();
+        // Bloqueio/suspensão do Windows (só no app de verdade, como a bandeja).
+        let (os_tx, os_rx) = std::sync::mpsc::channel::<crate::windows_events::OsEvent>();
+        let os_watcher = if crate::tray::system_enabled() {
+            crate::windows_events::watch(os_tx).ok()
+        } else {
+            None
+        };
+        let (tray_tx, mut tray_rx) = tokio::sync::mpsc::unbounded_channel::<crate::tray::Command>();
         let autotype_task = cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(AUTOTYPE_POLL_EVERY).await;
             let alive = this.update_in(cx, |this, window, cx| {
@@ -155,8 +174,8 @@ impl ScoutVaultApp {
                 while let Ok(incoming) = browser_rx.try_recv() {
                     this.handle_browser(incoming, window, cx);
                 }
-                while let Ok(command) = tray_rx.try_recv() {
-                    this.handle_tray(command, window, cx);
+                while let Ok(event) = os_rx.try_recv() {
+                    this.handle_os_event(event, window, cx);
                 }
             });
             if alive.is_err() {
@@ -173,18 +192,35 @@ impl ScoutVaultApp {
                 appearance::apply(&current, Some(window), cx);
             }
         });
+        // A bandeja (e o menu dela) responde na hora, sem esperar o próximo ciclo.
+        let tray_task = cx.spawn_in(window, async move |this, cx| {
+            while let Some(command) = tray_rx.recv().await {
+                if this
+                    .update_in(cx, |this, window, cx| this.handle_tray(command, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         let auto_lock_after = Self::auto_lock_from_settings(&store);
         let mut this = Self {
             autotype_picker: None,
             pending_autotype: None,
+            pending_browser_save: None,
+            reprompt_autotype: None,
+            reprompt_counter: 0,
             hotkey: None,
             autotype_tx,
             browser_server: None,
             browser_tx,
             tray: None,
             tray_tx,
+            tray_menu: None,
+            _tray_task: tray_task,
             typer: autotype::system_typer(),
             _autotype_task: autotype_task,
+            _os_watcher: os_watcher,
             store,
             screen,
             last_activity: Instant::now(),
@@ -207,6 +243,21 @@ impl ScoutVaultApp {
                 .unwrap_or(true)
         });
         this
+    }
+
+    /// O Windows bloqueou a sessão ou vai suspender: bloqueia o cofre também
+    /// (se a opção estiver ligada).
+    pub fn handle_os_event(
+        &mut self,
+        event: crate::windows_events::OsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.store.load().lock_with_windows {
+            return;
+        }
+        let _ = event;
+        self.lock(window, cx);
     }
 
     /// Cria ou remove o ícone da bandeja conforme a configuração.
@@ -287,9 +338,15 @@ impl ScoutVaultApp {
                     crate::toast::info("Desbloqueie o cofre para sincronizar.", cx);
                 }
             },
+            Command::OpenMenu { x, y } => self.open_tray_menu((x, y), cx),
             Command::Copy { item_id, what } => match &self.screen {
                 Screen::Vault(view) => {
-                    view.update(cx, |v, cx| v.copy_item_field(&item_id, what, cx));
+                    // Item que pede a senha mestra: mostra a janela com o pedido.
+                    let needs_window =
+                        view.update(cx, |v, cx| v.copy_item_field(&item_id, what, window, cx));
+                    if needs_window {
+                        crate::tray::show_window(window);
+                    }
                     self.record_activity();
                 }
                 _ => {
@@ -317,6 +374,7 @@ impl ScoutVaultApp {
                     has_username,
                     has_password,
                     has_totp,
+                    icon: Some(crate::item_list::kind_icon(&item.kind)),
                 }
             })
             .collect();
@@ -326,8 +384,70 @@ impl ScoutVaultApp {
         }
     }
 
-    fn refresh_tray_menu(&self, cx: &App) {
-        crate::tray::set_menu_state(self.tray_menu_state(cx));
+    /// Abre o menu da bandeja no cursor (fecha o anterior, se houver).
+    pub fn open_tray_menu(&mut self, cursor: (i32, i32), cx: &mut Context<Self>) {
+        self.close_tray_menu(cx);
+        let state = self.tray_menu_state(cx);
+        let size = crate::tray_menu::window_size(&state);
+        let (work, scale) = crate::tray::work_area_and_scale();
+        let physical = (
+            (f32::from(size.width) * scale).round() as i32,
+            (f32::from(size.height) * scale).round() as i32,
+        );
+        // O cartão tem uma folga transparente em volta (sombra): o canto visível
+        // fica colado no cursor.
+        let margin = (crate::tray_menu::MARGIN * scale).round() as i32;
+        let (x, y) = crate::tray::place_menu(
+            (cursor.0 + margin, cursor.1 + margin),
+            physical,
+            (
+                work.0 - margin,
+                work.1 - margin,
+                work.2 + margin,
+                work.3 + margin,
+            ),
+        );
+        let options = WindowOptions {
+            titlebar: None,
+            kind: WindowKind::PopUp,
+            focus: true,
+            show: true,
+            is_movable: false,
+            is_resizable: false,
+            is_minimizable: false,
+            window_background: WindowBackgroundAppearance::Transparent,
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(x as f32 / scale), px(y as f32 / scale)),
+                size,
+            ))),
+            ..Default::default()
+        };
+        let tx = self.tray_tx.clone();
+        let opened = gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| crate::tray_menu::TrayMenu::new(state, tx, window, cx))
+        });
+        match opened {
+            Ok((handle, view)) => {
+                handle
+                    .update(cx, |_, window, _| window.activate_window())
+                    .ok();
+                self.tray_menu = Some((handle, view));
+            }
+            Err(e) => crate::toast::error(format!("Não foi possível abrir o menu: {e}"), cx),
+        }
+    }
+
+    fn close_tray_menu(&mut self, cx: &mut App) {
+        if let Some((handle, _)) = self.tray_menu.take() {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+    }
+
+    /// O menu da bandeja aberto agora (para os testes).
+    pub fn tray_menu(&self) -> Option<(AnyWindowHandle, Entity<crate::tray_menu::TrayMenu>)> {
+        self.tray_menu.clone()
     }
 
     /// Liga ou desliga o pipe do navegador conforme a configuração.
@@ -353,13 +473,41 @@ impl ScoutVaultApp {
                 .send(serde_json::json!({ "error": "A integração com o navegador está desligada no Scout Vault." }));
             return;
         }
+        use crate::browser::Request as BrowserRequest;
+        // Salvar um login: o app decide e grava (ou guarda para depois do desbloqueio).
+        if let BrowserRequest::Save {
+            url,
+            username,
+            password,
+        } = &incoming.request
+        {
+            let response = self.save_from_browser(
+                url.clone(),
+                username.clone(),
+                zeroize::Zeroizing::new(password.clone()),
+                window,
+                cx,
+            );
+            let _ = incoming.reply.send(response);
+            return;
+        }
         let response = match &self.screen {
             Screen::Vault(view) => {
-                let items = &view.read(cx).list().read(cx).delegate().vault().items;
-                crate::browser::handle(&incoming.request, Some(items))
+                // "É novo?" só olha o que dá para alterar.
+                if matches!(incoming.request, BrowserRequest::Check { .. }) {
+                    let items = view.read(cx).editable_items(cx);
+                    crate::browser::handle(&incoming.request, Some(&items))
+                } else {
+                    let items = &view.read(cx).list().read(cx).delegate().vault().items;
+                    crate::browser::handle(&incoming.request, Some(items))
+                }
             }
             _ => {
-                if !matches!(incoming.request, crate::browser::Request::Status) {
+                // Status e "é novo?" não chamam atenção (acontece a cada login nos sites).
+                if !matches!(
+                    incoming.request,
+                    BrowserRequest::Status | BrowserRequest::Check { .. }
+                ) {
                     crate::tray::show_window(window);
                     crate::toast::info("Desbloqueie o cofre para preencher no navegador.", cx);
                 }
@@ -370,6 +518,63 @@ impl ScoutVaultApp {
             self.record_activity();
         }
         let _ = incoming.reply.send(response);
+    }
+
+    /// Salva (ou atualiza) um login enviado num site, depois do "Salvar" na página.
+    /// Com o cofre bloqueado, mostra o app e salva logo depois do desbloqueio.
+    fn save_from_browser(
+        &mut self,
+        url: String,
+        username: String,
+        password: zeroize::Zeroizing<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> serde_json::Value {
+        use crate::browser::{decide_save, new_login, with_password, SaveDecision};
+        let Screen::Vault(view) = &self.screen else {
+            let host = crate::browser::host_of(&url).unwrap_or_default();
+            self.pending_browser_save = Some((url, username, password));
+            crate::tray::show_window(window);
+            crate::toast::info(
+                format!("Desbloqueie o cofre para salvar o login de {host}."),
+                cx,
+            );
+            return serde_json::json!({ "queued": true });
+        };
+        let view = view.clone();
+        let items = view.read(cx).editable_items(cx);
+        let (item, message) = match decide_save(&items, &url, &username, &password) {
+            SaveDecision::Nothing => return serde_json::json!({ "ok": true, "unchanged": true }),
+            SaveDecision::New => {
+                let item = new_login(&url, &username, &password);
+                let message = format!("Login salvo do navegador: {}", item.name);
+                (item, message)
+            }
+            SaveDecision::Update { id, name } => {
+                let Some(base) = items.iter().find(|i| i.id == id) else {
+                    return serde_json::json!({ "error": "Login não encontrado." });
+                };
+                (
+                    with_password(base, &password),
+                    format!("Senha atualizada: {name}"),
+                )
+            }
+        };
+        self.record_activity();
+        match view.update(cx, |v, cx| v.save_external(item, message, cx)) {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(e) => {
+                crate::toast::error(e.clone(), cx);
+                serde_json::json!({ "error": e })
+            }
+        }
+    }
+
+    /// Depois do desbloqueio: salva o login que o navegador mandou enquanto estava bloqueado.
+    fn finish_pending_browser_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((url, username, password)) = self.pending_browser_save.take() {
+            self.save_from_browser(url, username, password, window, cx);
+        }
     }
 
     /// Registra ou solta o atalho global conforme a configuração.
@@ -494,6 +699,34 @@ impl ScoutVaultApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Item que pede a senha mestra: confirma no app antes de digitar.
+        if item.reprompt {
+            if let Screen::Vault(view) = &self.screen {
+                self.reprompt_counter += 1;
+                let token = self.reprompt_counter;
+                let id = item.id.clone();
+                let free = view.update(cx, |v, cx| v.request_reprompt(&id, token, window, cx));
+                if !free {
+                    self.reprompt_autotype = Some((token, item.clone(), request));
+                    crate::tray::show_window(window);
+                    crate::toast::info(
+                        "Este item pede a senha mestra. Confirme e ele será digitado.",
+                        cx,
+                    );
+                    return;
+                }
+            }
+        }
+        self.type_now(item, request, window, cx);
+    }
+
+    fn type_now(
+        &mut self,
+        item: &Item,
+        request: Request,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let keys = autotype::sequence(item, self.store.load().autotype.press_enter);
         if keys.is_empty() {
             return;
@@ -536,7 +769,13 @@ impl ScoutVaultApp {
                     this.refresh_browser();
                     this.refresh_tray(window, cx);
                     this.auto_lock_after = Self::auto_lock_from_settings(&this.store);
+                    this.refresh_hello_button(cx);
+                    if let Screen::Vault(view) = &this.screen {
+                        let on = this.store.load().background_sync;
+                        view.update(cx, |v, _| v.set_background_sync(on));
+                    }
                 }
+                SettingsEvent::WindowsHello(on) => this.windows_hello_changed(*on, window, cx),
             },
         );
         self.settings = Some((view, sub));
@@ -648,6 +887,13 @@ impl ScoutVaultApp {
         }
     }
 
+    pub fn unlock_view(&self) -> Option<&Entity<UnlockView>> {
+        match &self.screen {
+            Screen::Locked(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn set_auto_lock_after(&mut self, after: Duration) {
         self.auto_lock_after = after;
     }
@@ -689,6 +935,154 @@ impl ScoutVaultApp {
         crate::saved_session::save(&self.store, &session);
         let next = Self::locked_screen(session, window, cx);
         self.set_screen(next, cx);
+        self.refresh_hello_button(cx);
+    }
+
+    /// Mostra "Usar Windows Hello" no desbloqueio quando ele está pronto.
+    fn refresh_hello_button(&self, cx: &mut App) {
+        if let Screen::Locked(view) = &self.screen {
+            let session = view.read(cx).session().clone();
+            let ready = self.store.load().windows_hello
+                && crate::hello::available(cx)
+                && crate::hello::is_enrolled(&self.store, &session);
+            view.update(cx, |v, cx| v.set_hello(ready, cx));
+        }
+    }
+
+    /// Sessão do cofre aberto ou bloqueado.
+    fn current_session(&self, cx: &App) -> Option<Session> {
+        match &self.screen {
+            Screen::Vault(view) => Some(view.read(cx).session().clone()),
+            Screen::Locked(view) => Some(view.read(cx).session().clone()),
+            Screen::Login(_) => None,
+        }
+    }
+
+    /// Ligou/desligou a opção nas configurações.
+    fn windows_hello_changed(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !on {
+            if let Some(session) = self.current_session(cx) {
+                crate::hello::forget(&self.store, &session);
+            }
+            self.refresh_hello_button(cx);
+            return;
+        }
+        match &self.screen {
+            Screen::Vault(view) => {
+                let (session, keys) = {
+                    let v = view.read(cx);
+                    (v.session().clone(), v.keys())
+                };
+                self.enroll_hello(session, keys, window, cx);
+            }
+            _ => crate::toast::info(
+                "O Windows Hello será configurado no próximo desbloqueio com a senha mestra.",
+                cx,
+            ),
+        }
+    }
+
+    /// Pede o Windows Hello uma vez e guarda a user key cifrada por ele.
+    fn enroll_hello(
+        &mut self,
+        session: Session,
+        keys: std::sync::Arc<scout_vault_core::vault::Keys>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(signer) = crate::hello::signer(cx) else {
+            self.hello_failed(crate::hello::HelloError::Unavailable, cx);
+            return;
+        };
+        let challenge = crate::hello::new_challenge();
+        let to_sign = challenge.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let signature = crate::io::blocking(move || signer(&to_sign)).await;
+            this.update(cx, |this, cx| {
+                let result = signature.and_then(|sig| {
+                    crate::hello::seal(&this.store, &session, &keys, &challenge, &sig)
+                });
+                match result {
+                    Ok(()) => crate::toast::success("Windows Hello ligado para desbloquear", cx),
+                    Err(e) => this.hello_failed(e, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Não deu para ligar: desfaz a opção e explica.
+    fn hello_failed(&mut self, error: crate::hello::HelloError, cx: &mut Context<Self>) {
+        let mut settings = self.store.load();
+        settings.windows_hello = false;
+        self.store.save(&settings);
+        if let Some(view) = self.settings_view().cloned() {
+            view.update(cx, |v, cx| v.show_windows_hello(false, cx));
+        }
+        crate::toast::error(error.message(), cx);
+    }
+
+    /// "Usar Windows Hello" na tela de desbloqueio.
+    pub fn unlock_with_hello(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Locked(view) = &self.screen else {
+            return;
+        };
+        let view = view.clone();
+        let session = view.read(cx).session().clone();
+        let (Some(signer), Some(sealed)) = (
+            crate::hello::signer(cx),
+            crate::hello::sealed(&self.store, &session),
+        ) else {
+            view.update(cx, |v, cx| {
+                v.set_hello(false, cx);
+                v.set_hello_progress(
+                    false,
+                    Some("O Windows Hello não está pronto. Use a senha mestra.".into()),
+                    cx,
+                )
+            });
+            return;
+        };
+        view.update(cx, |v, cx| v.set_hello_progress(true, None, cx));
+        cx.spawn_in(window, async move |this, cx| {
+            let result = crate::io::blocking(move || {
+                let signature = signer(&sealed.challenge)?;
+                let keys = crate::hello::unseal(&sealed, &signature, &session)?;
+                let vault = scout_vault_core::vault::Vault::decrypt(&session.sync, &keys);
+                Ok::<_, crate::hello::HelloError>(Unlocked {
+                    session,
+                    keys,
+                    vault,
+                })
+            })
+            .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(unlocked) => {
+                    view.update(cx, |v, cx| v.set_hello_progress(false, None, cx));
+                    this.open_unlocked(unlocked, window, cx);
+                }
+                Err(e) => view.update(cx, |v, cx| {
+                    v.set_hello_progress(false, Some(e.message()), cx)
+                }),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Abre o cofre já decifrado (Windows Hello): sem mexer no "abrir sem senha".
+    fn open_unlocked(&mut self, unlocked: Unlocked, window: &mut Window, cx: &mut Context<Self>) {
+        crate::saved_session::save(&self.store, &unlocked.session);
+        let next = Self::vault_screen(unlocked, window, cx);
+        if let Screen::Vault(view) = &next.0 {
+            self.configure_vault(view, cx);
+        }
+        self.set_screen(next, cx);
+        if let Some(request) = self.pending_autotype.take() {
+            self.handle_autotype(request, window, cx);
+        }
+        self.finish_pending_browser_save(window, cx);
     }
 
     fn locked_screen(
@@ -704,10 +1098,14 @@ impl ScoutVaultApp {
                 |this, _, event: &UnlockEvent, window, cx| match event {
                     UnlockEvent::Unlocked(unlocked) => this.show_vault_from(unlocked, window, cx),
                     UnlockEvent::LogOut => {
+                        if let Some(session) = this.current_session(cx) {
+                            crate::hello::forget(&this.store, &session);
+                        }
                         crate::saved_session::clear(&this.store);
                         this.show_login(window, cx)
                     }
                     UnlockEvent::OpenSettings => this.open_settings(window, cx),
+                    UnlockEvent::UseHello => this.unlock_with_hello(window, cx),
                 },
             );
         (Screen::Locked(view), sub)
@@ -725,14 +1123,25 @@ impl ScoutVaultApp {
             if self.store.load().remember_session {
                 crate::quick_unlock::remember(&self.store, &unlocked.session, &unlocked.keys);
             }
+            let hello_pending = self.store.load().windows_hello
+                && crate::hello::available(cx)
+                && !crate::hello::is_enrolled(&self.store, &unlocked.session);
             let next = Self::vault_screen(*unlocked, window, cx);
             if let Screen::Vault(view) = &next.0 {
                 self.configure_vault(view, cx);
+                if hello_pending {
+                    let (session, keys) = {
+                        let v = view.read(cx);
+                        (v.session().clone(), v.keys())
+                    };
+                    self.enroll_hello(session, keys, window, cx);
+                }
             }
             self.set_screen(next, cx);
             if let Some(request) = self.pending_autotype.take() {
                 self.handle_autotype(request, window, cx);
             }
+            self.finish_pending_browser_save(window, cx);
         }
     }
 
@@ -772,21 +1181,37 @@ impl ScoutVaultApp {
                     VaultEvent::Lock(session) => this.show_locked(session.clone(), window, cx),
                     VaultEvent::OpenSettings => this.open_settings(window, cx),
                     VaultEvent::OpenGenerator => this.open_generator(window, cx),
+                    VaultEvent::RepromptPassed(token) => {
+                        if let Some((t, item, request)) = this.reprompt_autotype.take() {
+                            if t == *token {
+                                this.type_now(&item, request, window, cx);
+                            } else {
+                                this.reprompt_autotype = Some((t, item, request));
+                            }
+                        }
+                    }
                     VaultEvent::Synced(session) => {
                         crate::saved_session::save(&this.store, session);
+                        if crate::hello::password_changed(&this.store, session) {
+                            let mut settings = this.store.load();
+                            settings.windows_hello = false;
+                            this.store.save(&settings);
+                            crate::toast::info(
+                                "A senha mestra mudou: ligue o Windows Hello de novo nas configurações.",
+                                cx,
+                            );
+                        }
                         if crate::quick_unlock::password_changed(&this.store, session) {
                             crate::toast::info(
                                 "A senha mestra mudou. Na próxima vez, o app vai pedir a nova.",
                                 cx,
                             );
                         }
-                        this.refresh_tray_menu(cx);
                     }
                     VaultEvent::PinsChanged(ids) => {
                         let mut settings = this.store.load();
                         settings.pinned_items = ids.clone();
                         this.store.save(&settings);
-                        this.refresh_tray_menu(cx);
                     }
                     VaultEvent::SessionExpired => {
                         crate::saved_session::clear(&this.store);
@@ -810,8 +1235,6 @@ impl Render for ScoutVaultApp {
         if window.focused(cx).is_none() {
             self.focus.focus(window, cx);
         }
-        // Bloqueado/desbloqueado e acesso rápido no menu da bandeja.
-        self.refresh_tray_menu(cx);
         let content: AnyView = match (&self.settings, &self.screen) {
             _ if self.autotype_picker.is_some() => self.autotype_view().unwrap().clone().into(),
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
@@ -835,5 +1258,7 @@ impl Render for ScoutVaultApp {
                 10.,
             ))
             .child(self.toasts.clone())
+            // Transição de tema por cima de tudo.
+            .children(crate::theme_fx::overlay(cx))
     }
 }

@@ -131,7 +131,7 @@ def main() -> None:
                 "FolderId": "folder-1",
                 "OrganizationId": None,
                 "Favorite": True,
-                "Reprompt": 1,
+                "Reprompt": 0,
                 "Name": u("Meu Banco"),
                 "Notes": u("nota com\nduas linhas"),
                 "Login": {
@@ -146,6 +146,7 @@ def main() -> None:
             {
                 "id": "login-item-key",
                 "type": 1,
+                "reprompt": 1,  # pede a senha mestra
                 "name": i("Com chave própria"),
                 "key": u(item_key),
                 "login": {"username": None, "password": i("item-key-pw"), "uris": None},
