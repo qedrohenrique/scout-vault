@@ -438,6 +438,9 @@ pub struct VaultView {
     confirm_delete: bool,
     /// Icon picker open in the item detail.
     icon_picker: bool,
+    /// When a click outside closed the picker: the click on the item's icon
+    /// that follows it must not open it again.
+    icon_picker_closed_at: Option<std::time::Instant>,
     /// Generator options, for the generate password button in the editor.
     password_options: PasswordOptions,
     /// "Remove attachment" asks for a second click.
@@ -537,6 +540,7 @@ impl VaultView {
             editor: None,
             confirm_delete: false,
             icon_picker: false,
+            icon_picker_closed_at: None,
             confirm_remove_attachment: None,
             copied: None,
             sidebar_order: std::cell::Cell::new(0),
@@ -1277,8 +1281,25 @@ impl VaultView {
     }
 
     pub fn toggle_icon_picker(&mut self, cx: &mut Context<Self>) {
+        // The mouse down on the item's icon already closed it (click outside).
+        let just_closed = self
+            .icon_picker_closed_at
+            .take()
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(500));
+        if just_closed {
+            return;
+        }
         self.icon_picker = !self.icon_picker;
         cx.notify();
+    }
+
+    /// A click outside the picker closes it.
+    fn close_icon_picker_outside(&mut self, cx: &mut Context<Self>) {
+        if self.icon_picker {
+            self.icon_picker = false;
+            self.icon_picker_closed_at = Some(std::time::Instant::now());
+            cx.notify();
+        }
     }
 
     pub fn icon_picker_open(&self) -> bool {
@@ -1459,6 +1480,8 @@ impl VaultView {
         }
 
         let panel = v_flex()
+            .id("icon-picker")
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_icon_picker_outside(cx)))
             .gap_3()
             .p_4()
             .rounded(cx.theme().radius_lg)

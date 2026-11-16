@@ -38,11 +38,23 @@ pub enum Command {
     OpenItem {
         item_id: String,
     },
+    /// Locked HUD (quick search / auto-type): unlock with this vault password.
+    Unlock(HudPassword),
     /// Right-click on the icon: open the menu with its corner at the cursor (screen pixels).
     OpenMenu {
         x: i32,
         y: i32,
     },
+}
+
+/// Vault password typed in the HUD. Zeroed when dropped; never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HudPassword(pub zeroize::Zeroizing<String>);
+
+impl std::fmt::Debug for HudPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HudPassword(***)")
+    }
 }
 
 /// An item pinned to quick access, as the menu needs it.

@@ -20,7 +20,6 @@ pub mod appearance;
 mod assets;
 mod attachments;
 pub mod autotype;
-pub mod autotype_view;
 pub mod backdrop;
 pub mod browser;
 pub mod clipboard;

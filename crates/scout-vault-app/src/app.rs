@@ -7,7 +7,6 @@ use gpui_kit::*;
 
 use crate::appearance::{self, ThemeChoice};
 use crate::autotype::{self, Request, Typer};
-use crate::autotype_view::{AutoTypeEvent, AutoTypeView};
 use crate::flow::{Handoff, Session, Unlocked};
 use crate::generator_view::{GeneratorEvent, GeneratorView};
 use crate::health_view::{HealthEvent, HealthView};
@@ -56,10 +55,10 @@ pub struct ScoutVaultApp {
     focus: FocusHandle,
     /// Short notices on top of everything.
     toasts: Entity<crate::toast::Toasts>,
-    /// Choosing the login to fill in another app.
-    autotype_picker: Option<(Entity<AutoTypeView>, Subscription)>,
     /// Request that arrived with the vault locked; handled on unlock.
     pending_autotype: Option<Request>,
+    /// Quick search asked for while locked: opens after the HUD unlocks.
+    pending_quick_search: Option<Request>,
     /// Browser login waiting for unlock to be saved (url, username, password).
     pending_browser_save: Option<(String, String, zeroize::Zeroizing<String>)>,
     /// Typing waiting for the master password of an item that asks for it (request number).
@@ -242,8 +241,8 @@ impl ScoutVaultApp {
         let auto_lock_after = Self::auto_lock_from_settings(&store);
         let lock_on_minimize = store.load().lock_on_minimize;
         let mut this = Self {
-            autotype_picker: None,
             pending_autotype: None,
+            pending_quick_search: None,
             pending_browser_save: None,
             reprompt_autotype: None,
             reprompt_counter: 0,
@@ -387,6 +386,7 @@ impl ScoutVaultApp {
                 }
             },
             Command::OpenMenu { x, y } => self.open_tray_menu((x, y), cx),
+            Command::Unlock(password) => self.unlock_from_hud(password, window, cx),
             Command::Fill { item_id } => {
                 self.close_quick_search(cx);
                 let Some(request) = self.quick_target.take() else {
@@ -696,10 +696,137 @@ impl ScoutVaultApp {
             return;
         }
         self.close_quick_search(cx);
-        let Screen::Vault(view) = &self.screen else {
+        if matches!(self.screen, Screen::Locked(_)) {
+            if self.unlock_silently(window, cx) {
+                return self.open_quick_search(request, window, cx);
+            }
+            let target = (!request.own_window).then(|| request.title.clone());
+            self.pending_quick_search = Some(request);
+            self.open_locked_hud(target, false, cx);
+            return;
+        }
+        let Some(items) = self.quick_items(cx) else {
             crate::tray::show_window(window);
             crate::toast::info(t!("app.unlock_to_quick_search"), cx);
             return;
+        };
+        // Used in Scout Vault itself: there is no other app to type into.
+        let target = (!request.own_window).then(|| request.title.clone());
+        self.quick_target = (!request.own_window).then_some(request);
+        self.open_quick_window(cx, move |tx, window, cx| {
+            crate::quick_search::QuickSearch::new(items, target, tx, window, cx)
+        });
+    }
+
+    /// Ctrl+Alt+A when the window title doesn't pick one login: a HUD on top of
+    /// everything (apart from the main window) to search and choose.
+    fn open_autotype_hud(
+        &mut self,
+        request: Request,
+        suggested: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_quick_search(cx);
+        let Some(items) = self.quick_items(cx) else {
+            return;
+        };
+        let target = request.title.clone();
+        self.quick_target = Some(request);
+        self.open_quick_window(cx, move |tx, window, cx| {
+            crate::quick_search::QuickSearch::autotype(items, target, suggested, tx, window, cx)
+        });
+    }
+
+    /// "Ask for the vault password on open: every N days" still within the period:
+    /// a shortcut opens the locked vault without the password (as opening the app
+    /// would). Doesn't extend the period.
+    fn unlock_silently(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Screen::Locked(view) = &self.screen else {
+            return false;
+        };
+        let session = view.read(cx).session().clone();
+        let Some(keys) = crate::quick_unlock::open(&self.store, &session) else {
+            return false;
+        };
+        let vault = scout_vault_core::vault::Vault::decrypt(&session.sync, &keys);
+        // Without the pending requests: whoever called handles its own.
+        let (autotype, quick) = (
+            self.pending_autotype.take(),
+            self.pending_quick_search.take(),
+        );
+        self.open_unlocked(
+            Unlocked {
+                session,
+                keys,
+                vault,
+            },
+            window,
+            cx,
+        );
+        self.pending_autotype = autotype;
+        self.pending_quick_search = quick;
+        true
+    }
+
+    /// The HUD in its password step (vault locked).
+    fn open_locked_hud(&mut self, target: Option<String>, autotype: bool, cx: &mut Context<Self>) {
+        self.close_quick_search(cx);
+        self.open_quick_window(cx, move |tx, window, cx| {
+            crate::quick_search::QuickSearch::locked(target, autotype, tx, window, cx)
+        });
+    }
+
+    /// Password typed in the HUD: opens the vault and carries on with what was asked.
+    fn unlock_from_hud(
+        &mut self,
+        password: crate::tray::HudPassword,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Screen::Locked(view) = &self.screen else {
+            self.close_quick_search(cx);
+            return;
+        };
+        let session = view.read(cx).session().clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = crate::io::blocking(move || {
+                crate::flow::unlock(&session, &password.0).map(|(keys, vault)| Unlocked {
+                    session,
+                    keys,
+                    vault,
+                })
+            })
+            .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(unlocked) => {
+                    // Close first: focus goes back to the app that will be typed into.
+                    this.close_quick_search(cx);
+                    let quick = this.pending_quick_search.take();
+                    this.show_vault_from(&Handoff::new(Box::new(unlocked)), window, cx);
+                    if let Some(request) = quick {
+                        this.open_quick_search(request, window, cx);
+                    }
+                }
+                Err(e) => {
+                    if let Some((handle, quick)) = this.quick_search.clone() {
+                        let message: SharedString = e.into();
+                        handle
+                            .update(cx, |_, window, cx| {
+                                quick.update(cx, |q, cx| q.unlock_failed(message, window, cx))
+                            })
+                            .ok();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The vault's items as quick search shows them (`None` with the vault locked).
+    fn quick_items(&self, cx: &App) -> Option<Vec<crate::quick_search::QuickItem>> {
+        let Screen::Vault(view) = &self.screen else {
+            return None;
         };
         let items: Vec<crate::quick_search::QuickItem> = view
             .read(cx)
@@ -719,9 +846,20 @@ impl ScoutVaultApp {
                 q
             })
             .collect();
-        // Used in Scout Vault itself: there is no other app to type into.
-        let target = (!request.own_window).then(|| request.title.clone());
-        self.quick_target = (!request.own_window).then_some(request);
+        Some(items)
+    }
+
+    /// Opens the quick search window (centered, near the top, on top of everything).
+    fn open_quick_window(
+        &mut self,
+        cx: &mut Context<Self>,
+        build: impl FnOnce(
+                tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
+                &mut Window,
+                &mut Context<crate::quick_search::QuickSearch>,
+            ) -> crate::quick_search::QuickSearch
+            + 'static,
+    ) {
         let size = size(
             px(crate::quick_search::WIDTH),
             px(crate::quick_search::HEIGHT),
@@ -751,9 +889,8 @@ impl ScoutVaultApp {
             ..Default::default()
         };
         let tx = self.tray_tx.clone();
-        let opened = gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| crate::quick_search::QuickSearch::new(items, target, tx, window, cx))
-        });
+        let opened =
+            gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| build(tx, window, cx)));
         match opened {
             Ok((handle, view)) => {
                 handle
@@ -789,13 +926,9 @@ impl ScoutVaultApp {
         self.typer = typer;
     }
 
-    pub fn autotype_view(&self) -> Option<&Entity<AutoTypeView>> {
-        self.autotype_picker.as_ref().map(|(v, _)| v)
-    }
-
     /// Handles a `Ctrl+Alt+A`: types directly if only one login matches the
-    /// window title; otherwise shows the list. With the vault closed, keeps the
-    /// request for after unlock.
+    /// window title; otherwise opens the auto-type HUD. With the vault closed,
+    /// keeps the request for after unlock.
     pub fn handle_autotype(
         &mut self,
         request: Request,
@@ -810,6 +943,15 @@ impl ScoutVaultApp {
                 t!("app.autotype_own_window", hotkey = autotype::HOTKEY_LABEL),
                 cx,
             );
+            return;
+        }
+        if matches!(self.screen, Screen::Locked(_)) {
+            if self.unlock_silently(window, cx) {
+                return self.handle_autotype(request, window, cx);
+            }
+            let target = request.title.clone();
+            self.pending_autotype = Some(request);
+            self.open_locked_hud(Some(target), true, cx);
             return;
         }
         let Screen::Vault(view) = &self.screen else {
@@ -833,49 +975,8 @@ impl ScoutVaultApp {
             self.type_item(&item, request, window, cx);
             return;
         }
-        self.open_autotype_picker(request, &items, window, cx);
-        crate::tray::show_window(window);
-    }
-
-    fn open_autotype_picker(
-        &mut self,
-        request: Request,
-        items: &[Item],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings = None;
-        self.generator = None;
-        let view = cx.new(|cx| AutoTypeView::new(request, items, window, cx));
-        let sub = cx.subscribe_in(
-            &view,
-            window,
-            |this, view, event: &AutoTypeEvent, window, cx| match event {
-                AutoTypeEvent::Close => this.close_autotype(cx),
-                AutoTypeEvent::Chosen(id) => {
-                    let picked = {
-                        let v = view.read(cx);
-                        v.shown(cx)
-                            .into_iter()
-                            .find(|i| &i.id == id)
-                            .cloned()
-                            .map(|item| (item, v.request().clone()))
-                    };
-                    this.close_autotype(cx);
-                    if let Some((item, request)) = picked {
-                        this.type_item(&item, request, window, cx);
-                    }
-                }
-            },
-        );
-        self.autotype_picker = Some((view, sub));
-        cx.notify();
-    }
-
-    pub fn close_autotype(&mut self, cx: &mut Context<Self>) {
-        if self.autotype_picker.take().is_some() {
-            cx.notify();
-        }
+        let suggested = found.iter().map(|i| i.id.clone()).collect();
+        self.open_autotype_hud(request, suggested, cx);
     }
 
     fn type_item(
@@ -1087,12 +1188,9 @@ impl ScoutVaultApp {
             self.close_generator(cx);
         } else if k.key == "escape" && self.health.is_some() {
             self.close_health(cx);
-        } else if k.key == "escape" && self.autotype_picker.is_some() {
-            self.close_autotype(cx);
         } else if self.settings.is_none()
             && self.generator.is_none()
             && self.health.is_none()
-            && self.autotype_picker.is_none()
             && k.modifiers.secondary(cx)
             && !k.modifiers.shift
         {
@@ -1172,7 +1270,6 @@ impl ScoutVaultApp {
     fn set_screen(&mut self, (screen, sub): (Screen, Subscription), cx: &mut Context<Self>) {
         // Switching the screen drops the previous one: the decrypted vault leaves memory with it
         // (including the copy the fill list had and the health screen's).
-        self.autotype_picker = None;
         self.health = None;
         self.screen = screen;
         self._screen_subscription = sub;
@@ -1481,7 +1578,6 @@ impl Render for ScoutVaultApp {
             self.focus.focus(window, cx);
         }
         let content: AnyView = match (&self.settings, &self.screen) {
-            _ if self.autotype_picker.is_some() => self.autotype_view().unwrap().clone().into(),
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
             _ if self.health.is_some() => self.health_view().unwrap().clone().into(),
             (Some((v, _)), _) => v.clone().into(),

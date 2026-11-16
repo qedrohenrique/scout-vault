@@ -7,6 +7,16 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-16
+
+### Changed
+- **Auto-type HUD:** when `Ctrl+Alt+A` can't pick the login from the window title, a floating
+  HUD opens apart from the main window, with only the search, the logins and a close button.
+- With the vault locked, `Ctrl+Alt+A` and quick search no longer bring up the main window:
+  within the "ask for the password on open" period they open without asking; otherwise the HUD
+  itself asks for the vault password.
+- The item icon picker closes when you click outside it.
+
 ## [0.4.0] - 2026-11-16
 
 ### Added

@@ -774,7 +774,7 @@ fn autotype_types_the_only_matching_login(cx: &mut TestAppContext) {
             vec!["pessoa".into(), "⇥".into(), "s3nh@-ção".into(), "↵".into()]
         )
     );
-    cx.update(|cx| assert!(app.read(cx).autotype_view().is_none()));
+    cx.update(|cx| assert!(app.read(cx).quick_search().is_none()));
 }
 
 #[gpui_kit::test]
@@ -786,18 +786,29 @@ fn autotype_asks_when_the_title_does_not_decide(cx: &mut TestAppContext) {
         app.update(cx, |app, cx| {
             app.handle_autotype(request("Sem título - Bloco de Notas"), window, cx)
         });
-        window.render_frame(cx);
-        // No suggestion: lists every typeable login.
-        assert!(window.try_find("autotype-pick-login-1").is_some());
-        assert!(window.try_find("autotype-pick-card-org").is_none());
-        window.click("autotype-search", cx);
-        window.input("chave", cx);
-        window.render_frame(cx);
-        assert!(window.try_find("autotype-pick-login-1").is_none());
-        window.click("autotype-pick-login-item-key", cx);
     })
     .unwrap();
-    // This item asks for the master password: nothing is typed before confirming.
+    // A HUD apart from the main window: only typeable logins, no title.
+    let (popup, quick) = cx
+        .update(|cx| app.read(cx).quick_search())
+        .expect("HUD aberto");
+    popup
+        .update(cx, |_, window, cx| {
+            assert!(quick.read(cx).is_autotype());
+            window.render_frame(cx);
+            assert!(window.try_find("quick-item-login-1").is_some());
+            assert!(window.try_find("quick-item-card-org").is_none());
+            assert!(window.try_find("quick-search-footer").is_none());
+            assert!(window.try_find("quick-search-close").is_some());
+            quick.update(cx, |q, cx| q.set_query("chave", window, cx));
+            window.render_frame(cx);
+            assert!(window.try_find("quick-item-login-1").is_none());
+            window.click("quick-item-login-item-key", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(popup.update(cx, |_, _, _| ()).is_err(), "o HUD fechou");
+    // This item asks for the vault password: nothing is typed before confirming.
     let (password, _) = fixture_password_and_email();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -812,7 +823,42 @@ fn autotype_asks_when_the_title_does_not_decide(cx: &mut TestAppContext) {
         typed.lock().unwrap()[0].1,
         ["item-key-pw".to_owned(), "↵".into()]
     );
-    cx.update(|cx| assert!(app.read(cx).autotype_view().is_none()));
+}
+
+#[gpui_kit::test]
+fn autotype_hud_lists_suggestions_first_and_closes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let _typed = fake_typer(&app, cx);
+    let ids = |cx: &mut TestAppContext| {
+        let (_, quick) = cx.update(|cx| app.read(cx).quick_search()).unwrap();
+        cx.update(|cx| {
+            quick
+                .read(cx)
+                .results()
+                .iter()
+                .map(|i| i.id.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_autotype(request("Sem título - Bloco de Notas"), window, cx)
+        });
+    })
+    .unwrap();
+    let all = ids(cx);
+    assert!(all.len() > 1);
+    // The close button closes the HUD without typing.
+    let (popup, _) = cx.update(|cx| app.read(cx).quick_search()).unwrap();
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("quick-search-close", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(popup.update(cx, |_, _, _| ()).is_err(), "o HUD fechou");
 }
 
 #[gpui_kit::test]
@@ -3658,7 +3704,7 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
         Some("identity-1".into())
     );
 
-    // Locked: doesn't open the small window; asks to unlock.
+    // Locked: the HUD itself asks for the vault password (not the main window).
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| {
             a.lock(window, cx);
@@ -3666,8 +3712,88 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
         })
     })
     .unwrap();
-    assert!(cx.update(|cx| app.read(cx).quick_search().is_none()));
-    assert!(texts(cx).contains(&"Desbloqueie o cofre para usar a busca rápida.".to_owned()));
+    let (popup, quick) = cx
+        .update(|cx| app.read(cx).quick_search())
+        .expect("HUD pedindo a senha");
+    assert!(cx.update(|cx| quick.read(cx).is_locked()));
+    let _ = texts;
+
+    // Wrong password: says so and stays open.
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("quick-search-password", cx);
+            window.input("senha-errada", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| quick.read(cx).unlock_error().is_some())
+    });
+    assert!(cx.update(|cx| app.read(cx).vault_view().is_none()));
+    assert!(cx.update(|cx| quick.read(cx).is_locked()));
+
+    // Right password: the vault opens and the HUD shows the list.
+    let (password, _) = fixture_password_and_email();
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("quick-search-password", cx);
+            window.input(&password, cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| {
+            app.read(cx).vault_view().is_some()
+                && app
+                    .read(cx)
+                    .quick_search()
+                    .is_some_and(|(_, q)| !q.read(cx).is_locked())
+        })
+    });
+}
+
+/// With "ask for the password every N days" still within the period, a
+/// shortcut opens the locked vault without asking anything.
+#[gpui_kit::test]
+fn shortcut_skips_the_password_within_the_remembered_period(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    let (_dir, store) = file_store("hud-lembra");
+    let mut s = store.load();
+    s.remember_session = true;
+    s.unlock_memory_days = 30;
+    store.save(&s);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let _typed = fake_typer(&app, cx);
+    // Typing the password once (main window) remembers it for the period.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.lock(window, cx));
+    })
+    .unwrap();
+    let (password, _) = fixture_password_and_email();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("unlock-password", cx);
+        window.input(&password, cx);
+        window.click("unlock-submit", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| cx.update(|cx| app.read(cx).vault_view().is_some()));
+
+    // Auto-lock, then the shortcut: the list opens, no password.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.lock(window, cx);
+            a.open_quick_search(request("Qualquer"), window, cx)
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(cx.update(|cx| app.read(cx).vault_view().is_some()));
+    let (_, quick) = cx.update(|cx| app.read(cx).quick_search()).expect("HUD");
+    assert!(!cx.update(|cx| quick.read(cx).is_locked()));
 }
 
 /// The clipboard clearing time comes from the settings (and
@@ -3960,4 +4086,20 @@ fn item_icon_can_be_chosen_saved_and_reset(cx: &mut TestAppContext) {
             .map(|c| c.icon.clone()),
         Some("brand:discord".to_owned())
     );
+
+    // A click outside the picker closes it; clicking the icon opens it again.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("detail-name", cx);
+    })
+    .unwrap();
+    assert!(!cx.update(|cx| vault.read(cx).icon_picker_open()));
+    // (a later click: the one right after closing it belongs to the same gesture)
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("item-icon", cx);
+    })
+    .unwrap();
+    assert!(cx.update(|cx| vault.read(cx).icon_picker_open()));
 }

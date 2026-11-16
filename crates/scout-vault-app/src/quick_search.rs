@@ -8,7 +8,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::*;
+use gpui_kit::component::{button::*, *};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use scout_vault_core::vault::{Item, ItemKind};
@@ -138,6 +138,13 @@ pub struct QuickSearch {
     can_fill: bool,
     /// Title of the target app.
     target: String,
+    /// Opened by the auto-type shortcut (Ctrl+Alt+A): a HUD with only the
+    /// search, the logins and a close button; Enter types into the target app.
+    autotype: bool,
+    /// Ids the target window's title suggests, listed first (auto-type).
+    suggested: Vec<String>,
+    /// Vault locked: the HUD asks for the vault password first.
+    locked: Option<Locked>,
     tx: UnboundedSender<Command>,
     /// Notice after copying ("Password copied"), before closing.
     flash: Option<SharedString>,
@@ -145,10 +152,115 @@ pub struct QuickSearch {
     _subscriptions: Vec<Subscription>,
 }
 
+/// The HUD's password step.
+struct Locked {
+    password: Entity<InputState>,
+    busy: bool,
+    error: Option<SharedString>,
+}
+
 impl QuickSearch {
+    /// The vault is locked: the HUD asks for the vault password, then the app
+    /// opens the list (or types, if the window title picks one login).
+    pub fn locked(
+        target: Option<String>,
+        autotype: bool,
+        tx: UnboundedSender<Command>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::build(Vec::new(), target, autotype, Vec::new(), tx, window, cx);
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(t!("hud.password_placeholder"))
+        });
+        password.update(cx, |p, cx| p.focus(window, cx));
+        this.locked = Some(Locked {
+            password,
+            busy: false,
+            error: None,
+        });
+        this
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked.is_some()
+    }
+
+    /// Error shown in the password step (wrong password…).
+    pub fn unlock_error(&self) -> Option<&SharedString> {
+        self.locked.as_ref().and_then(|l| l.error.as_ref())
+    }
+
+    /// Sends the typed password to the app (Enter in the locked HUD).
+    pub fn submit_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(locked) = &mut self.locked else {
+            return;
+        };
+        if locked.busy {
+            return;
+        }
+        let password = zeroize::Zeroizing::new(locked.password.read(cx).value().to_string());
+        if password.is_empty() {
+            locked.error = Some(t!("login.password_required").into());
+            cx.notify();
+            return;
+        }
+        locked
+            .password
+            .update(cx, |p, cx| p.set_value("", window, cx));
+        locked.busy = true;
+        locked.error = None;
+        let _ = self
+            .tx
+            .send(Command::Unlock(crate::tray::HudPassword(password)));
+        cx.notify();
+    }
+
+    /// Wrong password (or another problem): show it and let the person try again.
+    pub fn unlock_failed(
+        &mut self,
+        message: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(locked) = &mut self.locked {
+            locked.busy = false;
+            locked.error = Some(message);
+            locked.password.update(cx, |p, cx| p.focus(window, cx));
+            cx.notify();
+        }
+    }
+
     pub fn new(
         items: Vec<QuickItem>,
         target: Option<String>,
+        tx: UnboundedSender<Command>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(items, target, false, Vec::new(), tx, window, cx)
+    }
+
+    /// The auto-type HUD: only typeable logins, the suggested ones first.
+    pub fn autotype(
+        items: Vec<QuickItem>,
+        target: String,
+        suggested: Vec<String>,
+        tx: UnboundedSender<Command>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let items = items.into_iter().filter(|i| i.typeable).collect();
+        Self::build(items, Some(target), true, suggested, tx, window, cx)
+    }
+
+    fn build(
+        items: Vec<QuickItem>,
+        target: Option<String>,
+        autotype: bool,
+        suggested: Vec<String>,
         tx: UnboundedSender<Command>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -168,7 +280,7 @@ impl QuickSearch {
             }
         });
         query.update(cx, |q, cx| q.focus(window, cx));
-        let results = search(&items, "");
+        let results = Self::find(&items, &suggested, "");
         Self {
             items,
             results,
@@ -176,11 +288,34 @@ impl QuickSearch {
             query,
             can_fill: target.is_some(),
             target: target.unwrap_or_default(),
+            autotype,
+            suggested,
+            locked: None,
             tx,
             flash: None,
             activated: false,
             _subscriptions: vec![input_sub, activation],
         }
+    }
+
+    /// The search, with the suggested items first while there is no query.
+    fn find(items: &[QuickItem], suggested: &[String], query: &str) -> Vec<QuickItem> {
+        let mut found = search(items, query);
+        if query.trim().is_empty() && !suggested.is_empty() {
+            found = items
+                .iter()
+                .filter(|i| suggested.contains(&i.id))
+                .cloned()
+                .chain(found.into_iter().filter(|i| !suggested.contains(&i.id)))
+                .take(MAX_RESULTS)
+                .collect();
+        }
+        found
+    }
+
+    /// Opened by Ctrl+Alt+A.
+    pub fn is_autotype(&self) -> bool {
+        self.autotype
     }
 
     pub fn results(&self) -> &[QuickItem] {
@@ -199,7 +334,7 @@ impl QuickSearch {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let q = self.query.read(cx).value().to_string();
-        self.results = search(&self.items, &q);
+        self.results = Self::find(&self.items, &self.suggested, &q);
         self.selected = 0;
         cx.notify();
     }
@@ -281,6 +416,15 @@ impl QuickSearch {
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
         let ctrl = k.modifiers.control;
+        if self.locked.is_some() {
+            match k.key.as_str() {
+                "escape" => window.remove_window(),
+                "enter" => self.submit_password(window, cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+            return;
+        }
         match (ctrl, k.key.as_str()) {
             (false, "escape") => window.remove_window(),
             (false, "down") => self.move_selection(1, cx),
@@ -339,7 +483,7 @@ impl QuickSearch {
                             .child(item.detail.clone()),
                     ),
             )
-            .when(selected, |el| {
+            .when(selected && !self.autotype, |el| {
                 el.child(div().text_xs().text_color(accent).child(
                     if self.can_fill && item.typeable {
                         t!("quick.enter_fill")
@@ -381,6 +525,16 @@ impl Render for QuickSearch {
             Some(text) => text.clone(),
             None => t!("quick.footer").into(),
         };
+        if let Some(locked) = &self.locked {
+            let card = self.locked_card(locked, cx);
+            return div()
+                .id("quick-search")
+                .size_full()
+                .p(px(MARGIN))
+                .capture_key_down(cx.listener(Self::on_key))
+                .child(motion::rise(card, motion::key("busca-rapida", "senha"), 8.))
+                .into_any_element();
+        }
         let card = v_flex()
             .size_full()
             .rounded(px(14.))
@@ -390,15 +544,39 @@ impl Render for QuickSearch {
             .text_color(fg)
             .shadow_lg()
             .overflow_hidden()
-            .child(
+            .child(if self.autotype {
+                // HUD: only the search and the close button.
+                h_flex()
+                    .gap_2()
+                    .px_3()
+                    .pt_3()
+                    .pb_2()
+                    .child(
+                        div().flex_1().child(
+                            Input::new(&self.query)
+                                .id("quick-search-input")
+                                .prefix(Icon::new(IconName::Search).small())
+                                .large(),
+                        ),
+                    )
+                    .child(
+                        Button::new("quick-search-close")
+                            .ghost()
+                            .icon(IconName::Close)
+                            .tooltip(t!("autotype.cancel_esc"))
+                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                    )
+                    .into_any_element()
+            } else {
                 v_flex()
                     .gap_1()
                     .px_4()
                     .pt_3()
                     .pb_2()
                     .child(div().text_xs().text_color(muted).truncate().child(target))
-                    .child(Input::new(&self.query).id("quick-search-input").large()),
-            )
+                    .child(Input::new(&self.query).id("quick-search-input").large())
+                    .into_any_element()
+            })
             .child(
                 v_flex()
                     .flex_1()
@@ -420,30 +598,107 @@ impl Render for QuickSearch {
                         )
                     }),
             )
-            .child(
-                div()
-                    .id("quick-search-footer")
-                    .test_support()
-                    .aria_label(footer.clone())
-                    .px_4()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(border)
-                    .text_xs()
-                    .text_color(if self.flash.is_some() {
-                        appearance::accent(cx)
-                    } else {
-                        muted
-                    })
-                    .truncate()
-                    .child(footer),
-            );
+            .when(!self.autotype, |el| {
+                el.child(
+                    div()
+                        .id("quick-search-footer")
+                        .test_support()
+                        .aria_label(footer.clone())
+                        .px_4()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(border)
+                        .text_xs()
+                        .text_color(if self.flash.is_some() {
+                            appearance::accent(cx)
+                        } else {
+                            muted
+                        })
+                        .truncate()
+                        .child(footer),
+                )
+            });
         div()
             .id("quick-search")
             .size_full()
             .p(px(MARGIN))
             .capture_key_down(cx.listener(Self::on_key))
             .child(motion::rise(card, motion::key("busca-rapida", "abre"), 8.))
+            .into_any_element()
+    }
+}
+
+impl QuickSearch {
+    /// Password step: lock icon, the field, the error and the close button.
+    fn locked_card(&self, locked: &Locked, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let (border, popover, fg, muted) = (
+            theme.border,
+            theme.popover,
+            theme.popover_foreground,
+            theme.muted_foreground,
+        );
+        let status: SharedString = match (&locked.error, locked.busy) {
+            (Some(e), _) => e.clone(),
+            (None, true) => t!("unlock.opening").into(),
+            (None, false) => t!("hud.locked_hint").into(),
+        };
+        v_flex()
+            .w_full()
+            .rounded(px(14.))
+            .border_1()
+            .border_color(border)
+            .bg(popover)
+            .text_color(fg)
+            .shadow_lg()
+            .overflow_hidden()
+            .p_3()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .size(px(36.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(9.))
+                            .bg(appearance::accent(cx).opacity(0.14))
+                            .text_color(appearance::accent(cx))
+                            .child(Icon::new(IconName::Lock).small()),
+                    )
+                    .child(
+                        div().flex_1().child(
+                            Input::new(&locked.password)
+                                .id("quick-search-password")
+                                .large()
+                                .disabled(locked.busy),
+                        ),
+                    )
+                    .child(
+                        Button::new("quick-search-close")
+                            .ghost()
+                            .icon(IconName::Close)
+                            .tooltip(t!("autotype.cancel_esc"))
+                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                    ),
+            )
+            .child(
+                div()
+                    .id("quick-search-status")
+                    .test_support()
+                    .aria_label(status.clone())
+                    .px_1()
+                    .text_xs()
+                    .text_color(if locked.error.is_some() {
+                        cx.theme().danger
+                    } else {
+                        muted
+                    })
+                    .child(status),
+            )
     }
 }
 
