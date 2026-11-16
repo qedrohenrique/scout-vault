@@ -1,7 +1,7 @@
-//! Toasts no estilo do Sonner: avisos curtos que sobem do pé da janela, ficam
-//! um pouco e descem sumindo. Substituem as mensagens fixas da barra lateral.
+//! Sonner-style toasts: short notices that rise from the bottom of the window, stay
+//! for a bit and slide down fading out. They replace the sidebar's fixed messages.
 //!
-//! Qualquer tela chama [`show`]; a raiz do app desenha a pilha por cima de tudo.
+//! Any screen calls [`show`]; the app root draws the stack on top of everything.
 
 use std::time::Duration;
 
@@ -10,13 +10,13 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-/// Quanto tempo o toast fica visível (erros ficam mais).
+/// How long the toast stays visible (errors stay longer).
 const STAY: Duration = Duration::from_millis(2600);
 const STAY_ERROR: Duration = Duration::from_millis(4200);
-/// Duração da entrada e da saída.
+/// Duration of the entrance and the exit.
 const ENTER: Duration = Duration::from_millis(280);
 const LEAVE: Duration = Duration::from_millis(240);
-/// No máximo tantos ao mesmo tempo; o mais antigo sai primeiro.
+/// At most this many at the same time; the oldest leaves first.
 const MAX: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +43,14 @@ struct Hub(Entity<Toasts>);
 
 impl Global for Hub {}
 
-/// Cria a pilha de toasts desta janela (chamado pela raiz do app).
+/// Creates this window's toast stack (called by the app root).
 pub fn init(cx: &mut App) -> Entity<Toasts> {
     let toasts = cx.new(|_| Toasts::default());
     cx.set_global(Hub(toasts.clone()));
     toasts
 }
 
-/// Mostra um toast. Sem pilha criada (ex.: telas isoladas em teste), não faz nada.
+/// Shows a toast. With no stack created (e.g. isolated screens in tests), does nothing.
 pub fn show(kind: Kind, text: impl Into<SharedString>, cx: &mut App) {
     let Some(hub) = cx.try_global::<Hub>().map(|h| h.0.clone()) else {
         return;
@@ -72,7 +72,7 @@ pub fn info(text: impl Into<SharedString>, cx: &mut App) {
 }
 
 impl Toasts {
-    /// Textos visíveis agora (para testes).
+    /// Texts visible right now (for tests).
     pub fn texts(&self) -> Vec<String> {
         self.items
             .iter()
@@ -82,7 +82,7 @@ impl Toasts {
     }
 
     fn push(&mut self, kind: Kind, text: SharedString, cx: &mut Context<Self>) {
-        // O mesmo aviso repetido não empilha: reinicia o que já está lá.
+        // The same repeated notice doesn't stack: restarts the one already there.
         self.items.retain(|t| t.text != text || t.leaving);
         let id = self.next;
         self.next += 1;
@@ -121,7 +121,7 @@ impl Toasts {
         cx.notify();
     }
 
-    /// Começa a saída e tira da lista quando a animação acaba.
+    /// Starts the exit and removes it from the list when the animation ends.
     fn leave(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(t) = self.items.iter_mut().find(|t| t.id == id && !t.leaving) else {
             return;
@@ -178,7 +178,7 @@ impl Render for Toasts {
                 .child(div().min_w_0().child(t.text.clone()));
             let wrapper = div().child(body);
             if t.leaving {
-                // Sai descendo e sumindo.
+                // Leaves sliding down and fading.
                 wrapper
                     .with_animation(
                         crate::motion::key("toast-sai", t.id),
@@ -187,7 +187,7 @@ impl Render for Toasts {
                     )
                     .into_any_element()
             } else {
-                // Sobe do pé da janela com um leve "pulo".
+                // Rises from the bottom of the window with a slight "bounce".
                 wrapper
                     .with_animation(
                         crate::motion::key("toast-entra", t.id),

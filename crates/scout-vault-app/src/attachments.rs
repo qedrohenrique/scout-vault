@@ -1,15 +1,15 @@
-//! Arquivos temporários de anexos abertos com outro programa.
+//! Temporary files for attachments opened with another program.
 //!
-//! Para abrir um PDF ou uma imagem no programa padrão, o conteúdo decifrado
-//! precisa existir num arquivo. Ele vai para `%TEMP%\ScoutVault-anexos\<aleatório>\`
-//! e é apagado ao bloquear o cofre (ou na próxima abertura, se o app caiu).
-//! "Salvar como…" grava onde a pessoa escolher e não é apagado.
+//! To open a PDF or an image in the default program, the decrypted contents
+//! must exist in a file. It goes to `%TEMP%\ScoutVault-anexos\<random>\`
+//! and is deleted when the vault locks (or on the next launch, if the app crashed).
+//! "Save as…" writes wherever the person chooses and is not deleted.
 
 use std::path::{Path, PathBuf};
 
 static SYSTEM_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Permite abrir arquivos com o programa padrão (só o app real; nos testes não há sistema).
+/// Allows opening files with the default program (real app only; tests have no system).
 pub fn enable_system_open() {
     SYSTEM_OPEN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -22,7 +22,7 @@ fn temp_root() -> PathBuf {
     std::env::temp_dir().join("ScoutVault-anexos")
 }
 
-/// Nome seguro para o sistema de arquivos (o nome vem do cofre).
+/// File-system-safe name (the name comes from the vault).
 fn safe_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -55,8 +55,8 @@ pub fn write_temp(name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// Apaga a cópia e a pasta aleatória dela. Se o arquivo ainda estiver aberto
-/// noutro programa, o Windows não deixa; sobra para a próxima limpeza.
+/// Deletes the copy and its random folder. If the file is still open in
+/// another program, Windows doesn't allow it; it is left for the next cleanup.
 pub fn remove_temp(path: &Path) {
     let _ = std::fs::remove_file(path);
     if let Some(dir) = path.parent() {
@@ -68,7 +68,7 @@ pub fn cleanup_temp() {
     let _ = std::fs::remove_dir_all(temp_root());
 }
 
-/// Pasta sugerida no "Salvar como…".
+/// Folder suggested in "Save as…".
 pub fn downloads_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))

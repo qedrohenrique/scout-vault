@@ -1,20 +1,20 @@
-# cargo-deny: falhas conhecidas (RustSec), licenças, crates proibidos e origem
-# das dependências. Rode localmente com `cargo deny check`.
+# cargo-deny: known vulnerabilities (RustSec), licenses, banned crates and the
+# origin of dependencies. Run locally with `cargo deny check`.
 
 [graph]
-# O app é só Windows por enquanto; o núcleo também roda no Linux (testes ao vivo do CI).
+# The app is Windows-only for now; the core also runs on Linux (CI live tests).
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 all-features = false
 
 [advisories]
-# Vulnerabilidades e "unsound" falham em qualquer dependência. "Sem manutenção" só
-# conta nas dependências diretas: as indiretas (do gpui) não dá para trocar daqui.
+# Vulnerabilities and "unsound" fail on any dependency. "Unmaintained" only counts
+# for direct dependencies: the indirect ones (from gpui) can't be swapped from here.
 yanked = "deny"
 unmaintained = "workspace"
 ignore = []
 
 [licenses]
-# Licenças permissivas compatíveis com a licença do projeto.
+# Permissive licenses compatible with the project's license.
 allow = [
     "MIT",
     "0BSD",
@@ -34,7 +34,7 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"
-# As crates do próprio workspace usam `path` com versão; não contam como curinga.
+# The workspace's own crates use `path` with a version; they don't count as wildcards.
 allow-wildcard-paths = true
 
 [sources]

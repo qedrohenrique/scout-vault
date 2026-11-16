@@ -1,5 +1,5 @@
-//! Preferências não sensíveis, salvas em JSON: servidor, último e-mail e a
-//! identidade deste dispositivo. **Nada secreto vai para este arquivo.**
+//! Non-sensitive preferences, saved as JSON: server, last email and this
+//! device's identity. **Nothing secret goes into this file.**
 
 use std::path::PathBuf;
 
@@ -25,7 +25,7 @@ impl ServerChoice {
         match self {
             Self::BitwardenUs => "bitwarden.com",
             Self::BitwardenEu => "bitwarden.eu",
-            Self::SelfHosted => "Servidor próprio",
+            Self::SelfHosted => t!("settings.server_self_hosted"),
         }
     }
 
@@ -41,55 +41,67 @@ pub struct Settings {
     pub self_hosted_url: String,
     #[serde(default)]
     pub last_email: String,
-    /// Identificador da organização no último login por SSO.
+    /// Organization identifier from the last SSO login.
     #[serde(default)]
     pub last_sso_identifier: String,
-    /// Mesmo identificador em todos os logins: evita alertas de "novo dispositivo".
+    /// Same identifier on every login: avoids "new device" alerts.
     pub device: DeviceInfo,
-    /// Tema, cor de destaque e afins.
+    /// Theme, accent color and the like.
     #[serde(default)]
     pub appearance: Appearance,
-    /// Abrir o app sem pedir a senha mestra por tantos dias depois de digitá-la
-    /// (0 = pedir sempre). A chave fica no Gerenciador de Credenciais.
+    /// Interface language by code (`pt-BR`, `en`); empty = the system's.
+    #[serde(default)]
+    pub language: String,
+    /// Open the app without asking for the master password for this many days after typing it
+    /// (0 = always ask). The key is kept in Credential Manager.
     #[serde(default)]
     pub unlock_memory_days: u32,
-    /// Pedir login completo (e-mail, senha, 2FA) a cada tantos dias (0 = nunca).
+    /// Ask for a full login (email, password, 2FA) every this many days (0 = never).
     #[serde(default = "default_relogin_days")]
     pub relogin_days: u32,
-    /// Bloquear depois de tantos minutos sem uso (0 = nunca).
+    /// Lock after this many minutes without use (0 = never).
     #[serde(default = "default_auto_lock_minutes")]
     pub auto_lock_minutes: u32,
-    /// Fechar a janela deixa o app rodando na bandeja do Windows.
+    /// Icon and color chosen per item (on this computer only).
+    #[serde(default)]
+    pub item_icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
+    /// Closing the window keeps the app running in the Windows tray.
     #[serde(default = "yes")]
     pub close_to_tray: bool,
-    /// Bloquear o cofre quando o Windows bloqueia (`Win+L`) ou suspende.
+    /// Seconds until the clipboard is cleared after copying (0 = don't clear).
+    #[serde(default = "default_clipboard_clear_secs")]
+    pub clipboard_clear_secs: u32,
+    /// Lock when the window is minimized or closed to the tray.
+    #[serde(default)]
+    pub lock_on_minimize: bool,
+    /// Lock the vault when Windows locks (`Win+L`) or sleeps.
     #[serde(default = "yes")]
     pub lock_with_windows: bool,
-    /// Desbloquear com Windows Hello (a chave fica cifrada pelo Hello).
+    /// Unlock with Windows Hello (the key is encrypted by Hello).
     #[serde(default)]
     pub windows_hello: bool,
-    /// Sincronizar sozinho quando o cofre muda em outro aparelho.
+    /// Sync on its own when the vault changes on another device.
     #[serde(default = "yes")]
     pub background_sync: bool,
-    /// Busca rápida global (`Ctrl+Shift+Espaço`).
+    /// Global quick search (`Ctrl+Shift+Space`).
     #[serde(default = "yes")]
     pub quick_search: bool,
-    /// O aviso "continua na bandeja" já foi mostrado uma vez.
+    /// The "still in the tray" notice has already been shown once.
     #[serde(default)]
     pub tray_hint_shown: bool,
-    /// Itens fixados no "Acesso rápido" da barra lateral (só os ids; nada secreto).
+    /// Items pinned to the sidebar's "Quick access" (ids only; nothing secret).
     #[serde(default)]
     pub pinned_items: Vec<String>,
-    /// Ao abrir o app, ir direto para o desbloqueio (sessão e cache cifrado guardados).
+    /// On app start, go straight to unlock (session and encrypted cache stored).
     #[serde(default = "yes")]
     pub remember_session: bool,
-    /// Extensão do navegador pode pedir logins ao app (desligado por padrão).
+    /// The browser extension may ask the app for logins (off by default).
     #[serde(default)]
     pub browser_fill: bool,
-    /// Opções do gerador de senhas (a senha gerada nunca é salva).
+    /// Password generator options (the generated password is never saved).
     #[serde(default)]
     pub generator: PasswordOptions,
-    /// Preenchimento em outros apps pelo atalho global.
+    /// Filling in other apps via the global shortcut.
     #[serde(default)]
     pub autotype: AutoTypeSettings,
 }
@@ -98,7 +110,7 @@ pub struct Settings {
 #[serde(default)]
 pub struct AutoTypeSettings {
     pub enabled: bool,
-    /// Aperta Enter depois da senha.
+    /// Presses Enter after the password.
     pub press_enter: bool,
 }
 
@@ -120,11 +132,15 @@ impl Default for Settings {
             last_sso_identifier: String::new(),
             device: DeviceInfo::new(&device_name()),
             appearance: Appearance::default(),
+            language: String::new(),
             generator: PasswordOptions::default(),
             remember_session: true,
             pinned_items: Vec::new(),
             close_to_tray: true,
+            item_icons: Default::default(),
             lock_with_windows: true,
+            clipboard_clear_secs: default_clipboard_clear_secs(),
+            lock_on_minimize: false,
             windows_hello: false,
             background_sync: true,
             quick_search: true,
@@ -142,6 +158,10 @@ fn default_relogin_days() -> u32 {
     30
 }
 
+fn default_clipboard_clear_secs() -> u32 {
+    crate::clipboard::DEFAULT_CLEAR_SECS
+}
+
 fn default_auto_lock_minutes() -> u32 {
     5
 }
@@ -150,8 +170,8 @@ fn yes() -> bool {
     true
 }
 
-/// O app se chamava "Cofre": move a pasta antiga (configurações e sessão
-/// lembrada) para o nome novo, uma vez só.
+/// The app used to be called "Cofre": moves the old folder (settings and remembered
+/// session) to the new name, only once.
 fn migrate_old_dir(new: &std::path::Path, old_name: &str) {
     let Some(old) = new.parent().map(|p| p.join(old_name)) else {
         return;
@@ -169,7 +189,16 @@ impl Settings {
             ServerChoice::SelfHosted => {
                 let url = self.self_hosted_url.trim();
                 if !(url.starts_with("https://") || url.starts_with("http://")) {
-                    return Err("Informe o endereço do servidor, começando com https://".into());
+                    return Err(t!("settings.server_url_required").into());
+                }
+                // Without TLS, anyone on the path can swap the server's responses (the KDF,
+                // for example) and see the login hash: http:// only on this computer.
+                if let Some(rest) = url.strip_prefix("http://") {
+                    if !is_loopback_authority(rest) {
+                        return Err("Use https:// para servidores fora deste computador \
+                                    (http:// só vale para localhost)."
+                            .into());
+                    }
                 }
                 Ok(ServerUrls::self_hosted(url))
             }
@@ -177,14 +206,28 @@ impl Settings {
     }
 }
 
-/// Onde as preferências moram. `None` = não persistir (testes).
+/// Is `host[:port]/…` this computer (localhost, 127.0.0.0/8 or ::1)?
+fn is_loopback_authority(rest: &str) -> bool {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit('@').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Where the preferences live. `None` = don't persist (tests).
 #[derive(Clone, Default)]
 pub struct SettingsStore {
     path: Option<PathBuf>,
-    /// Segredos que acompanham este armazenamento: o cofre do sistema quando as
-    /// preferências vão para o disco; a memória nos testes.
+    /// Secrets that go with this storage: the system credential store when the
+    /// preferences go to disk; memory in tests.
     secrets: SecretStore,
-    /// Sessão lembrada quando não há arquivo (testes).
+    /// Remembered session when there is no file (tests).
     session_mem: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 }
 
@@ -197,7 +240,7 @@ impl std::fmt::Debug for SettingsStore {
 }
 
 impl SettingsStore {
-    /// `%APPDATA%\Scout Vault\settings.json` no Windows; `~/.config/scout-vault/settings.json` nos demais.
+    /// `%APPDATA%\Scout Vault\settings.json` on Windows; `~/.config/scout-vault/settings.json` elsewhere.
     pub fn default_location() -> Self {
         let dir = std::env::var_os("APPDATA")
             .map(|d| {
@@ -222,7 +265,7 @@ impl SettingsStore {
         Self::default()
     }
 
-    /// Preferências num arquivo à parte; os segredos ficam na memória (testes).
+    /// Preferences in a separate file; secrets stay in memory (tests).
     pub fn at(path: PathBuf) -> Self {
         Self {
             path: Some(path),
@@ -235,7 +278,7 @@ impl SettingsStore {
         &self.secrets
     }
 
-    /// Lê o arquivo da sessão lembrada (ou a cópia em memória, nos testes).
+    /// Reads the remembered session file (or the in-memory copy, in tests).
     pub(crate) fn read_session_blob(&self) -> Option<Vec<u8>> {
         match &self.path {
             Some(p) => std::fs::read(p.with_file_name("sessao.json")).ok(),
@@ -243,14 +286,14 @@ impl SettingsStore {
         }
     }
 
-    /// Pasta das preferências (`%APPDATA%\Scout Vault`), se houver.
+    /// Preferences folder (`%APPDATA%\Scout Vault`), if any.
     pub fn dir(&self) -> Option<PathBuf> {
         self.path
             .as_ref()
             .and_then(|p| p.parent().map(PathBuf::from))
     }
 
-    /// Para testes: há uma sessão guardada (mesmo que incompleta)?
+    /// For tests: is there a stored session (even an incomplete one)?
     pub fn read_session_blob_for_tests(&self) -> Option<Vec<u8>> {
         self.read_session_blob()
     }
@@ -264,7 +307,7 @@ impl SettingsStore {
                         if let Some(dir) = file.parent() {
                             let _ = std::fs::create_dir_all(dir);
                         }
-                        // Grava num temporário e troca: nunca deixa um arquivo pela metade.
+                        // Writes to a temporary file and swaps: never leaves a half-written file.
                         let tmp = file.with_extension("json.tmp");
                         if std::fs::write(&tmp, b).is_ok() {
                             let _ = std::fs::rename(&tmp, &file);
@@ -293,7 +336,7 @@ impl SettingsStore {
         match loaded {
             Some(s) => s,
             None => {
-                // Primeira execução: cria a identidade do dispositivo e já grava.
+                // First run: creates the device identity and saves right away.
                 let s = Settings::default();
                 self.save(&s);
                 s
@@ -301,7 +344,7 @@ impl SettingsStore {
         }
     }
 
-    /// Falhas ao salvar não impedem o uso — só custam um alerta de novo dispositivo depois.
+    /// Save failures don't prevent use — they only cost a new device alert later.
     pub fn save(&self, settings: &Settings) {
         let Some(path) = &self.path else { return };
         if let Some(dir) = path.parent() {
@@ -338,6 +381,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Preferences saved before the language option still work (system language).
+    #[test]
+    fn old_settings_without_language_load() {
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("language");
+        let loaded: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.language, "");
+    }
+
     #[test]
     fn self_hosted_requires_scheme() {
         let mut s = Settings {
@@ -346,6 +398,20 @@ mod tests {
             ..Settings::default()
         };
         assert!(s.server_urls().is_err());
+        // http:// only on this computer.
+        for (url, ok) in [
+            ("http://vault.exemplo.com", false),
+            ("http://192.168.0.10:8000", false),
+            ("http://localhost.evil.com", false),
+            ("http://127.0.0.1@evil.com", false),
+            ("http://LOCALHOST:8000", true),
+            ("http://localhost:8000/", true),
+            ("http://127.0.0.1:9", true),
+            ("http://[::1]:8000", true),
+        ] {
+            s.self_hosted_url = url.into();
+            assert_eq!(s.server_urls().is_ok(), ok, "{url}");
+        }
         s.self_hosted_url = "https://vault.exemplo.com/".into();
         assert_eq!(
             s.server_urls().unwrap().api,

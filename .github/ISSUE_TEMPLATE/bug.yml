@@ -1,62 +1,62 @@
-name: Algo não funciona
-description: Um erro, travamento ou comportamento estranho do app ou da extensão.
+name: Something doesn't work
+description: An error, crash or odd behavior in the app or the extension.
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Obrigado por relatar! **Nunca cole senhas, códigos, tokens ou o conteúdo do cofre aqui.**
-        Falha de segurança? Use o relato privado (veja o SECURITY.md), não esta issue.
+        Thanks for reporting! **Never paste passwords, codes, tokens or vault contents here.**
+        Security issue? Use private reporting (see SECURITY.md), not this issue.
   - type: input
-    id: versao
+    id: version
     attributes:
-      label: Versão
-      description: "Nome do zip da release (ex.: scout-vault-0.3.0-windows-x64.zip) ou o commit."
+      label: Version
+      description: "Name of the release zip (e.g. scout-vault-0.3.0-windows-x64.zip) or the commit."
     validations:
       required: true
   - type: dropdown
-    id: servidor
+    id: server
     attributes:
-      label: Servidor
+      label: Server
       options:
         - bitwarden.com
         - bitwarden.eu
         - Vaultwarden
-        - Outro auto-hospedado
+        - Other self-hosted
     validations:
       required: true
   - type: dropdown
-    id: onde
+    id: where
     attributes:
-      label: Onde aconteceu
+      label: Where it happened
       multiple: true
       options:
-        - Login / desbloqueio
-        - Cofre (lista, detalhe, edição)
-        - Anexos
-        - Pastas / organizações
-        - Extensão do navegador
-        - Preencher em apps (Ctrl+Alt+A)
-        - Bandeja / Windows Hello
-        - Outro
+        - Login / unlock
+        - Vault (list, detail, editing)
+        - Attachments
+        - Folders / organizations
+        - Browser extension
+        - Fill in apps (Ctrl+Alt+A)
+        - Tray / Windows Hello
+        - Other
   - type: textarea
-    id: passos
+    id: steps
     attributes:
-      label: O que você fez
-      description: Passo a passo para acontecer de novo.
+      label: What you did
+      description: Step by step to make it happen again.
       placeholder: |
-        1. Abri…
-        2. Cliquei em…
+        1. I opened…
+        2. I clicked…
     validations:
       required: true
   - type: textarea
-    id: esperado
+    id: expected
     attributes:
-      label: O que esperava e o que aconteceu
+      label: What you expected and what happened
     validations:
       required: true
   - type: input
     id: windows
     attributes:
-      label: Windows e navegador
+      label: Windows and browser
       placeholder: Windows 11 24H2, Chrome 142

@@ -1,363 +1,412 @@
-<p align="center"><img src="docs/imagens/logo.png" width="112" alt="Logo do Scout Vault: um cadeado de chapéu de explorador"></p>
+<p align="center"><img src="docs/images/logo.png" width="112" alt="Scout Vault logo: a padlock wearing an explorer's hat"></p>
 
 # Scout Vault
 
-Cliente desktop nativo, em **Rust + GPUI**, para servidores compatíveis com Bitwarden
-(Bitwarden oficial e Vaultwarden). A ideia é ter um app leve e rápido para o dia a dia:
-abrir, buscar, copiar e fechar, sem o peso de um app Electron.
+A native desktop client, written in **Rust + GPUI**, for Bitwarden-compatible servers (official
+Bitwarden and Vaultwarden). The idea is a light, fast app for everyday use: open, search, copy and
+close, without the weight of an Electron app.
 
-> Projeto não oficial, sem afiliação com a Bitwarden Inc. **Em desenvolvimento — não use com seu cofre real ainda.**
+> Unofficial project, not affiliated with Bitwarden Inc. **Under development — don't use it with your real vault yet.**
 
-![Scout Vault no tema escuro, com um item aberto](docs/imagens/scout-vault-escuro.png)
+![Scout Vault in the dark theme, with an item open](docs/images/scout-vault-dark.png)
 
 ---
 
-## Sumário
-- [O que já funciona](#o-que-já-funciona)
-- [Aparência e configurações](#aparência-e-configurações)
-- [Atalhos](#atalhos)
-- [Segurança](#segurança)
-- [Arquitetura](#arquitetura)
-- [Pré-requisitos (Windows)](#pré-requisitos-windows)
-- [Rodando](#rodando)
-- [Servidor de desenvolvimento](#servidor-de-desenvolvimento)
-- [Testes](#testes)
-- [Como acrescentar uma configuração](#como-acrescentar-uma-configuração)
-- [Novidades e releases](#novidades)
+## Contents
+- [What already works](#what-already-works)
+- [Appearance and settings](#appearance-and-settings)
+- [Shortcuts](#shortcuts)
+- [Security](#security)
+- [Architecture](#architecture)
+- [Prerequisites (Windows)](#prerequisites-windows)
+- [Running](#running)
+- [Development server](#development-server)
+- [Tests](#tests)
+- [Languages](#languages)
+- [Adding a setting](#adding-a-setting)
+- [What's new and releases](#whats-new)
 - [Roadmap](#roadmap)
 
 ---
 
-## O que já funciona
+## What already works
 
-**Entrar**
-- Servidores bitwarden.com, bitwarden.eu ou um servidor próprio (Vaultwarden).
-- Senha mestra com KDF PBKDF2-SHA256 ou Argon2id. A senha nunca sai da máquina: só vai um hash derivado dela.
-- Verificação em duas etapas: autenticador, código por e-mail, YubiKey, chave de segurança
-  FIDO2/Windows Hello (API nativa do Windows) e Duo. "Lembrar este dispositivo" guarda o token no
-  Gerenciador de Credenciais do Windows.
-- Login por **SSO da empresa** (navegador + senha mestra, como o CLI oficial).
-- Contas com a **criptografia v2** do Bitwarden (COSE: XChaCha20-Poly1305, XAES-256-GCM).
-- Código de verificação de novo dispositivo.
-- O servidor, o último e-mail e a identidade do dispositivo ficam salvos para a próxima vez.
+**Signing in**
+- bitwarden.com, bitwarden.eu or a self-hosted server (Vaultwarden).
+- Vault (master) password with PBKDF2-SHA256 or Argon2id KDF. The password never leaves the
+  machine: only a hash derived from it is sent.
+- Two-step verification: authenticator, email code, YubiKey, FIDO2/Windows Hello security key
+  (native Windows API) and Duo. "Remember this device" keeps the token in Windows Credential
+  Manager.
+- **Company SSO** login (browser + vault password, like the official CLI).
+- Accounts with Bitwarden's **v2 cryptography** (COSE: XChaCha20-Poly1305, XAES-256-GCM).
+- New device verification code.
+- The server, the last email and the device identity are saved for next time.
 
-**Usar o cofre**
-- Lista virtualizada com busca por nome, usuário e endereço, navegável pelo teclado.
-- Filtros na barra lateral, cada um com contagem: todos os itens, favoritos, por tipo (logins, cartões,
-  identidades, notas, chaves SSH), por organização, por pasta, sem pasta e lixeira.
-- O detalhe do item mostra todos os campos, inclusive os customizados e as notas. Os segredos começam
-  mascarados e podem ser revelados um a um.
-- **Código do autenticador (TOTP) ao vivo**, com os segundos restantes. Aceita chave base32,
-  URI `otpauth://` (SHA-1/256/512, dígitos e período próprios) e `steam://` (Steam Guard).
-- Ao copiar um segredo, a área de transferência é limpa sozinha em 30 s. Ela só é limpa se você
-  não tiver copiado outra coisa depois. No Windows, o que o Scout Vault copia **não entra no histórico
-  (Win+V) nem na área de transferência na nuvem**.
-- **Gerador de senhas** (`Ctrl+G` ou o ícone de dados): tamanho, conjuntos de caracteres e opção
-  de evitar caracteres parecidos. As opções ficam salvas; a senha gerada, não.
-- **Busca rápida** (`Ctrl+Shift+Espaço`, em qualquer janela): uma janelinha por cima de tudo para
-  achar um item pelo nome, usuário ou site e **preencher** no app em foco, **copiar** usuário, senha
-  ou código, ou **abrir** no Scout Vault — sem trocar de janela. Itens que pedem a senha mestra
-  continuam pedindo. Liga/desliga em Configurações › Sessão.
-- **Preencher em outros apps** (`Ctrl+Alt+A`, em qualquer janela): o Scout Vault escolhe o login pelo
-  título da janela (nome do item ou site) e **digita** `usuário ⇥ senha ↵` nela, sem passar pela
-  área de transferência. Se o título não decidir, mostra a lista para escolher; com o cofre
-  bloqueado, pede a senha e digita depois. Liga/desliga (e o Enter final) nas configurações.
-- Sincronizar baixa o cofre de novo sem fechar o item que está aberto. Se a sessão tiver expirado
-  no servidor, o app volta para o login avisando.
+**Using the vault**
+- Virtualized list with search by name, username and address, keyboard navigable.
+- Sidebar filters, each with a count: all items, favorites, by type (logins, cards, identities,
+  notes, SSH keys), by organization, by folder, no folder and trash.
+- The item detail shows every field, including custom fields and notes. Secrets start masked and
+  can be revealed one by one.
+- **Live authenticator code (TOTP)**, with the remaining seconds. Accepts a base32 key, an
+  `otpauth://` URI (SHA-1/256/512, custom digits and period) and `steam://` (Steam Guard).
+- When you copy a secret, the clipboard clears itself after 30 s (adjustable in settings: 10 s
+  to 2 min, or never). It is only cleared if you haven't copied something else since. On
+  Windows, what Scout Vault copies **stays out of the history (Win+V) and the cloud clipboard**.
+- **Item icon**: click the large icon in an item's detail to choose another one (games, bank,
+  email, work… 52 in total) and a color. The choice shows up in the list, quick access, quick
+  search and the tray menu. It stays on this computer only: the item doesn't change on the server.
+- **Password health** (`Ctrl+Shift+H` or the shield in the footer): a vault score and lists of
+  weak, reused and passwords not changed in over a year; click an item to open it. "Check for
+  leaks" compares against Have I Been Pwned using k-anonymity: only the first 5 characters of
+  each password's SHA-1 leave the computer, and only when you ask.
+- **Password generator** (`Ctrl+G` or the dice icon): length, character sets and an option to
+  avoid look-alike characters. The options are saved; the generated password is not.
+- **Quick search** (`Ctrl+Shift+Space`, from any window): a small window on top of everything to
+  find an item by name, username or website and **fill** it into the focused app, **copy** the
+  username, password or code, or **open** it in Scout Vault — without switching windows. Items
+  that ask for the vault password still ask. Turned on/off in Settings › Session.
+- **Fill in other apps** (`Ctrl+Alt+A`, from any window): Scout Vault picks the login by the
+  window title (item name or website) and **types** `username ⇥ password ↵` into it, without
+  going through the clipboard. If the title doesn't decide, it shows the list to choose from;
+  with the vault locked, it asks for the password and types afterwards. Turned on/off (along with
+  the final Enter) in settings.
+- Syncing downloads the vault again without closing the open item. If the session expired on the
+  server, the app goes back to the login screen with a notice.
 
-**Editar** (cifrado na sua máquina antes de sair dela)
-- **Novo item** (`+` na lista ou `Ctrl+N`): login, nota, cartão ou identidade. **Editar**
-  (`Ctrl+E`) qualquer item, inclusive chaves SSH: nome, campos, sites, campos personalizados,
-  notas, pasta e favorito. Botão para gerar a senha ali mesmo.
-- Ao trocar a senha, a antiga vai para o **histórico de senhas** do item (como nos apps oficiais).
-- O Scout Vault só troca o que você editou: passkeys, regras de URI, campos vinculados e outros dados
-  criados por outros clientes voltam intactos ao servidor.
-- **Lixeira**: mover, restaurar e **apagar de vez** (pede confirmação).
-- **Acesso rápido**: o alfinete no detalhe de um item o fixa numa seção no topo da barra lateral
-  (até 10). Clicar abre o item direto, mesmo com outro filtro ativo. Fica salvo no computador.
-- **Organizações**: ao criar um item, escolha o dono ("Meu cofre" ou a organização) e as
-  coleções em que ele fica (só as que você pode editar). Itens existentes da organização podem
-  trocar de coleção. As coleções aparecem embaixo de cada organização na barra lateral; criar um
-  item com uma coleção aberta já o põe nela.
-- **Pastas**: `+` ao lado de "Pastas" na barra lateral cria uma; com a pasta aberta, o cabeçalho
-  da lista tem renomear e apagar (os itens dela vão para "Sem pasta"). O nome vai cifrado.
-  **Arraste** um item da lista até uma pasta (ou "Sem pasta") para movê-lo, e uma pasta até
-  outra para virar subpasta (no Bitwarden é o nome "Pai/Filha"; soltar no título "Pastas" a
-  devolve ao topo). Subpastas aparecem recuadas.
-- **Anexos**: no formulário de um item novo (ou ao editar) e no detalhe do item há uma área para
-  **clicar ou arrastar arquivos** do Explorer (até 500 MB cada; vários de uma vez). Dá para abrir
-  com o programa padrão, salvar onde quiser e remover. Cada anexo tem chave própria; a cópia aberta
-  fica em `%TEMP%\ScoutVault-anexos` e é apagada ao bloquear. Na conta gratuita do bitwarden.com
-  anexos exigem **Premium** — o app avisa com essa mensagem.
-- Itens de organização em que você só tem leitura não mostram Editar.
+**Editing** (encrypted on your machine before it leaves)
+- **New item** (`+` in the list or `Ctrl+N`): login, note, card or identity. **Edit**
+  (`Ctrl+E`) any item, SSH keys included: name, fields, websites, custom fields, notes, folder
+  and favorite. A button generates the password right there.
+- When you change the password, the old one goes to the item's **password history** (as in the
+  official apps).
+- Scout Vault only changes what you edited: passkeys, URI rules, linked fields and other data
+  created by other clients go back to the server untouched.
+- **Trash**: move, restore and **delete permanently** (asks for confirmation).
+- **Quick access**: the pin in an item's detail pins it to a section at the top of the sidebar
+  (up to 10). Clicking opens the item directly, even with another filter active. Saved on the
+  computer.
+- **Organizations**: when creating an item, choose the owner ("My vault" or the organization)
+  and the collections it belongs to (only the ones you can edit). Existing organization items
+  can change collections. Collections show up under each organization in the sidebar; creating
+  an item with a collection open puts it there.
+- **Folders**: `+` next to "Folders" in the sidebar creates one; with the folder open, the list
+  header has rename and delete (its items go to "No folder"). The name is encrypted. **Drag** an
+  item from the list onto a folder (or "No folder") to move it, and a folder onto another to make
+  it a subfolder (in Bitwarden that is the name "Parent/Child"; dropping it on the "Folders"
+  heading moves it back to the top). Subfolders are indented.
+- **Attachments**: in a new item's form (or when editing) and in the item detail there is an area
+  to **click or drag files** from Explorer (up to 500 MB each; several at once). You can open
+  them with the default program, save them anywhere and remove them. Each attachment has its own
+  key; the opened copy lives in `%TEMP%\ScoutVault-anexos` and is deleted on lock. On a free
+  bitwarden.com account attachments require **Premium** — the app says so.
+- Organization items you can only read don't show Edit.
 
-**Preencher no navegador** (Chrome, Edge, Brave)
-- Extensão própria na pasta [`extension/`](extension/). Ligue em Configurações → Navegador e
-  siga as instruções que aparecem (carregar a extensão sem compactação).
-- Num site, clique no ícone do Scout Vault ou use `Ctrl+Shift+L`: aparecem os logins daquele site
-  (domínio base, como no Bitwarden). Clique num para preencher usuário e senha.
-- A senha só sai do app quando você clica, e só para um item com endereço do mesmo site.
-  A extensão fala com o app por *native messaging* e um canal local que só o seu usuário do
-  Windows acessa. Com o cofre bloqueado, o app aparece pedindo a senha.
-- **Salvar logins:** ao entrar num site com um login que o cofre ainda não tem (ou com uma senha
-  nova), aparece no canto da página "Salvar este login no Scout Vault?" (ou "Atualizar a senha
-  de …?"). Nada é salvo sem o clique; a senha antiga vai para o histórico do item. Com o cofre
-  bloqueado, o app pede a senha e salva em seguida. Para isso a extensão roda em todos os sites
-  (o navegador avisa ao instalar); ela só lê o formulário quando ele é enviado.
+**Browser autofill** (Chrome, Edge, Brave)
+- Its own extension in the [`extension/`](extension/) folder. Turn it on in Settings → Browser and
+  follow the instructions shown there (load the unpacked extension).
+- On a site, click the Scout Vault icon or use `Ctrl+Shift+L`: the site's logins show up (base
+  domain, as in Bitwarden). Click one to fill username and password.
+- **Menu in login fields:** when you click a username or password field, the Scout Vault icon
+  shows up on its edge (with how many logins the site has, or a padlock if the vault is locked).
+  Click the icon, use `Alt+↓` in the field or `Alt+Shift+L` to open the list; arrows and `Enter`
+  choose. "Don't show on this site" hides the icon there (undo it from the popup), and the popup
+  has a switch to turn the menu off on every site. The page only sees names and usernames after
+  you focus the field; the password comes from the app on click. Clicks simulated by the page, or
+  with the menu hidden or covered, are ignored.
+- The password only leaves the app when you click, and only for an item whose address belongs to
+  the same site. The extension talks to the app through *native messaging* and a local channel
+  that only your Windows user can access. With the vault locked, the app shows up asking for the
+  password.
+- **Saving logins:** when you sign in to a site with a login the vault doesn't have yet (or with
+  a new password), "Save this login in Scout Vault?" (or "Update the password for …?") shows up in
+  the corner of the page. Nothing is saved without the click; the old password goes to the item's
+  history. With the vault locked, the app asks for the password and saves right after. For this
+  the extension runs on every site (the browser warns when installing); it only reads the form
+  when it is submitted.
 
-**Bandeja do Windows**
-- Fechar a janela (X ou Alt+F4) deixa o app rodando no ícone perto do relógio: `Ctrl+Alt+A` e o
-  preenchimento no navegador continuam funcionando. Clique no ícone para abrir. O botão direito
-  abre o menu do próprio app (com o tema e a cor de destaque, ícones e animação), com **Abrir**, o **Acesso rápido** (copiar usuário, senha ou código dos itens
-  fixados sem abrir a janela), **Gerar e copiar senha**, **Sincronizar agora**,
-  **Bloquear**/**Desbloquear…** e **Sair**. Abrir o executável de novo só mostra a janela que já
-  existe. Dá para desligar em Configurações → Sessão.
+**Windows tray**
+- Closing the window (X or Alt+F4) keeps the app running in the icon near the clock: `Ctrl+Alt+A`
+  and browser autofill keep working. Click the icon to open. Right-click opens the app's own menu
+  (with the theme and accent color, icons and animation), with **Open**, **Quick access** (copy
+  the username, password or code of pinned items without opening the window), **Generate and
+  copy password**, **Sync now**, **Lock**/**Unlock…** and **Quit**. Opening the executable again
+  just shows the existing window. It can be turned off in Settings → Session.
 
-**Sessão e bloqueio**
-- **Lembrar sessão** (ligado por padrão): ao abrir o app, ele vai direto para o desbloqueio, só
-  com a senha mestra, e **abre mesmo sem internet**. Guarda o cofre **cifrado** como veio do
-  servidor em `%APPDATA%\Scout Vault\sessao.json` e o refresh token no Gerenciador de Credenciais do
-  Windows. "Sair da conta" ou desligar a opção apagam os dois.
-- **Quanto tempo ficar conectado** (Configurações → Sessão):
-  - *Pedir a senha mestra ao abrir*: sempre, ou lembrar por 1, 7 ou 30 dias. Nesse período o app
-    abre já desbloqueado; a chave fica no Gerenciador de Credenciais, vence no prazo e é
-    descartada se a senha mestra for trocada (o app percebe no sync).
-  - *Pedir login completo a cada*: 7, 30 (padrão) ou 90 dias, ou nunca.
-  - *Bloquear sem uso após*: 1, 5 (padrão), 15 ou 60 minutos, ou nunca.
-  - *Sincronizar em segundo plano* (ligado por padrão): a cada minuto o app pergunta ao servidor
-    se o cofre mudou (só a data da última mudança, sem baixar nada) e, se mudou em outro
-    aparelho, sincroniza sozinho e avisa. Com um formulário aberto, espera.
-  - *Desbloquear com Windows Hello* (desligado por padrão): rosto, digital ou PIN no lugar da
-    senha mestra. O Windows Hello assina um desafio com uma chave que não sai do TPM; essa
-    assinatura cifra a user key, e só a versão cifrada fica no Gerenciador de Credenciais. Trocar
-    a senha mestra ou sair da conta apaga a configuração.
-  - *Bloquear junto com o Windows* (ligado por padrão): ao bloquear o computador (Win+L) ou ao
-    suspender/hibernar, o cofre bloqueia também.
-- Bloqueia pelo botão de cadeado, por `Ctrl+L`, pela bandeja ou sozinho, sem uso.
-- Ao bloquear, o cofre decifrado sai da memória. Para desbloquear basta a senha mestra, sem rede.
-- **Pedir a senha mestra** (opção do item, como no Bitwarden): mostrar, copiar ou editar os dados
-  secretos e digitar com `Ctrl+Alt+A` pedem a senha de novo; a liberação vale até trocar de item.
-  A conferência é local (sem rede). O navegador não preenche esses itens.
+**Session and locking**
+- **Remember session** (on by default): when you open the app, it goes straight to unlock, with
+  only the vault password, and **opens even without internet**. It keeps the vault **encrypted**
+  as it came from the server in `%APPDATA%\Scout Vault\sessao.json` and the refresh token in
+  Windows Credential Manager. "Sign out" or turning the option off deletes both.
+- **How long to stay signed in** (Settings → Session):
+  - *Ask for the vault password on open*: always, or remember for 1, 7 or 30 days. During that
+    period the app opens already unlocked; the key is kept in Credential Manager, expires at the
+    end of the period and is discarded if the vault password changes (the app notices on sync).
+  - *Ask for a full login every*: 7, 30 (default) or 90 days, or never.
+  - *Lock when idle after*: 1, 5 (default), 15 or 60 minutes, or never.
+  - *Sync in the background* (on by default): every minute the app asks the server whether the
+    vault changed (only the date of the last change, without downloading anything) and, if it
+    changed on another device, syncs on its own and lets you know. With a form open, it waits.
+  - *Unlock with Windows Hello* (off by default): face, fingerprint or PIN instead of the vault
+    password. Windows Hello signs a challenge with a key that never leaves the TPM; that
+    signature encrypts the user key, and only the encrypted version is kept in Credential
+    Manager. Changing the vault password or signing out deletes the setup.
+  - *Lock together with Windows* (on by default): when you lock the computer (Win+L) or it
+    sleeps/hibernates, the vault locks too.
+  - *Lock on minimize* (off by default): minimizing the window or closing it to the tray locks
+    right away.
+- Locks with the padlock button, `Ctrl+L`, the tray, or on its own when idle.
+- On lock, the decrypted vault leaves memory. Unlocking only needs the vault password, no network.
+- **Ask for the vault password to view** (an item option, as in Bitwarden): showing, copying or
+  editing the secret data and typing with `Ctrl+Alt+A` ask for the password again; the approval
+  lasts until you switch items. The check is local (no network). The browser doesn't fill these
+  items.
 
-## Aparência e configurações
+## Appearance and settings
 
-O Scout Vault tem um visual próprio e minimalista. Os fundos são neutros quentes (um tom de papel no
-claro, grafite profundo no escuro), e há **uma única cor de destaque**, usada só onde importa:
-seleção, foco, botão principal, favoritos e a marca. Os ícones são do [Lucide](https://lucide.dev)
-e aparecem dentro de quadradinhos suaves.
+Scout Vault has its own minimalist look. Backgrounds are warm neutrals (a paper tone in light
+mode, deep graphite in dark mode), and there is **a single accent color**, used only where it
+matters: selection, focus, primary button, favorites and the brand. Icons come from
+[Lucide](https://lucide.dev) and sit inside soft little squares.
 
-| Claro | Escuro |
+| Light | Dark |
 |---|---|
-| ![Tema claro](docs/imagens/scout-vault-claro.png) | ![Tema escuro](docs/imagens/scout-vault-escuro.png) |
+| ![Light theme](docs/images/scout-vault-light.png) | ![Dark theme](docs/images/scout-vault-dark.png) |
 
-As telas de **login e desbloqueio** têm uma arte vetorial animada ao fundo: faixas onduladas nas
-laterais que balançam devagar e pequenas formas fechadas (bolinhas, círculos, triângulos,
-quadrados, losangos, pentágonos e hexágonos) subindo e girando devagar pelo meio, tudo em traço
-fino na cor de destaque. A marca grande fica centralizada sobre o formulário. É desenhada pelo
-próprio app a cada quadro, sem imagens, e só se mexe com a janela em foco.
+The **login and unlock** screens have animated vector art in the background: wavy bands on the
+sides that sway slowly and small closed shapes (dots, circles, triangles, squares, diamonds,
+pentagons and hexagons) rising and spinning slowly through the middle, all in a thin stroke in
+the accent color. The large brand mark sits centered above the form. It is drawn by the app
+itself every frame, with no images, and only moves while the window has focus.
 
-A interface também tem **animações curtas** (até ~¼ s, só opacidade e posição): telas e painéis
-entram suaves, a barra lateral entra em cascata, o filtro escolhido acende, a seleção da lista
-envolve o ícone do item, mensagens de erro dão uma leve sacudida, "Entrando…" pulsa, uma barra
-fina corre enquanto sincroniza ou salva, o ícone de sincronizar gira e vira ✓ e o botão de copiar
-vira ✓. Avisos ("Copiado", "Item criado", erros) aparecem como **toasts** que sobem do pé da
-janela, ficam alguns segundos e descem sumindo. Ao trocar o tema, a cor de destaque, o texto ou os cantos, a interface se transforma no lugar: cada
-cor vai da antiga à nova (nada some), e entre claro e escuro uma onda sai do botão clicado. **Configurações → Movimento → Parado** desliga tudo isso e a arte.
+The interface also has **short animations** (up to ~¼ s, opacity and position only): screens and
+panels ease in, the sidebar cascades in, the chosen filter lights up, the list selection wraps
+the item's icon, error messages give a slight shake, "Signing in…" pulses, a thin bar runs while
+syncing or saving, the sync icon spins and turns into ✓, and the copy button turns into ✓.
+Notices ("Copied", "Item created", errors) appear as **toasts** that rise from the bottom of the
+window, stay a few seconds and slide away. When you change the theme, accent color, text size or
+corners, the interface transforms in place: each color goes from the old one to the new one
+(nothing disappears), and between light and dark a wave starts from the clicked button.
+**Settings → Motion → Still** turns all of this and the art off.
 
-![Tela de entrada com a arte de fundo](docs/imagens/fundo-animado-previa.png)
+![Login screen with the background art](docs/images/animated-background-preview.png)
 
-A **logo** é um cadeado usando um chapéu de explorador. Ela é o ícone do executável (barra de
-tarefas, Alt+Tab, Explorer) e aparece como glifo dentro do app, na cor de destaque escolhida. Tudo
-sai de uma geometria só, em `tools/gen_logo.py`:
-`python tools/gen_logo.py crates/scout-vault-app/assets/brand` gera de novo o SVG, os PNGs e o `.ico`.
+The **logo** is a padlock wearing an explorer's hat. It is the executable's icon (taskbar,
+Alt+Tab, Explorer) and shows up as a glyph inside the app, in the chosen accent color. Everything
+comes from a single geometry in `tools/gen_logo.py`:
+`python tools/gen_logo.py crates/scout-vault-app/assets/brand` regenerates the SVG, the PNGs and the `.ico`.
 
-A tela de **Configurações** abre com `Ctrl+,` ou pela engrenagem. A engrenagem fica na barra
-lateral do cofre e também nas telas de login e desbloqueio.
+The **Settings** screen opens with `Ctrl+,` or the gear. The gear is in the vault sidebar and also
+on the login and unlock screens.
 
-![Tela de configurações](docs/imagens/configuracoes.png)
+![Settings screen](docs/images/settings.png)
 
-| Opção | Valores | Observação |
+| Option | Values | Notes |
 |---|---|---|
-| Tema | Sistema · Claro · Escuro | "Sistema" acompanha o claro/escuro do Windows na hora |
-| Cor de destaque | Jade · Índigo · Latão · Coral · Ameixa · Grafite | Tons escolhidos para o texto do botão principal ter contraste AA |
-| Tamanho do texto | Pequeno (14) · Padrão (15) · Grande (17) | Vale para todas as telas |
-| Cantos | Retos · Suaves · Redondos | Arredondamento de botões, campos e cartões |
+| Language | System · Português · English | "System" follows the Windows language (Portuguese → pt-BR; anything else → English). Switches instantly |
+| Theme | System · Light · Dark | "System" follows Windows light/dark mode instantly |
+| Accent color | Jade · Indigo · Brass · Coral · Plum · Graphite | Tones chosen so the primary button text has AA contrast |
+| Text size | Small (14) · Default (15) · Large (17) | Applies to every screen |
+| Corners | Square · Soft · Round | Rounding of buttons, fields and cards |
 
-As mudanças valem na hora, sem reiniciar o app. Elas ficam salvas em `settings.json` (veja
-[Segurança](#segurança)). Abrir as configurações não fecha o cofre: ele continua por baixo, e
-o bloqueio automático segue valendo.
+Changes apply instantly, without restarting the app. They are saved in `settings.json` (see
+[Security](#security)). Opening settings doesn't close the vault: it stays underneath, and the
+automatic lock keeps running.
 
-![Tela de login](docs/imagens/login.png)
+![Login screen](docs/images/login.png)
 
-## Atalhos
+## Shortcuts
 
-| Atalho | Onde | Ação |
+| Shortcut | Where | Action |
 |---|---|---|
-| `Ctrl+,` | qualquer tela | Abre/fecha as configurações |
-| `Ctrl+Alt+A` | **qualquer app do Windows** | Preenche usuário e senha na janela em foco |
-| `Ctrl+Shift+Espaço` | **qualquer app do Windows** | Busca rápida: acha um item e preenche (`Enter`), copia senha/usuário/código (`Ctrl+P`/`Ctrl+U`/`Ctrl+T`) ou abre no app (`Ctrl+O`) |
-| `Ctrl+G` | qualquer tela | Abre/fecha o gerador de senhas |
-| `Esc` | configurações, gerador, lista de preenchimento | Fecha |
-| `Ctrl+F` | cofre | Vai para a busca |
-| `Ctrl+N` | cofre | Novo item |
-| `Ctrl+E` | cofre | Edita o item aberto |
-| `Ctrl+U` | cofre | Copia o usuário do item aberto |
-| `Ctrl+P` | cofre | Copia a senha do item aberto |
-| `Ctrl+T` | cofre | Copia o código do autenticador do item aberto |
-| `Ctrl+L` | cofre | Bloqueia |
-| `↑` `↓` | lista | Move a seleção |
-| `Enter` | lista | Abre o item |
+| `Ctrl+,` | any screen | Opens/closes settings |
+| `Ctrl+Alt+A` | **any Windows app** | Fills username and password in the focused window |
+| `Ctrl+Shift+Space` | **any Windows app** | Quick search: finds an item and fills it (`Enter`), copies password/username/code (`Ctrl+P`/`Ctrl+U`/`Ctrl+T`) or opens it in the app (`Ctrl+O`) |
+| `Ctrl+G` | any screen | Opens/closes the password generator |
+| `Esc` | settings, generator, fill list | Closes |
+| `Ctrl+F` | vault | Goes to search |
+| `Ctrl+N` | vault | New item |
+| `Ctrl+E` | vault | Edits the open item |
+| `Ctrl+U` | vault | Copies the open item's username |
+| `Ctrl+P` | vault | Copies the open item's password |
+| `Ctrl+T` | vault | Copies the open item's authenticator code |
+| `Ctrl+L` | vault | Locks |
+| `↑` `↓` | list | Moves the selection |
+| `Enter` | list | Opens the item |
 
-A cópia usa `Ctrl+U`/`Ctrl+P`/`Ctrl+T` (como o app oficial) em vez de `Ctrl+C`, que continua
-copiando o texto selecionado na busca.
+Copying uses `Ctrl+U`/`Ctrl+P`/`Ctrl+T` (like the official app) instead of `Ctrl+C`, which still
+copies the selected text in the search box.
 
-## Segurança
+## Security
 
-Achou uma falha? Relate em particular, como explica o [SECURITY.md](SECURITY.md).
+Found a vulnerability? Report it privately, as explained in [SECURITY.md](SECURITY.md).
 
-- **Nada decifrado vai para o disco.** Os segredos vivem em memória dentro de `Secret`/`Zeroizing`
-  e são apagados quando liberados. O `Debug` deles nunca mostra o conteúdo.
-- O `settings.json` (`%APPDATA%\Scout Vault\settings.json` no Windows e `~/.config/scout-vault/settings.json` nos
-  demais) guarda **só** o servidor, o último e-mail, a identidade do dispositivo e a aparência.
-- A criptografia segue o esquema do Bitwarden. O HMAC é conferido em tempo constante **antes** de
-  decifrar com AES-256-CBC. As chaves de organização usam RSA-OAEP, e cada item pode ter chave própria.
-- Um item ou uma organização corrompidos não derrubam o resto do cofre: eles aparecem como erro
-  isolado.
-- Rede e KDF rodam fora da thread de UI, então a interface nunca trava.
-- O desenvolvimento é sempre contra um **Vaultwarden local**, nunca contra um cofre real.
+- **Nothing decrypted goes to disk.** Secrets live in memory inside `Secret`/`Zeroizing` and are
+  wiped when dropped. Their `Debug` never shows the contents.
+- `settings.json` (`%APPDATA%\Scout Vault\settings.json` on Windows and
+  `~/.config/scout-vault/settings.json` elsewhere) stores **only** the server, the last email, the
+  device identity and the appearance.
+- The cryptography follows Bitwarden's scheme. The HMAC is checked in constant time **before**
+  decrypting with AES-256-CBC. Organization keys use RSA-OAEP, and each item can have its own key.
+- A corrupted item or organization doesn't take down the rest of the vault: it shows up as an
+  isolated error.
+- Network and KDF run off the UI thread, so the interface never freezes.
+- Development always targets a **local Vaultwarden**, never a real vault.
 
-## Arquitetura
+## Architecture
 
 ```
 crates/
-  scout-vault-core/      protocolo, criptografia e modelo do cofre — sem UI, testável sozinho
-    api.rs         cliente HTTP: prelogin, login (2FA, novo dispositivo), refresh, sync
+  scout-vault-core/      protocol, cryptography and vault model — no UI, testable on its own
+    api.rs         HTTP client: prelogin, login (2FA, new device), refresh, sync
     crypto.rs      master key (PBKDF2/Argon2id), HKDF, AES-CBC + HMAC, RSA-OAEP
-    enc_string.rs  formato EncString (2.iv|ct|mac, 4.data)
-    sync.rs        resposta do sync, ainda cifrada
-    vault.rs       cofre decifrado: itens, pastas, organizações, busca
-  scout-vault-app/       interface GPUI (binário `cofre`), via gpui-kit
-    app.rs         raiz da janela: troca de telas, bloqueio automático, configurações
-    login.rs       login, 2FA, novo dispositivo
-    unlock.rs      desbloqueio offline
-    vault_view.rs  barra lateral, lista e detalhe
-    item_list.rs   dados da lista: filtro e busca
-    appearance.rs  paleta, temas claro/escuro, cor de destaque, texto e cantos
-    settings_view.rs  tela de configurações
-    ui.rs          peças visuais compartilhadas (marca, chips, controle segmentado)
-    build.rs       embute o ícone (assets/brand/scout-vault.ico) no executável do Windows
-    assets/brand/  logo colorida (SVG/PNG/ICO) e o glifo monocromático da marca
-    settings.rs    preferências não sensíveis em disco
-    flow.rs        fluxos de login/sync sem UI
-dev/               Vaultwarden local (docker-compose)
-tools/             gerador de fixtures, de conta de teste e da logo (Python)
-docs/ROADMAP.md    plano por fases
+    enc_string.rs  EncString format (2.iv|ct|mac, 4.data)
+    sync.rs        sync response, still encrypted
+    vault.rs       decrypted vault: items, folders, organizations, search
+  scout-vault-app/       GPUI interface (`cofre` binary), via gpui-kit
+    app.rs         window root: screen switching, automatic lock, settings
+    login.rs       login, 2FA, new device
+    unlock.rs      offline unlock
+    vault_view.rs  sidebar, list and detail
+    item_list.rs   list data: filtering and search
+    appearance.rs  palette, light/dark themes, accent color, text and corners
+    settings_view.rs  settings screen
+    ui.rs          shared visual pieces (brand mark, chips, segmented control)
+    build.rs       embeds the icon (assets/brand/scout-vault.ico) in the Windows executable
+    assets/brand/  color logo (SVG/PNG/ICO) and the monochrome brand glyph
+    settings.rs    non-sensitive preferences on disk
+    i18n.rs        languages: `t!("key")` macro, Windows language, instant switching
+    locales/       interface texts (`pt-BR.json`, `en.json`)
+    flow.rs        login/sync flows without UI
+dev/               local Vaultwarden (docker-compose)
+tools/             fixture, test account and logo generators (Python)
+docs/ROADMAP.md    phased plan
 ```
 
-**Como o tema funciona:** `appearance.rs` parte dos temas padrão do gpui-kit e troca as cores pela
-paleta do Scout Vault (neutros de cada modo mais a cor de destaque). Depois ajusta tamanho da fonte e
-raios e registra o resultado como os temas claro e escuro. `appearance::apply` faz isso e escolhe
-o modo. O `ScoutVaultApp` chama essa função ao abrir e quando o Windows troca de claro para escuro (se
-o tema for "Sistema"). A tela de configurações também chama a cada mudança.
+**How the theme works:** `appearance.rs` starts from gpui-kit's default themes and swaps the
+colors for Scout Vault's palette (each mode's neutrals plus the accent color). Then it adjusts the
+font size and radii and registers the result as the light and dark themes.
+`appearance::apply` does this and picks the mode. `ScoutVaultApp` calls it on startup and when
+Windows switches between light and dark (if the theme is "System"). The settings screen also
+calls it on every change.
 
-## Pré-requisitos (Windows)
-- Rust estável: `winget install Rustlang.Rustup`
-- Visual Studio Build Tools com a carga "Desenvolvimento para desktop com C++" (linker MSVC + Windows SDK)
-- Docker Desktop ou Docker no WSL (só para o servidor de desenvolvimento)
-- Python 3 com `cryptography` (só para as ferramentas de `tools/`)
+## Prerequisites (Windows)
+- Stable Rust: `winget install Rustlang.Rustup`
+- Visual Studio Build Tools with the "Desktop development with C++" workload (MSVC linker + Windows SDK)
+- Docker Desktop or Docker in WSL (only for the development server)
+- Python 3 with `cryptography` (only for the tools in `tools/`)
 
-## Rodando
+## Running
 ```bash
-cargo run            # abre o app
-cargo run --release  # build otimizado, sem console no Windows
+cargo run            # opens the app
+cargo run --release  # optimized build, no console on Windows
 ```
 
-Em builds de debug, o app pode entrar sozinho no Vaultwarden local com a conta de teste. Isso só
-funciona com servidores em `localhost`:
+In debug builds, the app can sign in to the local Vaultwarden with the test account on its own.
+This only works with servers on `localhost`:
 ```bash
 set -a; . dev/test-account.env; set +a
 SCOUT_VAULT_DEV_AUTOLOGIN=1 cargo run
 ```
 
-## Servidor de desenvolvimento
-O Vaultwarden local roda em `http://localhost:8000` e funciona com Docker Desktop ou com o Docker
-instalado dentro do WSL (sem Docker Desktop):
+## Development server
+The local Vaultwarden runs at `http://localhost:8000` and works with Docker Desktop or with Docker
+installed inside WSL (no Docker Desktop):
 ```bash
 wsl -d Ubuntu -u root -- bash -c "service docker start; cd /mnt/d/Repositories/cofre/dev && docker compose up -d"
 ```
-O WSL desliga quando fica ocioso; mantenha um terminal do WSL aberto enquanto testa.
+WSL shuts down when idle; keep a WSL terminal open while testing.
 
-Para criar uma conta de teste já populada, sem navegador (as credenciais vão para
-`dev/test-account.env`, que o git ignora):
+To create a test account already filled with items, without a browser (the credentials go to
+`dev/test-account.env`, which git ignores):
 ```bash
 python tools/dev_seed.py
 ```
 
-Para testar itens de organização, crie nessa conta a organização "Empresa de teste", com as
-coleções Financeiro e TI (só no servidor local; não faz nada se ela já existir):
+To test organization items, create the organization "Empresa de teste" in that account, with the
+collections Financeiro and TI (local server only; does nothing if it already exists):
 ```bash
 python tools/dev_org.py
 ```
 
-## Testes
+## Tests
 ```bash
-cargo test --workspace                 # tudo (núcleo + UI headless)
-cargo test -p scout-vault-core               # só o núcleo
-cargo test -p scout-vault-app --test ui      # só a UI
+cargo test --workspace                       # everything (core + headless UI)
+cargo test -p scout-vault-core               # core only
+cargo test -p scout-vault-app --test ui      # UI only
 ```
 
-- **Núcleo:** `tools/gen_fixtures.py` gera um cofre sintético completo usando a biblioteca
-  `cryptography` do Python, uma implementação independente da nossa. O arquivo
-  `tests/fixtures.rs` precisa abrir esse cofre e bater cada valor.
-- **UI:** os testes rodam as telas reais numa janela headless, com cliques e digitação de verdade.
-  Eles cobrem a validação do login, filtros, busca, revelar e copiar (com a limpeza da área de
-  transferência), bloqueio manual e por inatividade, troca de tema, cor, texto e cantos, e a
-  aparência restaurada ao reabrir.
-- **Ao vivo** (precisa do Vaultwarden local):
+- **Core:** `tools/gen_fixtures.py` generates a complete synthetic vault using Python's
+  `cryptography` library, an implementation independent from ours. `tests/fixtures.rs` has to
+  open that vault and match every value.
+- **UI:** the tests run the real screens in a headless window, with real clicks and typing. They
+  cover login validation, filters, search, reveal and copy (with clipboard clearing), manual and
+  idle locking, switching theme, color, text size and corners, and the appearance restored on
+  reopen.
+- **Live** (needs the local Vaultwarden):
   ```bash
   set -a; . dev/test-account.env; set +a
   cargo test -p scout-vault-core --test live_server -- --ignored --nocapture
   cargo test -p scout-vault-app --test ui -- --ignored
   ```
-- **2FA ao vivo:** `python tools/dev_seed.py --totp` cria uma conta com autenticador
-  (credenciais em `dev/test-account-2fa.env`) para `cargo test -p scout-vault-app --test live_2fa -- --ignored`.
+- **Live 2FA:** `python tools/dev_seed.py --totp` creates an account with an authenticator
+  (credentials in `dev/test-account-2fa.env`) for `cargo test -p scout-vault-app --test live_2fa -- --ignored`.
 
-A CI (GitHub Actions, em `.github/workflows/`) roda em cada push e PR:
-- **CI**: `cargo fmt --check`; `cargo clippy -D warnings` e `cargo test --workspace` no Windows;
-  os testes ao vivo do núcleo contra um Vaultwarden descartável (conta e organização criadas
-  pelos scripts de `tools/`); e a sintaxe da extensão.
-- **Segurança**: `cargo deny check` (vulnerabilidades do RustSec, licenças, crates e origens —
-  regras em `deny.toml`) e CodeQL (Rust, JavaScript da extensão e os próprios workflows).
-  Também roda toda segunda, para pegar falhas novas sem precisar de commit.
-- **Dependabot** abre PRs semanais de dependências e actions.
-Os testes headless não desenham pixels. Por isso, mudanças visuais precisam ser conferidas numa
-janela real.
+CI (GitHub Actions, in `.github/workflows/`) runs on every push and PR:
+- **CI**: `cargo fmt --check`; `cargo clippy -D warnings` and `cargo test --workspace` on Windows;
+  the core's live tests against a throwaway Vaultwarden (account and organization created by the
+  scripts in `tools/`); and the extension's syntax.
+- **Security**: `cargo deny check` (RustSec vulnerabilities, licenses, crates and sources — rules
+  in `deny.toml`) and CodeQL (Rust, the extension's JavaScript and the workflows themselves).
+  It also runs every Monday, to catch new advisories without needing a commit.
+- **Dependabot** opens weekly PRs for dependencies and actions.
 
-## Como acrescentar uma configuração
-1. Acrescente o campo em `Appearance` (`appearance.rs`) com `#[serde(default)]`. Assim um
-   `settings.json` antigo continua abrindo.
-2. Se o campo mudar o tema, aplique-o em `appearance::build`. Se não mudar, leia-o onde for usado.
-3. Acrescente uma linha em `SettingsView::render` (`settings_view.rs`) com `Self::row(...)`. O
-   controle pode ser um `ui::segmented`, um `Switch` ou algo próprio. Para uma nova seção, use
-   outro `Self::group(...)`.
-4. Escreva um teste em `tests/ui.rs` que clique no controle e confira o efeito.
+The headless tests don't draw pixels, so visual changes need to be checked in a real window.
 
-## Novidades
-O que mudou em cada versão está no [CHANGELOG.md](CHANGELOG.md); os downloads ficam nas
-[Releases](https://github.com/qedrohenrique/scout-vault/releases).
+## Languages
 
-**Publicar uma versão** (o workflow `.github/workflows/release.yml` faz o resto):
-1. No `CHANGELOG.md`, troque `## [Ainda não lançado]` por `## [X.Y.Z] - AAAA-MM-DD` e ajuste os
-   links do fim do arquivo.
-2. Ponha `X.Y.Z` em `[workspace.package]` no `Cargo.toml` (e em `extension/manifest.json`).
-3. Confira as notas com `python tools/release_notes.py X.Y.Z`, faça o commit e envie a tag:
-   `git tag vX.Y.Z` e `git push origin vX.Y.Z`.
+The interface is in **Portuguese (pt-BR)** and **English**. By default it follows the Windows
+language; you can choose in **Settings → Language** (the switch applies instantly). To test
+another language without touching Windows, use `SCOUT_VAULT_LANG=en` (or `pt-BR`).
 
-O GitHub Actions roda os testes, compila, monta o zip (`tools/package_release.py`) com o
-`.sha256` e cria a release com as notas daquela seção do changelog (versões 0.x saem como
-pré-release). Se a tag não bater com o `Cargo.toml` ou faltar a seção, nada é publicado.
+- **App:** texts live in `crates/scout-vault-app/locales/<code>.json`, a flat `key → text`
+  object. In code, `t!("key")` returns the text and `t!("key", n = 3)` replaces `{n}`. For a new
+  language, create the file and add the variant to `i18n::Language`.
+- **Extension:** uses `chrome.i18n` (`extension/_locales/<code>/messages.json`), in the browser's
+  language; the default is `pt_BR`.
+- **Tests:** check that every language has the same keys and placeholders, that every key used in
+  code exists (app and extension) and that there are no double spaces left. `tests/ui.rs` runs in
+  pt-BR and `tests/ui_en.rs` switches to English with the app open.
+
+## Adding a setting
+1. Add the field to `Appearance` (`appearance.rs`) with `#[serde(default)]`, so an old
+   `settings.json` still opens.
+2. If the field changes the theme, apply it in `appearance::build`. If not, read it where it is used.
+3. Add a row in `SettingsView::render` (`settings_view.rs`) with `Self::row(...)`. The control can
+   be a `ui::segmented`, a `Switch` or something custom. For a new section, use another
+   `Self::group(...)`.
+4. New texts go into `locales/pt-BR.json` and `locales/en.json` and are used with `t!("key")`.
+5. Write a test in `tests/ui.rs` that clicks the control and checks the effect.
+
+## What's new
+What changed in each version is in [CHANGELOG.md](CHANGELOG.md); downloads are on the
+[Releases](https://github.com/qedrohenrique/scout-vault/releases) page.
+
+**Publishing a version** (the `.github/workflows/release.yml` workflow does the rest):
+1. In `CHANGELOG.md`, replace `## [Unreleased]` with `## [X.Y.Z] - YYYY-MM-DD` and fix the links
+   at the end of the file.
+2. Put `X.Y.Z` in `[workspace.package]` in `Cargo.toml` (and in `extension/manifest.json`).
+3. Check the notes with `python tools/release_notes.py X.Y.Z`, commit and push the tag:
+   `git tag vX.Y.Z` and `git push origin vX.Y.Z`.
+
+GitHub Actions runs the tests, builds, assembles the zip (`tools/package_release.py`) with the
+`.sha256` and creates the release with the notes from that changelog section (0.x versions ship
+as pre-releases). If the tag doesn't match `Cargo.toml` or the section is missing, nothing is
+published.
 
 ## Roadmap
-Veja [docs/ROADMAP.md](docs/ROADMAP.md), que inclui um comparativo com Bitwarden, 1Password,
-KeePassXC e Proton Pass. Windows Hello, bloqueio junto com o Windows e re-prompt já entraram; os próximos passos são
-o preenchimento direto no campo do site, a busca rápida por atalho global e o relatório de saúde das senhas.
+See [docs/ROADMAP.md](docs/ROADMAP.md), which includes a comparison with Bitwarden, 1Password,
+KeePassXC and Proton Pass. Windows Hello, locking together with Windows, re-prompt, the inline
+field menu, global quick search and the password health report are already in; next up are
+passkeys, card and identity filling, and an installer.

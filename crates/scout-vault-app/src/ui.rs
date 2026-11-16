@@ -1,5 +1,5 @@
-//! Peças visuais reaproveitadas pelas telas: marca, rótulos de seção,
-//! "chips" de ícone e o controle segmentado.
+//! Visual pieces reused by the screens: brand mark, section labels,
+//! icon "chips" and the segmented control.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{button::*, *};
@@ -8,8 +8,8 @@ use gpui_kit::*;
 
 use crate::appearance;
 
-/// A marca do Scout Vault: o cadeado de chapéu (`assets/brand/mark.svg`) sobre um
-/// quadrado na cor de destaque — acompanha o tema, ao contrário do ícone do `.exe`.
+/// The Scout Vault mark: the padlock with a hat (`assets/brand/mark.svg`) on a
+/// square in the accent color — follows the theme, unlike the `.exe` icon.
 pub fn brand_mark(size: Pixels, cx: &App) -> Div {
     div()
         .size(size)
@@ -18,17 +18,17 @@ pub fn brand_mark(size: Pixels, cx: &App) -> Div {
         .items_center()
         .justify_center()
         .rounded(cx.theme().radius_lg)
-        .bg(appearance::accent(cx))
-        .text_color(cx.theme().primary_foreground)
+        // Monochrome mark: the glyph in the text color, on a neutral square.
+        .bg(cx.theme().foreground)
         .child(
             svg()
                 .path(crate::assets::BRAND_MARK)
                 .size(size * 0.72)
-                .text_color(cx.theme().primary_foreground),
+                .text_color(cx.theme().background),
         )
 }
 
-/// Marca + nome, para o topo da barra lateral e das telas de entrada.
+/// Mark + name, for the top of the sidebar and of the entry screens.
 pub fn wordmark(cx: &App) -> Div {
     h_flex()
         .gap_2()
@@ -36,7 +36,7 @@ pub fn wordmark(cx: &App) -> Div {
         .child(div().text_sm().font_semibold().child("scout vault"))
 }
 
-/// Marca grande, centralizada sobre o formulário das telas de entrada.
+/// Large mark, centered above the form of the entry screens.
 pub fn hero_wordmark(cx: &App) -> Div {
     h_flex()
         .gap_3()
@@ -52,20 +52,20 @@ pub fn hero_wordmark(cx: &App) -> Div {
         )
 }
 
-/// Título pequeno de grupo ("TIPOS", "PASTAS"…).
+/// Small group heading ("TYPES", "FOLDERS"…).
 pub fn section_label(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .px_2()
         .pt_3()
         .pb_1()
         .text_size(px(11.))
-        .font_medium()
+        .font_semibold()
         .text_color(cx.theme().muted_foreground.opacity(0.8))
         .child(text.into())
 }
 
-/// Ícone dentro de um quadrado suave — usado na lista e no detalhe.
-pub fn icon_chip(icon: IconName, size: Pixels, highlighted: bool, cx: &App) -> Div {
+/// Icon inside a soft square — used in the list and the detail.
+pub fn icon_chip(icon: impl Into<Icon>, size: Pixels, highlighted: bool, cx: &App) -> Div {
     let (bg, fg) = if highlighted {
         (appearance::accent_tint(cx, 0.14), appearance::accent(cx))
     } else {
@@ -83,7 +83,7 @@ pub fn icon_chip(icon: IconName, size: Pixels, highlighted: bool, cx: &App) -> D
         .child(Icon::new(icon).size(size * 0.5))
 }
 
-/// Uma opção de um [`segmented`].
+/// An option of a [`segmented`].
 pub struct Segment {
     pub id: SharedString,
     pub label: SharedString,
@@ -91,8 +91,8 @@ pub struct Segment {
     pub selected: bool,
 }
 
-/// Controle segmentado: uma "pílula" com as opções lado a lado; a escolhida
-/// fica em relevo. `on_select` recebe o índice clicado.
+/// Segmented control: a "pill" with the options side by side; the chosen one
+/// is raised. `on_select` receives the clicked index.
 pub fn segmented(
     id: impl Into<ElementId>,
     segments: Vec<Segment>,
@@ -102,7 +102,7 @@ pub fn segmented(
     segmented_sized(id, segments, on_select, false, cx)
 }
 
-/// Versão justa do [`segmented`], para barras de ferramentas.
+/// Compact version of [`segmented`], for toolbars.
 pub fn segmented_compact(
     id: impl Into<ElementId>,
     segments: Vec<Segment>,
@@ -143,7 +143,7 @@ fn segmented_sized(
             .when(s.selected, |el| {
                 el.bg(theme.popover)
                     .text_color(theme.foreground)
-                    .font_medium()
+                    .font_semibold()
                     .border_1()
                     .border_color(theme.border)
             })
@@ -156,7 +156,7 @@ fn segmented_sized(
             .children(s.icon.map(|i| Icon::new(i).small()))
             .child(s.label)
             .on_click(move |_, window, cx| on_select(ix, window, cx))
-            // A opção escolhida acende e "assenta" no lugar.
+            // The chosen option lights up and "settles" in place.
             .with_animation(
                 anim_id,
                 Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
@@ -180,8 +180,8 @@ fn segmented_sized(
         .children(items)
 }
 
-/// Moldura das telas de entrada (login e desbloqueio): engrenagem de
-/// configurações no canto e, no centro, a marca grande sobre o cartão.
+/// Frame of the entry screens (login and unlock): settings gear in the
+/// corner and, in the center, the large mark above the card.
 pub fn entry_screen(
     settings_id: &'static str,
     title: impl Into<SharedString>,
@@ -196,7 +196,7 @@ pub fn entry_screen(
             .ghost()
             .small()
             .icon(IconName::Settings)
-            .tooltip("Configurações (Ctrl+,)")
+            .tooltip(t!("vault.settings_tooltip"))
             .on_click(on_settings),
     );
     let card = v_flex()
@@ -224,7 +224,7 @@ pub fn entry_screen(
         .size_full()
         .bg(cx.theme().background)
         .text_color(cx.theme().foreground)
-        // A arte fica atrás de tudo; o cartão (opaco) passa por cima.
+        // The art stays behind everything; the (opaque) card goes on top.
         .child(crate::backdrop::backdrop(crate::appearance::accent(cx), cx))
         .child(top)
         .child(
@@ -244,7 +244,7 @@ pub fn entry_screen(
         )
 }
 
-/// Linha de status (erro em vermelho, progresso em cinza) com altura fixa.
+/// Status line (error in red, progress in gray) with a fixed height.
 pub fn status_line(
     id: &'static str,
     text: SharedString,
@@ -266,8 +266,8 @@ pub fn status_line(
         .child(animated_status(text, error))
 }
 
-/// Texto de status com movimento: "…" (trabalhando) pulsa; erro chega com
-/// uma leve sacudida; o resto só aparece suave.
+/// Status text with motion: "…" (working) pulses; an error arrives with
+/// a slight shake; everything else just fades in.
 fn animated_status(text: SharedString, error: bool) -> AnyElement {
     let key = crate::motion::key("status", &text);
     let body = div().child(text.clone());
@@ -283,7 +283,7 @@ fn animated_status(text: SharedString, error: bool) -> AnyElement {
     crate::motion::fade(body, key).into_any_element()
 }
 
-/// Área para anexar: clique para escolher arquivos ou arraste do Explorer.
+/// Attach area: click to choose files or drag from Explorer.
 pub fn drop_zone(
     id: &'static str,
     busy: bool,
@@ -297,7 +297,7 @@ pub fn drop_zone(
     v_flex()
         .id(id)
         .role(Role::Button)
-        .aria_label(SharedString::from("Anexar arquivos"))
+        .aria_label(SharedString::from(t!("ui.attach_files")))
         .w_full()
         .items_center()
         .gap_1()
@@ -312,7 +312,7 @@ pub fn drop_zone(
                 .hover(|el| el.bg(theme.secondary_hover))
                 .active(|el| el.opacity(0.7))
         })
-        // Arquivo sendo arrastado por cima: acende na cor de destaque.
+        // File being dragged over it: lights up in the accent color.
         .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(accent).bg(tint))
         .on_click(on_click)
         .on_drop(on_drop)
@@ -320,12 +320,10 @@ pub fn drop_zone(
         .child(
             div()
                 .text_sm()
-                .font_medium()
+                .font_semibold()
                 .text_color(theme.foreground)
-                .child("Arraste arquivos aqui ou clique para escolher"),
+                .child(t!("ui.drop_here")),
         )
-        .child(div().text_xs().child(
-            "Documentos, imagens… até 500 MB cada. Tudo é cifrado antes de sair do computador.",
-        ))
+        .child(div().text_xs().child(t!("ui.drop_hint")))
         .test_support()
 }

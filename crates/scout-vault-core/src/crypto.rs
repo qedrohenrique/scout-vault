@@ -1,19 +1,19 @@
-//! Criptografia do protocolo Bitwarden.
+//! Bitwarden protocol cryptography.
 //!
-//! Fluxo de chaves:
+//! Key flow:
 //! ```text
-//! senha + e-mail ──KDF──▶ MasterKey ──PBKDF2(1)──▶ hash de autenticação (vai ao servidor)
+//! password + email ──KDF──▶ MasterKey ──PBKDF2(1)──▶ authentication hash (sent to the server)
 //!                             │
 //!                         HKDF-Expand ("enc", "mac")
 //!                             ▼
-//!                    chave esticada ──decifra──▶ UserKey (64 B: enc ‖ mac, ou COSE_Key v2)
+//!                    stretched key ──decrypts──▶ UserKey (64 B: enc ‖ mac, or v2 COSE_Key)
 //!                                                  │
 //!                         ┌────────────────────────┼─────────────────────┐
 //!                         ▼                        ▼                     ▼
-//!                  campos do cofre        chave privada RSA       chaves de item
+//!                   vault fields           RSA private key          item keys
 //!                                                  │
 //!                                       RSA-OAEP-SHA1 ▼
-//!                                         chaves de organização
+//!                                         organization keys
 //! ```
 
 use std::fmt;
@@ -58,13 +58,16 @@ pub enum CryptoError {
     Cose(&'static str),
 }
 
-/// Chave derivada da senha mestra. Nunca sai da máquina.
+/// Key derived from the master password. Never leaves the machine.
 pub struct MasterKey(Zeroizing<[u8; 32]>);
 
 impl MasterKey {
-    /// Deriva a master key. **Lento de propósito** (centenas de ms a segundos):
-    /// chame fora da thread de UI.
+    /// Derives the master key. **Slow on purpose** (hundreds of ms to seconds):
+    /// call it off the UI thread.
     pub fn derive(password: &str, email: &str, kdf: Kdf) -> Result<Self, CryptoError> {
+        // Also covers a KDF read from a saved session, not just the prelogin one.
+        kdf.validate()
+            .map_err(|e| CryptoError::Kdf(e.to_string()))?;
         let email = email.trim().to_lowercase();
         let mut out = Zeroizing::new([0u8; 32]);
 
@@ -105,7 +108,7 @@ impl MasterKey {
         Self(Zeroizing::new(bytes))
     }
 
-    /// Hash enviado ao servidor no login: PBKDF2-SHA256(master key, salt = senha, 1 iteração).
+    /// Hash sent to the server at login: PBKDF2-SHA256(master key, salt = password, 1 iteration).
     pub fn server_hash(&self, password: &str) -> String {
         let hash: Zeroizing<[u8; 32]> = Zeroizing::new(pbkdf2::pbkdf2_hmac_array::<Sha256, 32>(
             self.0.as_slice(),
@@ -115,7 +118,7 @@ impl MasterKey {
         STANDARD.encode(hash.as_slice())
     }
 
-    /// Estica a master key em uma chave de cifra + chave de MAC via HKDF-Expand-SHA256.
+    /// Stretches the master key into an encryption key + MAC key via HKDF-Expand-SHA256.
     pub fn stretch(&self) -> SymmetricKey {
         let hk = hkdf::Hkdf::<Sha256>::from_prk(self.0.as_slice())
             .expect("PRK de 32 bytes tem o tamanho mínimo do SHA-256");
@@ -138,12 +141,12 @@ impl fmt::Debug for MasterKey {
     }
 }
 
-/// Chave simétrica (user key, chave de organização ou de item).
+/// Symmetric key (user key, organization key or item key).
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub enum SymmetricKey {
-    /// Chave legada: AES-256-CBC + HMAC-SHA256 (`enc ‖ mac`, 64 bytes).
+    /// Legacy key: AES-256-CBC + HMAC-SHA256 (`enc ‖ mac`, 64 bytes).
     AesCbcHmac { enc: [u8; 32], mac: [u8; 32] },
-    /// Chave v2 (COSE): 32 bytes para XChaCha20-Poly1305, XAES-256-GCM ou AES-256-GCM.
+    /// v2 key (COSE): 32 bytes for XChaCha20-Poly1305, XAES-256-GCM or AES-256-GCM.
     Cose {
         #[zeroize(skip)]
         alg: i64,
@@ -154,8 +157,8 @@ pub enum SymmetricKey {
 }
 
 impl SymmetricKey {
-    /// Interpreta os bytes de uma chave decifrada: 64 bytes são `enc ‖ mac`;
-    /// mais de 64 são uma `COSE_Key` acolchoada (contas v2).
+    /// Interprets the bytes of a decrypted key: 64 bytes are `enc ‖ mac`;
+    /// more than 64 are a padded `COSE_Key` (v2 accounts).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
         match bytes.len() {
             64 => {
@@ -184,10 +187,10 @@ impl SymmetricKey {
         }
     }
 
-    /// Bytes crus da chave, como o AEAD espera.
-    /// Bytes da chave no formato que [`SymmetricKey::from_bytes`] lê de volta
-    /// (64 bytes nas legadas; `COSE_Key` acolchoada nas v2). Para guardar no
-    /// cofre do sistema — use com cuidado.
+    /// Raw key bytes, as the AEAD expects them.
+    /// Key bytes in the format [`SymmetricKey::from_bytes`] reads back
+    /// (64 bytes for legacy keys; padded `COSE_Key` for v2). For storing in the
+    /// system credential store — use with care.
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         match self {
             SymmetricKey::AesCbcHmac { .. } => self.raw(),
@@ -209,7 +212,7 @@ impl SymmetricKey {
         }
     }
 
-    /// Gera uma chave nova a partir do RNG do sistema.
+    /// Generates a new key from the system RNG.
     pub fn generate() -> Result<Self, CryptoError> {
         let mut bytes = Zeroizing::new([0u8; 64]);
         getrandom::fill(bytes.as_mut_slice()).map_err(|_| CryptoError::Rng)?;
@@ -232,7 +235,7 @@ impl SymmetricKey {
             return Err(CryptoError::WrongEncType);
         };
 
-        // Verifica o MAC antes de tocar no texto cifrado (encrypt-then-MAC).
+        // Check the MAC before touching the ciphertext (encrypt-then-MAC).
         let mut hmac = HmacSha256::new_from_slice(mac_key).expect("HMAC aceita qualquer chave");
         hmac.update(iv);
         hmac.update(data);
@@ -254,8 +257,8 @@ impl SymmetricKey {
         Ok(Secret::new(text.to_owned()))
     }
 
-    /// Cifra um texto (campos do item). Em chaves v2, usa o formato de texto
-    /// acolchoado dos clientes oficiais.
+    /// Encrypts a text (item fields). With v2 keys, uses the official clients'
+    /// padded text format.
     pub fn encrypt_str(&self, text: &str) -> Result<EncString, CryptoError> {
         match self {
             SymmetricKey::Cose { alg, key, kid } => Ok(EncString::Cose {
@@ -303,11 +306,11 @@ impl fmt::Debug for SymmetricKey {
     }
 }
 
-/// Chave privada RSA do usuário, usada só para abrir as chaves de organização.
+/// The user's RSA private key, used only to open organization keys.
 pub struct RsaPrivateKey(rsa::PrivateKey);
 
 impl RsaPrivateKey {
-    /// `der` é o PKCS#8 decifrado do campo `privateKey` do perfil.
+    /// `der` is the decrypted PKCS#8 from the profile's `privateKey` field.
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Self, CryptoError> {
         use rsa::pkcs8::DecodePrivateKey;
         rsa::PrivateKey::from_pkcs8_der(der)
@@ -381,8 +384,8 @@ mod tests {
         assert_eq!(format!("{mk:?}"), "MasterKey(***)");
     }
 
-    /// Vetor público do Bitwarden: EncString tipo 7 com o AEAD CBC-HMAC e uma
-    /// chave legada (enc = 00..1f, mac = 20..3f).
+    /// Bitwarden public vector: type 7 EncString with the CBC-HMAC AEAD and a
+    /// legacy key (enc = 00..1f, mac = 20..3f).
     #[test]
     fn decrypts_public_type7_cbc_hmac_vector() {
         let key: Vec<u8> = (0u8..64).collect();
@@ -396,8 +399,8 @@ mod tests {
         );
     }
 
-    /// Conta v2 de ponta a ponta: a user key é uma COSE_Key acolchoada,
-    /// embrulhada pela chave esticada (tipo 2); os campos vêm em tipo 7.
+    /// End-to-end v2 account: the user key is a padded COSE_Key,
+    /// wrapped by the stretched key (type 2); the fields come as type 7.
     #[test]
     fn v2_user_key_opens_type7_fields() {
         let stretched = MasterKey::from_bytes([5; 32]).stretch();
@@ -414,11 +417,11 @@ mod tests {
         let field = EncString::Cose {
             data: crate::cose::encrypt_xchacha_for_test(&raw_user, "senha-ção".as_bytes(), true),
         };
-        // Ida e volta pelo texto, como vem do servidor.
+        // Round trip through the text, as it comes from the server.
         let field: EncString = field.to_string().parse().unwrap();
         assert_eq!(user.decrypt_str(&field).unwrap().expose(), "senha-ção");
 
-        // Guardar e recarregar a chave v2 preserva algoritmo e kid.
+        // Storing and reloading the v2 key preserves algorithm and kid.
         let again = SymmetricKey::from_bytes(&user.to_bytes()).unwrap();
         assert_eq!(again.decrypt_str(&field).unwrap().expose(), "senha-ção");
         let legacy = SymmetricKey::generate().unwrap();
@@ -426,7 +429,7 @@ mod tests {
         let enc = legacy.encrypt_str("x").unwrap();
         assert_eq!(back.decrypt_str(&enc).unwrap().expose(), "x");
 
-        // Cifrar com a chave v2 e decifrar de volta (IV aleatório a cada vez).
+        // Encrypt with the v2 key and decrypt back (random IV every time).
         let a = user.encrypt_str("nova senha ✓").unwrap();
         let b = user.encrypt_str("nova senha ✓").unwrap();
         assert!(matches!(a, EncString::Cose { .. }));

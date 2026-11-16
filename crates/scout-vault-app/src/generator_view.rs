@@ -1,5 +1,5 @@
-//! Gerador de senhas (`Ctrl+G`), aberto por cima da tela atual como as configurações.
-//! As opções ficam salvas em `settings.json`; a senha gerada, só em memória.
+//! Password generator (`Ctrl+G`), opened on top of the current screen like settings.
+//! The options are saved in `settings.json`; the generated password, only in memory.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::checkbox::Checkbox;
@@ -23,7 +23,7 @@ pub struct GeneratorView {
     store: SettingsStore,
     options: PasswordOptions,
     password: Zeroizing<String>,
-    /// Quantas senhas já foram geradas: reinicia a animação sem pôr a senha no id.
+    /// How many passwords were generated so far: restarts the animation without putting the password in the id.
     generation: u32,
 }
 
@@ -54,7 +54,7 @@ impl GeneratorView {
         cx.notify();
     }
 
-    /// Troca as opções, gera de novo e grava.
+    /// Changes the options, generates again and saves.
     pub fn set_options(&mut self, next: PasswordOptions, cx: &mut Context<Self>) {
         self.options = next;
         let mut settings = self.store.load();
@@ -72,13 +72,7 @@ impl GeneratorView {
     pub fn copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         clipboard::copy_and_clear_later(&self.password, cx);
         let _ = window;
-        crate::toast::success(
-            format!(
-                "Senha copiada · some em {} s",
-                clipboard::CLEAR_AFTER.as_secs()
-            ),
-            cx,
-        );
+        crate::toast::success(t!("generator.copied", note = clipboard::clear_note(cx)), cx);
     }
 
     fn check(
@@ -99,6 +93,16 @@ impl GeneratorView {
     }
 }
 
+/// Password strength from the entropy bits, in the current language.
+fn strength_label(bits: f64) -> &'static str {
+    match bits {
+        b if b < 40.0 => t!("generator.weak"),
+        b if b < 64.0 => t!("generator.fair"),
+        b if b < 100.0 => t!("generator.strong"),
+        _ => t!("generator.very_strong"),
+    }
+}
+
 impl Render for GeneratorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let o = self.options;
@@ -110,12 +114,17 @@ impl Render for GeneratorView {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_2xl().font_semibold().child("Gerador de senhas"))
+                    .child(
+                        div()
+                            .text_2xl()
+                            .font_semibold()
+                            .child(t!("generator.title")),
+                    )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Aleatoriedade do sistema; nada é enviado ao servidor."),
+                            .child(t!("generator.subtitle")),
                     ),
             )
             .child(
@@ -123,7 +132,7 @@ impl Render for GeneratorView {
                     .ghost()
                     .small()
                     .icon(IconName::Close)
-                    .tooltip("Fechar (Esc)")
+                    .tooltip(t!("common.close_esc"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(GeneratorEvent::Close))),
             );
 
@@ -155,14 +164,14 @@ impl Render for GeneratorView {
                         div()
                             .id("generator-strength")
                             .test_support()
-                            .aria_label(SharedString::from(generator::strength_label(bits)))
+                            .aria_label(SharedString::from(strength_label(bits)))
                             .flex_1()
                             .text_xs()
                             .text_color(appearance::accent(cx))
-                            .child(format!(
-                                "{} · ~{} bits",
-                                generator::strength_label(bits),
-                                bits.round() as u32
+                            .child(t!(
+                                "generator.strength",
+                                label = strength_label(bits),
+                                bits = bits.round() as u32
                             )),
                     )
                     .child(
@@ -170,7 +179,7 @@ impl Render for GeneratorView {
                             .outline()
                             .small()
                             .icon(IconName::RefreshCw)
-                            .label("Gerar outra")
+                            .label(t!("generator.again"))
                             .on_click(cx.listener(|this, _, _, cx| this.regenerate(cx))),
                     )
                     .child(
@@ -178,7 +187,7 @@ impl Render for GeneratorView {
                             .primary()
                             .small()
                             .icon(IconName::Copy)
-                            .label("Copiar")
+                            .label(t!("common.copy"))
                             .on_click(cx.listener(|this, _, window, cx| this.copy(window, cx))),
                     ),
             );
@@ -203,7 +212,7 @@ impl Render for GeneratorView {
 
         let options = v_flex()
             .gap_2()
-            .child(ui::section_label("OPÇÕES", cx).px_0())
+            .child(ui::section_label(t!("generator.options"), cx).px_0())
             .child(
                 v_flex()
                     .gap_4()
@@ -216,7 +225,12 @@ impl Render for GeneratorView {
                         h_flex()
                             .justify_between()
                             .gap_4()
-                            .child(div().text_sm().font_medium().child("Tamanho"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child(t!("generator.length")),
+                            )
                             .child(length),
                     )
                     .child(
@@ -254,7 +268,7 @@ impl Render for GeneratorView {
                             ))
                             .child(self.check(
                                 "gen-ambiguous",
-                                "Evitar caracteres parecidos (I l 1 O 0)",
+                                t!("generator.avoid_ambiguous"),
                                 o.avoid_ambiguous,
                                 |o, v| o.avoid_ambiguous = v,
                                 cx,

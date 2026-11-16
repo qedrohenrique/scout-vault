@@ -1,11 +1,11 @@
-//! Copiar com limpeza automática da área de transferência.
+//! Copying with automatic clipboard clearing.
 //!
-//! No Windows, o app de verdade escreve direto na API do sistema e marca o
-//! conteúdo para **não entrar no histórico (Win+V) nem na área de transferência
-//! na nuvem** — os mesmos marcadores que gerenciadores de senha usam
+//! On Windows, the real app writes directly to the system API and marks the
+//! content to **stay out of the history (Win+V) and the cloud
+//! clipboard** — the same markers password managers use
 //! (`ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory = 0`,
-//! `CanUploadToCloudClipboard = 0`). Nos testes (plataforma simulada do GPUI)
-//! e fora do Windows, usa a área de transferência do GPUI.
+//! `CanUploadToCloudClipboard = 0`). In tests (GPUI's simulated platform)
+//! and outside Windows, it uses GPUI's clipboard.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -13,11 +13,38 @@ use std::time::Duration;
 use gpui_kit::*;
 use zeroize::Zeroizing;
 
-pub const CLEAR_AFTER: Duration = Duration::from_secs(30);
+/// Seconds until the clipboard is cleared, if the person didn't choose another value.
+pub const DEFAULT_CLEAR_SECS: u32 = 30;
+
+/// Time chosen in settings (0 = don't clear).
+struct ClearAfter(u32);
+
+impl Global for ClearAfter {}
+
+/// Changes the clearing time (applies to the next copies).
+pub fn set_clear_after_secs(secs: u32, cx: &mut App) {
+    cx.set_global(ClearAfter(secs));
+}
+
+/// How long what was copied stays on the clipboard (`None` = not cleared).
+pub fn clear_after(cx: &App) -> Option<Duration> {
+    let secs = cx
+        .try_global::<ClearAfter>()
+        .map_or(DEFAULT_CLEAR_SECS, |c| c.0);
+    (secs > 0).then(|| Duration::from_secs(u64::from(secs)))
+}
+
+/// Ending of the copy messages: " · clears in 30 s" (or nothing, if not cleared).
+pub fn clear_note(cx: &App) -> String {
+    match clear_after(cx) {
+        Some(d) => format!(" · {}", t!("tray.clears_in", n = d.as_secs())),
+        None => String::new(),
+    }
+}
 
 static NATIVE: AtomicBool = AtomicBool::new(false);
 
-/// Liga a escrita nativa (com exclusão do histórico). Chamado só pelo app real.
+/// Turns on native writing (with history exclusion). Called only by the real app.
 pub fn use_native_clipboard() {
     NATIVE.store(cfg!(windows), Ordering::Relaxed);
 }
@@ -33,15 +60,18 @@ fn write(text: &str, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
 }
 
-/// Copia `text` e agenda a limpeza. Só apaga se a área de transferência ainda
-/// tiver o mesmo valor — não destrói algo que o usuário copiou depois.
+/// Copies `text` and schedules the clearing. Only clears if the clipboard still
+/// holds the same value — doesn't destroy something the user copied afterwards.
 ///
-/// A tarefa é desacoplada da tela: bloquear o cofre não cancela a limpeza.
+/// The task is detached from the screen: locking the vault doesn't cancel the clearing.
 pub fn copy_and_clear_later(text: &str, cx: &mut App) {
     write(text, cx);
+    let Some(after) = clear_after(cx) else {
+        return;
+    };
     let expected = Zeroizing::new(text.to_owned());
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(CLEAR_AFTER).await;
+        cx.background_executor().timer(after).await;
         cx.update(|cx| clear_if_unchanged(&expected, cx));
     })
     .detach();
@@ -68,12 +98,12 @@ mod platform {
 
     const CF_UNICODETEXT: u32 = 13;
 
-    /// Abre a área de transferência; outro programa pode estar com ela aberta,
-    /// então tenta algumas vezes.
+    /// Opens the clipboard; another program may have it open,
+    /// so it tries a few times.
     fn open() -> windows::core::Result<()> {
         let mut last = Ok(());
         for _ in 0..10 {
-            // SAFETY: chamada simples da API; fechamos em `close`.
+            // SAFETY: simple API call; we close it in `close`.
             last = unsafe { OpenClipboard(None) };
             if last.is_ok() {
                 return Ok(());
@@ -83,7 +113,7 @@ mod platform {
         last
     }
 
-    /// Copia `bytes` para um bloco global e entrega à área de transferência.
+    /// Copies `bytes` into a global block and hands it to the clipboard.
     unsafe fn set(format: u32, bytes: &[u8]) -> windows::core::Result<()> {
         let mem: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes.len().max(1))?;
         let ptr = GlobalLock(mem) as *mut u8;
@@ -93,7 +123,7 @@ mod platform {
         }
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
         let _ = GlobalUnlock(mem);
-        // Se der certo, o sistema passa a ser dono da memória.
+        // If it succeeds, the system becomes the owner of the memory.
         if let Err(e) = SetClipboardData(format, Some(HANDLE(mem.0))) {
             let _ = GlobalFree(Some(mem));
             return Err(e);
@@ -104,7 +134,7 @@ mod platform {
     pub fn write_private(text: &str) -> windows::core::Result<()> {
         let mut wide: Vec<u16> = text.encode_utf16().collect();
         wide.push(0);
-        // SAFETY: área de transferência aberta por nós até o CloseClipboard abaixo.
+        // SAFETY: clipboard opened by us until the CloseClipboard below.
         unsafe {
             open()?;
             let result = (|| {
@@ -117,7 +147,7 @@ mod platform {
                     RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"));
                 let history = RegisterClipboardFormatW(w!("CanIncludeInClipboardHistory"));
                 let cloud = RegisterClipboardFormatW(w!("CanUploadToCloudClipboard"));
-                // Os marcadores são opcionais: se algum falhar, o texto já foi copiado.
+                // The markers are optional: if one fails, the text has already been copied.
                 for format in [exclude, history, cloud] {
                     if format != 0 {
                         let _ = set(format, &zero);
@@ -126,14 +156,14 @@ mod platform {
                 Ok(())
             })();
             let _ = CloseClipboard();
-            // O texto passou para a memória do sistema; apaga a nossa cópia.
+            // The text moved to system memory; wipe our copy.
             zeroize::Zeroize::zeroize(&mut wide);
             result
         }
     }
 
     pub fn clear() -> windows::core::Result<()> {
-        // SAFETY: idem.
+        // SAFETY: same as above.
         unsafe {
             open()?;
             let result = EmptyClipboard();
@@ -190,8 +220,8 @@ mod tests {
         }
     }
 
-    /// Mexe na área de transferência de verdade (guarda e devolve o texto que
-    /// havia nela). Rode com `--ignored`.
+    /// Touches the real clipboard (saves and restores the text that
+    /// was on it). Run with `--ignored`.
     #[test]
     #[ignore]
     fn private_copy_is_marked_out_of_history() {

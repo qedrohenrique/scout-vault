@@ -1,9 +1,9 @@
-//! Anexos: arquivos cifrados guardados junto do item.
+//! Attachments: encrypted files stored with the item.
 //!
-//! Cada anexo tem **chave própria** (64 bytes, AES-CBC + HMAC), guardada
-//! cifrada com a chave do item (ou do dono). O arquivo no servidor é um
-//! "EncArrayBuffer": `[tipo][iv 16][mac 32][dados]` no tipo 2, ou
-//! `[7][COSE_Encrypt0]` em contas v2. O nome do arquivo também é cifrado.
+//! Each attachment has **its own key** (64 bytes, AES-CBC + HMAC), stored
+//! encrypted with the item's (or the owner's) key. The file on the server is an
+//! "EncArrayBuffer": `[type][iv 16][mac 32][data]` for type 2, or
+//! `[7][COSE_Encrypt0]` on v2 accounts. The file name is encrypted too.
 
 use serde::Deserialize;
 use zeroize::Zeroizing;
@@ -13,7 +13,7 @@ use crate::enc_string::EncString;
 use crate::sync::CipherRaw;
 use crate::vault::{Keys, VaultError};
 
-/// Limite dos clientes oficiais para um anexo.
+/// The official clients' size limit for an attachment.
 pub const MAX_SIZE: usize = 500 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -24,10 +24,10 @@ pub struct AttachmentRaw {
     pub url: Option<String>,
     #[serde(default)]
     pub file_name: Option<String>,
-    /// Chave do anexo, cifrada com a chave do item/dono.
+    /// Attachment key, encrypted with the item/owner key.
     #[serde(default)]
     pub key: Option<String>,
-    /// O servidor manda como texto ("1024") ou número.
+    /// The server sends it as text ("1024") or as a number.
     #[serde(default)]
     pub size: Option<serde_json::Value>,
     #[serde(default)]
@@ -44,7 +44,7 @@ impl AttachmentRaw {
     }
 }
 
-/// Anexos do item, como vieram no sync (ainda cifrados).
+/// The item's attachments, as they came in the sync (still encrypted).
 pub fn raw_attachments(cipher: &CipherRaw) -> Vec<AttachmentRaw> {
     cipher
         .extra
@@ -54,7 +54,7 @@ pub fn raw_attachments(cipher: &CipherRaw) -> Vec<AttachmentRaw> {
         .unwrap_or_default()
 }
 
-/// A chave usada nos campos do item: a própria do item ou a do dono.
+/// The key used for the item's fields: the item's own or the owner's.
 pub fn item_key(cipher: &CipherRaw, keys: &Keys) -> Result<SymmetricKey, VaultError> {
     let owner = keys.for_owner(cipher.organization_id.as_deref())?;
     match &cipher.key {
@@ -63,7 +63,7 @@ pub fn item_key(cipher: &CipherRaw, keys: &Keys) -> Result<SymmetricKey, VaultEr
     }
 }
 
-/// Chave de um anexo (anexos muito antigos não têm: usam a do item).
+/// An attachment's key (very old attachments don't have one: they use the item's).
 pub fn attachment_key(
     cipher: &CipherRaw,
     attachment: &AttachmentRaw,
@@ -76,7 +76,7 @@ pub fn attachment_key(
     }
 }
 
-/// Decifra o arquivo baixado.
+/// Decrypts the downloaded file.
 pub fn decrypt_file(bytes: &[u8], key: &SymmetricKey) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     let (&kind, rest) = bytes.split_first().ok_or(CryptoError::WrongEncType)?;
     let enc = match kind {
@@ -99,7 +99,7 @@ pub fn decrypt_file(bytes: &[u8], key: &SymmetricKey) -> Result<Zeroizing<Vec<u8
     key.decrypt(&enc)
 }
 
-/// Cifra o arquivo no formato que o servidor guarda.
+/// Encrypts the file in the format the server stores.
 pub fn encrypt_file(plain: &[u8], key: &SymmetricKey) -> Result<Vec<u8>, CryptoError> {
     match key.encrypt(plain)? {
         EncString::AesCbc256HmacSha256 { iv, data, mac } => {
@@ -120,17 +120,17 @@ pub fn encrypt_file(plain: &[u8], key: &SymmetricKey) -> Result<Vec<u8>, CryptoE
     }
 }
 
-/// Tudo o que vai para o servidor num anexo novo.
+/// Everything that goes to the server for a new attachment.
 pub struct NewAttachment {
-    /// Chave do anexo, cifrada com a chave do item.
+    /// Attachment key, encrypted with the item key.
     pub key: String,
-    /// Nome do arquivo, cifrado.
+    /// File name, encrypted.
     pub file_name: String,
-    /// Arquivo cifrado.
+    /// Encrypted file.
     pub data: Vec<u8>,
 }
 
-/// Prepara um anexo novo: gera a chave, cifra o nome e o conteúdo.
+/// Prepares a new attachment: generates the key, encrypts the name and the contents.
 pub fn prepare(
     cipher: &CipherRaw,
     keys: &Keys,
@@ -151,7 +151,7 @@ pub fn prepare(
     })
 }
 
-/// Tamanho legível ("1,2 MB").
+/// Human-readable size ("1,2 MB").
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["bytes", "KB", "MB", "GB"];
     let mut value = bytes as f64;

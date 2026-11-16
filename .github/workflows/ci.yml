@@ -6,11 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Só leitura: nenhum job aqui precisa escrever no repositório.
+# Read-only: no job here needs to write to the repository.
 permissions:
   contents: read
 
-# Um push novo cancela a execução anterior do mesmo branch (economiza minutos).
+# A new push cancels the previous run on the same branch (saves minutes).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -21,7 +21,7 @@ env:
 
 jobs:
   fmt:
-    name: Formatação
+    name: Formatting
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -34,7 +34,7 @@ jobs:
       - run: cargo fmt --all --check
 
   windows:
-    name: Clippy e testes (Windows)
+    name: Clippy and tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -46,14 +46,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # Núcleo + interface headless (os testes ao vivo ficam de fora: são #[ignore]).
+      # Core + headless UI (live tests are left out: they are #[ignore]).
       - run: cargo test --workspace --locked
 
   live:
-    name: Testes ao vivo (Vaultwarden)
+    name: Live tests (Vaultwarden)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Vaultwarden descartável só para este job; a conta é criada aqui e some junto.
+    # Throwaway Vaultwarden just for this job; the account is created here and goes away with it.
     services:
       vaultwarden:
         image: vaultwarden/server:latest
@@ -62,11 +62,11 @@ jobs:
         env:
           DOMAIN: http://localhost:8000
           SIGNUPS_ALLOWED: "true"
-          # Os testes fazem vários logins seguidos.
+          # The tests log in several times in a row.
           LOGIN_RATELIMIT_SECONDS: "1"
           LOGIN_RATELIMIT_MAX_BURST: "1000"
-          # Versões novas recusam subir sem volume em /data; aqui o servidor é
-          # descartável de propósito.
+          # Newer versions refuse to start without a volume at /data; here the
+          # server is throwaway on purpose.
           I_REALLY_WANT_VOLATILE_STORAGE: "true"
     steps:
       - uses: actions/checkout@v7
@@ -78,15 +78,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install cryptography
-      - name: Esperar o Vaultwarden
+      - name: Wait for Vaultwarden
         run: |
           for i in $(seq 1 60); do
             curl -fsS http://localhost:8000/alive && exit 0
             sleep 2
           done
-          echo "o Vaultwarden não respondeu" >&2
+          echo "Vaultwarden did not respond" >&2
           exit 1
-      - name: Criar conta e organização de teste
+      - name: Create test account and organization
         run: |
           python tools/dev_seed.py --url http://localhost:8000
           python tools/dev_org.py
@@ -94,18 +94,18 @@ jobs:
           echo "::add-mask::$SCOUT_VAULT_TEST_PASSWORD"
           cat dev/test-account.env >> "$GITHUB_ENV"
       - run: cargo test -p scout-vault-core --locked
-      - name: Testes contra o servidor
+      - name: Tests against the server
         run: cargo test -p scout-vault-core --test live_server --locked -- --ignored --test-threads=1
 
   extension:
-    name: Extensão do navegador
+    name: Browser extension
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Sintaxe do JavaScript e do manifest
+      - name: JavaScript and manifest syntax
         run: |
           for f in extension/*.js; do node --check "$f"; done
           python3 -m json.tool extension/manifest.json > /dev/null

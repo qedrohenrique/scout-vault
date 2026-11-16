@@ -1,17 +1,17 @@
-//! Desbloquear com **Windows Hello** (rosto, digital ou PIN).
+//! Unlock with **Windows Hello** (face, fingerprint or PIN).
 //!
-//! Como funciona, sem guardar a chave aberta em lugar nenhum:
+//! How it works, without storing the open key anywhere:
 //!
-//! 1. Ao ligar a opção (com o cofre aberto), o Windows Hello cria um par de
-//!    chaves RSA que **nunca sai do TPM/Windows** e assina um desafio aleatório.
-//! 2. A assinatura (RSA PKCS#1 v1.5: sempre a mesma para o mesmo desafio e a
-//!    mesma chave) vira, por SHA-512, uma chave que cifra a **user key**.
-//! 3. No Gerenciador de Credenciais ficam só o desafio, a user key **cifrada**
-//!    e a `profile.key` do servidor (para perceber troca de senha).
+//! 1. When the option is turned on (with the vault open), Windows Hello creates an RSA
+//!    key pair that **never leaves the TPM/Windows** and signs a random challenge.
+//! 2. The signature (RSA PKCS#1 v1.5: always the same for the same challenge and the
+//!    same key) becomes, via SHA-512, a key that encrypts the **user key**.
+//! 3. Credential Manager holds only the challenge, the **encrypted** user key
+//!    and the server's `profile.key` (to notice a password change).
 //!
-//! Para abrir, o Windows Hello assina o desafio de novo (pedindo rosto/PIN) e
-//! a user key é decifrada. Sem o Hello do usuário, o que está guardado não abre.
-//! Trocar a senha mestra (em qualquer aparelho) descarta a configuração.
+//! To open, Windows Hello signs the challenge again (asking for face/PIN) and
+//! the user key is decrypted. Without the user's Hello, what is stored doesn't open.
+//! Changing the master password (on any device) discards the setup.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,14 +28,14 @@ use zeroize::Zeroizing;
 use crate::flow::Session;
 use crate::settings::SettingsStore;
 
-/// Assina um desafio com a chave do Windows Hello do usuário (pede rosto/PIN).
+/// Signs a challenge with the user's Windows Hello key (asks for face/PIN).
 pub type Signer = Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, HelloError> + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HelloError {
-    /// A pessoa cancelou ou preferiu a senha.
+    /// The person canceled or preferred the password.
     Canceled,
-    /// Não há Windows Hello configurado neste computador.
+    /// There is no Windows Hello set up on this computer.
     Unavailable,
     Failed(String),
 }
@@ -43,11 +43,9 @@ pub enum HelloError {
 impl HelloError {
     pub fn message(&self) -> String {
         match self {
-            Self::Canceled => "Windows Hello cancelado. Use a senha mestra.".into(),
-            Self::Unavailable => {
-                "O Windows Hello não está configurado neste computador (Configurações do Windows › Contas › Opções de entrada).".into()
-            }
-            Self::Failed(e) => format!("O Windows Hello não abriu o cofre: {e}"),
+            Self::Canceled => t!("hello.canceled").into(),
+            Self::Unavailable => t!("settings.windows_hello_unavailable").into(),
+            Self::Failed(e) => t!("hello.failed", e = e),
         }
     }
 }
@@ -59,7 +57,7 @@ struct Provider {
 
 impl Global for Provider {}
 
-/// Usa `signer` como Windows Hello (os testes passam um falso).
+/// Uses `signer` as Windows Hello (tests pass a fake one).
 pub fn install(cx: &mut App, signer: Signer) {
     cx.set_global(Provider {
         signer,
@@ -67,7 +65,7 @@ pub fn install(cx: &mut App, signer: Signer) {
     });
 }
 
-/// O Windows Hello de verdade (só no app; a checagem de suporte roda à parte).
+/// The real Windows Hello (app only; the support check runs separately).
 pub fn install_system(cx: &mut App) {
     let supported = Arc::new(AtomicBool::new(false));
     let flag = supported.clone();
@@ -81,7 +79,7 @@ pub fn install_system(cx: &mut App) {
     });
 }
 
-/// O Windows Hello existe e está configurado?
+/// Does Windows Hello exist and is it set up?
 pub fn available(cx: &App) -> bool {
     cx.try_global::<Provider>()
         .is_some_and(|p| p.supported.load(Ordering::Relaxed))
@@ -93,7 +91,7 @@ pub fn signer(cx: &App) -> Option<Signer> {
         .map(|p| p.signer.clone())
 }
 
-/// Assinador determinístico para testes (nada de Windows Hello de verdade).
+/// Deterministic signer for tests (no real Windows Hello).
 pub fn fake_signer(seed: &'static [u8]) -> Signer {
     Arc::new(move |data| {
         let mut h = Sha256::new();
@@ -103,13 +101,13 @@ pub fn fake_signer(seed: &'static [u8]) -> Signer {
     })
 }
 
-/// Assinador que sempre "cancela" (testes).
+/// Signer that always "cancels" (tests).
 pub fn canceling_signer() -> Signer {
     Arc::new(|_| Err(HelloError::Canceled))
 }
 
 // ---------------------------------------------------------------------------
-// O que fica guardado
+// What is stored
 
 const SEP: char = '\n';
 
@@ -125,7 +123,7 @@ fn session_key(session: &Session) -> String {
     key_name(&session.client.urls().identity, &session.email)
 }
 
-/// Desafio, user key cifrada e a `profile.key` de quando foi ligado.
+/// Challenge, encrypted user key and the `profile.key` from when it was turned on.
 pub struct Sealed {
     pub challenge: Vec<u8>,
     protected: String,
@@ -145,7 +143,7 @@ fn read(store: &SettingsStore, session: &Session) -> Option<Sealed> {
     })
 }
 
-/// O que abre com o Windows Hello para esta sessão (se ainda vale).
+/// What opens with Windows Hello for this session (if still valid).
 pub fn sealed(store: &SettingsStore, session: &Session) -> Option<Sealed> {
     read(store, session).filter(|s| session.sync.profile.key.as_deref() == Some(&s.protected))
 }
@@ -154,7 +152,7 @@ pub fn is_enrolled(store: &SettingsStore, session: &Session) -> bool {
     sealed(store, session).is_some()
 }
 
-/// Um desafio novo (32 bytes aleatórios).
+/// A new challenge (32 random bytes).
 pub fn new_challenge() -> Vec<u8> {
     let mut c = vec![0u8; 32];
     getrandom::fill(&mut c).expect("gerador aleatório do sistema");
@@ -172,7 +170,7 @@ fn wrapping_key(signature: &[u8]) -> Result<SymmetricKey, HelloError> {
     SymmetricKey::from_bytes(&bytes).map_err(|e| HelloError::Failed(e.to_string()))
 }
 
-/// Guarda a user key cifrada com a assinatura do desafio.
+/// Stores the user key encrypted with the challenge signature.
 pub fn seal(
     store: &SettingsStore,
     session: &Session,
@@ -194,23 +192,21 @@ pub fn seal(
     Ok(())
 }
 
-/// Abre as chaves com a assinatura do desafio guardado.
+/// Opens the keys with the signature of the stored challenge.
 pub fn unseal(sealed: &Sealed, signature: &[u8], session: &Session) -> Result<Keys, HelloError> {
     let bytes = wrapping_key(signature)?
         .decrypt(&sealed.wrapped)
-        .map_err(|_| {
-            HelloError::Failed("a chave do Windows Hello mudou; ligue a opção de novo".into())
-        })?;
+        .map_err(|_| HelloError::Failed(t!("hello.key_changed").into()))?;
     let user = SymmetricKey::from_bytes(&bytes).map_err(|e| HelloError::Failed(e.to_string()))?;
     Keys::from_user_key(user, &session.sync.profile)
-        .map_err(|_| HelloError::Failed("a senha mestra mudou; ligue a opção de novo".into()))
+        .map_err(|_| HelloError::Failed(t!("hello.password_changed").into()))
 }
 
 pub fn forget(store: &SettingsStore, session: &Session) {
     store.secrets().delete(&session_key(session));
 }
 
-/// A senha mestra mudou desde que o Windows Hello foi ligado? (então descarta)
+/// Has the master password changed since Windows Hello was turned on? (then discard)
 pub fn password_changed(store: &SettingsStore, session: &Session) -> bool {
     match read(store, session) {
         Some(s) if session.sync.profile.key.as_deref() != Some(&s.protected) => {
@@ -235,7 +231,7 @@ mod platform {
 
     use super::HelloError;
 
-    /// Nome da chave do Windows Hello deste app.
+    /// Name of this app's Windows Hello key.
     const KEY_NAME: &str = "ScoutVault";
 
     pub fn is_supported() -> bool {
@@ -251,7 +247,7 @@ mod platform {
             }
             KeyCredentialStatus::NotFound => HelloError::Unavailable,
             KeyCredentialStatus::SecurityDeviceLocked => {
-                HelloError::Failed("o dispositivo de segurança está bloqueado".into())
+                HelloError::Failed(t!("hello.device_locked").into())
             }
             other => HelloError::Failed(format!("código {}", other.0)),
         }
@@ -261,12 +257,12 @@ mod platform {
         HelloError::Failed(e.message().to_string())
     }
 
-    /// A janela do Windows Hello às vezes abre atrás do app: traz para a frente.
+    /// The Windows Hello window sometimes opens behind the app: bring it to the front.
     fn focus_prompt_soon() {
         std::thread::spawn(|| {
             for _ in 0..40 {
                 std::thread::sleep(std::time::Duration::from_millis(75));
-                // SAFETY: só procura a janela do diálogo do sistema e a ativa.
+                // SAFETY: only looks up the system dialog window and activates it.
                 unsafe {
                     if let Ok(hwnd) = FindWindowW(w!("Credential Dialog Xaml Host"), None) {
                         if !hwnd.is_invalid() {
@@ -287,7 +283,7 @@ mod platform {
         if opened.Status().map_err(failed)? == KeyCredentialStatus::Success {
             return opened.Credential().map_err(failed);
         }
-        // Primeira vez: cria a chave (o Windows pede rosto/PIN).
+        // First time: creates the key (Windows asks for face/PIN).
         focus_prompt_soon();
         let created = KeyCredentialManager::RequestCreateAsync(
             &name,

@@ -1,5 +1,5 @@
-//! Login com 2FA por autenticador e "lembrar este dispositivo" contra o
-//! Vaultwarden local. Crie a conta com `python tools/dev_seed.py --totp` e rode:
+//! Login with authenticator 2FA and "remember this device" against the
+//! local Vaultwarden. Create the account with `python tools/dev_seed.py --totp` and run:
 //!
 //! ```bash
 //! set -a; . dev/test-account-2fa.env; set +a
@@ -37,7 +37,7 @@ fn base32(s: &str) -> Vec<u8> {
     out
 }
 
-/// Código TOTP (RFC 6238, SHA-1, 6 dígitos) para `offset` passos de 30 s a partir de agora.
+/// TOTP code (RFC 6238, SHA-1, 6 digits) for `offset` 30 s steps from now.
 fn totp(secret: &str, offset: i64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -100,12 +100,12 @@ fn remember_device_skips_two_factor_next_time() {
     let pw = || Zeroizing::new(password.clone());
 
     block_on(async {
-        // 1. Primeiro login: o servidor pede o autenticador.
+        // 1. First login: the server asks for the authenticator.
         let pending = expect_two_factor(
             flow::start_login(client(&url, &device), email.clone(), pw(), secrets.clone()).await,
         );
 
-        // 2. Código errado: continua no mesmo passo, sem refazer a KDF.
+        // 2. Wrong code: stays on the same step, without redoing the KDF.
         let pending = match flow::continue_login(
             pending,
             Some(second(
@@ -124,8 +124,8 @@ fn remember_device_skips_two_factor_next_time() {
             _ => panic!("esperava código incorreto"),
         };
 
-        // 3. Código certo com "lembrar": entra e guarda o token.
-        // (Usa o próximo passo de 30 s: o atual pode já ter sido usado pelo dev_seed.)
+        // 3. Right code with "remember": signs in and stores the token.
+        // (Uses the next 30 s step: the current one may already have been used by dev_seed.)
         let outcome = flow::continue_login(
             pending,
             Some(second(
@@ -142,7 +142,7 @@ fn remember_device_skips_two_factor_next_time() {
             "o token de lembrar não foi guardado"
         );
 
-        // 4. Segundo login (outra sessão, mesmo dispositivo): entra sem pedir código.
+        // 4. Second login (another session, same device): signs in without asking for a code.
         let outcome =
             flow::start_login(client(&url, &device), email.clone(), pw(), secrets.clone()).await;
         assert!(
@@ -150,7 +150,7 @@ fn remember_device_skips_two_factor_next_time() {
             "não usou o dispositivo lembrado"
         );
 
-        // 5. Token inválido: volta a pedir o 2FA e descarta o token ruim.
+        // 5. Invalid token: asks for 2FA again and discards the bad token.
         secrets.set(&key, "token-que-nao-vale");
         expect_two_factor(
             flow::start_login(client(&url, &device), email.clone(), pw(), secrets.clone()).await,

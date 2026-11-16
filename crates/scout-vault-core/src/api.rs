@@ -1,6 +1,6 @@
-//! Cliente HTTP para servidores compatíveis com Bitwarden (oficial e Vaultwarden).
+//! HTTP client for Bitwarden-compatible servers (official and Vaultwarden).
 //!
-//! Só transporta dados **cifrados**: nada aqui decifra. Fluxo típico:
+//! It only carries **encrypted** data: nothing here decrypts. Typical flow:
 //!
 //! ```no_run
 //! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,10 +8,10 @@
 //! use scout_vault_core::crypto::MasterKey;
 //! use scout_vault_core::vault::{Keys, Vault};
 //!
-//! let (email, password) = ("eu@exemplo.com", "senha mestra");
+//! let (email, password) = ("me@example.com", "master password");
 //! let client = Client::new(ServerUrls::self_hosted("http://localhost:8000"), DeviceInfo::new("Scout Vault"))?;
 //! let kdf = client.prelogin(email).await?;
-//! let master_key = MasterKey::derive(password, email, kdf)?; // lento: fora da thread de UI
+//! let master_key = MasterKey::derive(password, email, kdf)?; // slow: off the UI thread
 //! let tokens = client.login_password(email, &master_key.server_hash(password), None, None).await?;
 //! let sync = client.sync(&tokens.access_token).await?;
 //! let keys = Keys::unlock(&master_key, &sync.profile)?;
@@ -32,20 +32,20 @@ use crate::json::camel_case;
 
 use crate::kdf::{Kdf, KdfError, PreloginResponse};
 
-/// Nome de cliente aceito pelo servidor (enum `BitwardenClient` do servidor oficial).
+/// Client name accepted by the server (the official server's `BitwardenClient` enum).
 const CLIENT_ID: &str = "desktop";
-/// Cliente usado no login por SSO: o servidor só aceita redirecionar para
-/// `http://localhost:8065..8070` nos clientes `cli`/`desktop`, e o `desktop`
-/// prefere `bitwarden://`, que pertence ao app oficial.
+/// Client used for SSO login: the server only accepts redirecting to
+/// `http://localhost:8065..8070` for the `cli`/`desktop` clients, and `desktop`
+/// prefers `bitwarden://`, which belongs to the official app.
 pub const SSO_CLIENT_ID: &str = "cli";
-/// Versão anunciada ao servidor. O Vaultwarden usa isso para decidir, por exemplo,
-/// se envia chaves SSH no sync. O servidor oficial **recusa versões antigas**
-/// ("Please update your app to continue using Bitwarden"): em nov/2026 o
-/// `2024.12.0` já era recusado e o `2025.1.0` em diante aceito. Manter perto
-/// da versão atual do app desktop oficial.
+/// Version announced to the server. Vaultwarden uses it to decide, for example,
+/// whether to send SSH keys in the sync. The official server **rejects old versions**
+/// ("Please update your app to continue using Bitwarden"): in Nov 2026
+/// `2024.12.0` was already rejected and `2025.1.0` onwards accepted. Keep it close
+/// to the current version of the official desktop app.
 const CLIENT_VERSION: &str = "2026.10.0";
 
-/// `DeviceType` do protocolo: 6 = Windows, 7 = macOS, 8 = Linux (desktop).
+/// Protocol `DeviceType`: 6 = Windows, 7 = macOS, 8 = Linux (desktop).
 const DEVICE_TYPE: u8 = if cfg!(target_os = "windows") {
     6
 } else if cfg!(target_os = "macos") {
@@ -58,7 +58,7 @@ const DEVICE_TYPE: u8 = if cfg!(target_os = "windows") {
 pub struct ServerUrls {
     pub api: String,
     pub identity: String,
-    /// Cofre web (usado para o login por SSO).
+    /// Web vault (used for SSO login).
     #[serde(default)]
     pub vault: String,
 }
@@ -80,7 +80,7 @@ impl ServerUrls {
         }
     }
 
-    /// Servidor próprio (Vaultwarden ou Bitwarden self-hosted): `<base>/api` e `<base>/identity`.
+    /// Self-hosted server (Vaultwarden or Bitwarden self-hosted): `<base>/api` and `<base>/identity`.
     pub fn self_hosted(base: &str) -> Self {
         let base = base.trim().trim_end_matches('/');
         Self {
@@ -91,16 +91,16 @@ impl ServerUrls {
     }
 }
 
-/// Código devolvido pelo navegador no fim do login por SSO.
+/// Code returned by the browser at the end of SSO login.
 #[derive(Debug, Clone)]
 pub struct SsoCode {
     pub code: String,
-    /// Verificador PKCE (o `code_challenge` foi o SHA-256 dele).
+    /// PKCE verifier (the `code_challenge` was its SHA-256).
     pub verifier: String,
     pub redirect_uri: String,
 }
 
-/// Como a conta abre o cofre depois do login (`UserDecryptionOptions`).
+/// How the account opens the vault after login (`UserDecryptionOptions`).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UserDecryptionOptions {
     #[serde(rename = "hasMasterPassword", default)]
@@ -111,9 +111,9 @@ pub struct UserDecryptionOptions {
     pub trusted_device: Option<Value>,
 }
 
-/// Identidade deste dispositivo perante o servidor. O `identifier` deve ser
-/// **persistido** e reutilizado — um novo a cada login dispara alertas de
-/// "novo dispositivo" e verificação por e-mail.
+/// This device's identity towards the server. The `identifier` must be
+/// **persisted** and reused — a new one on every login triggers "new device"
+/// alerts and email verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub identifier: String,
@@ -172,24 +172,24 @@ impl TwoFactorProvider {
     }
 }
 
-/// O que o servidor devolve quando pede o segundo fator.
+/// What the server returns when it asks for the second factor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TwoFactorChallenge {
     pub providers: Vec<TwoFactorProvider>,
-    /// Token de sessão que o servidor oficial exige para reenviar o código por
-    /// e-mail (`ssoEmail2faSessionToken`). O Vaultwarden não manda.
+    /// Session token the official server requires to resend the code by
+    /// email (`ssoEmail2faSessionToken`). Vaultwarden doesn't send it.
     pub email_session_token: Option<String>,
-    /// Dados de cada método (`TwoFactorProviders2`), pelo código do método:
-    /// opções da chave de segurança (7), `AuthUrl` do Duo (2/6), e-mail mascarado (1)…
+    /// Data for each method (`TwoFactorProviders2`), by method code:
+    /// security key options (7), Duo `AuthUrl` (2/6), masked email (1)…
     pub provider_data: Vec<(TwoFactorProvider, Value)>,
 }
 
-/// Segundo fator enviado junto com o login.
+/// Second factor sent along with the login.
 #[derive(Debug, Clone)]
 pub struct SecondFactor {
     pub provider: TwoFactorProvider,
     pub token: String,
-    /// Pede ao servidor um token para pular o 2FA neste dispositivo nas próximas vezes.
+    /// Asks the server for a token to skip 2FA on this device next time.
     pub remember: bool,
 }
 
@@ -213,7 +213,7 @@ pub enum ApiError {
     InvalidNewDeviceCode,
     #[error("o servidor exige um captcha, que só os apps oficiais resolvem")]
     CaptchaRequired,
-    /// Muitas tentativas seguidas (HTTP 429); o servidor libera depois de um tempo.
+    /// Too many attempts in a row (HTTP 429); the server allows it again after a while.
     #[error("muitas tentativas; espere um pouco")]
     RateLimited,
     #[error("sessão expirada ou token inválido")]
@@ -222,19 +222,19 @@ pub enum ApiError {
     Status { status: u16, body: String },
 }
 
-/// Resultado de um login bem-sucedido.
+/// Result of a successful login.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Tokens {
     pub access_token: String,
-    /// Validade do access token, em segundos.
+    /// Access token lifetime, in seconds.
     #[serde(default)]
     pub expires_in: u64,
     pub refresh_token: String,
-    /// Presente quando o login usou `SecondFactor { remember: true, .. }`.
+    /// Present when the login used `SecondFactor { remember: true, .. }`.
     #[serde(rename = "twoFactorToken", default)]
     pub two_factor_token: Option<String>,
-    /// User key cifrada com a master key. O sync também a traz em `profile.key`;
-    /// esta serve de reserva caso o sync deixe de trazê-la.
+    /// User key encrypted with the master key. The sync also brings it in `profile.key`;
+    /// this one is a fallback in case the sync stops bringing it.
     #[serde(default)]
     pub key: Option<String>,
     #[serde(rename = "userDecryptionOptions", default)]
@@ -242,8 +242,8 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// E-mail da conta, lido do JWT do access token (sem verificar a assinatura:
-    /// só serve para a KDF; o servidor é quem valida o token).
+    /// Account email, read from the access token's JWT (without checking the signature:
+    /// it is only used for the KDF; the server is the one that validates the token).
     pub fn email(&self) -> Option<String> {
         let payload = self.access_token.split('.').nth(1)?;
         let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
@@ -257,19 +257,19 @@ pub struct RefreshedTokens {
     pub access_token: String,
     #[serde(default)]
     pub expires_in: u64,
-    /// Alguns servidores giram o refresh token; se vier, substitua o antigo.
+    /// Some servers rotate the refresh token; if one comes, replace the old one.
     #[serde(default)]
     pub refresh_token: Option<String>,
 }
 
-/// Resposta do registro de um anexo novo.
+/// Response to registering a new attachment.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentUpload {
     pub attachment_id: String,
     #[serde(default)]
     pub url: Option<String>,
-    /// 0 = direto no servidor (Vaultwarden, self-hosted); 1 = Azure (nuvem).
+    /// 0 = directly on the server (Vaultwarden, self-hosted); 1 = Azure (cloud).
     #[serde(default)]
     pub file_upload_type: u8,
 }
@@ -278,7 +278,7 @@ pub struct Client {
     http: reqwest::Client,
     urls: ServerUrls,
     device: DeviceInfo,
-    /// `client_id` do OAuth: o mesmo do login precisa ser usado no refresh.
+    /// OAuth `client_id`: the one used for login must be used for refresh too.
     client_id: &'static str,
 }
 
@@ -304,7 +304,7 @@ impl Client {
         })
     }
 
-    /// Cliente para o login por SSO (e para renovar os tokens dele).
+    /// Client for SSO login (and for renewing its tokens).
     pub fn for_sso(urls: ServerUrls, device: DeviceInfo) -> Result<Self, ApiError> {
         let mut client = Self::new(urls, device)?;
         client.client_id = SSO_CLIENT_ID;
@@ -315,7 +315,7 @@ impl Client {
         &self.device
     }
 
-    /// Este cliente usa o `client_id` do login por SSO.
+    /// This client uses the SSO login `client_id`.
     pub fn is_sso(&self) -> bool {
         self.client_id == SSO_CLIENT_ID
     }
@@ -324,7 +324,7 @@ impl Client {
         &self.urls
     }
 
-    /// `POST /identity/accounts/prelogin` — descobre a KDF da conta.
+    /// `POST /identity/accounts/prelogin` — finds out the account's KDF.
     pub async fn prelogin(&self, email: &str) -> Result<Kdf, ApiError> {
         let res = self
             .http
@@ -336,11 +336,11 @@ impl Client {
         Ok(raw.try_into()?)
     }
 
-    /// `POST /identity/connect/token` com `grant_type=password`.
+    /// `POST /identity/connect/token` with `grant_type=password`.
     ///
-    /// `server_hash` vem de [`MasterKey::server_hash`](crate::crypto::MasterKey::server_hash).
-    /// Se o servidor responder [`ApiError::TwoFactorRequired`], chame de novo com `second_factor`;
-    /// se responder [`ApiError::NewDeviceVerificationRequired`], com `new_device_otp`.
+    /// `server_hash` comes from [`MasterKey::server_hash`](crate::crypto::MasterKey::server_hash).
+    /// If the server answers [`ApiError::TwoFactorRequired`], call again with `second_factor`;
+    /// if it answers [`ApiError::NewDeviceVerificationRequired`], with `new_device_otp`.
     pub async fn login_password(
         &self,
         email: &str,
@@ -385,7 +385,7 @@ impl Client {
         Err(classify_login_error(status, &body))
     }
 
-    /// `POST /identity/connect/token` com `grant_type=authorization_code` (fim do SSO).
+    /// `POST /identity/connect/token` with `grant_type=authorization_code` (end of SSO).
     pub async fn login_sso(&self, sso: &SsoCode) -> Result<Tokens, ApiError> {
         let form: Vec<(&str, String)> = vec![
             ("grant_type", "authorization_code".into()),
@@ -414,11 +414,11 @@ impl Client {
         Err(classify_login_error(status, &body))
     }
 
-    /// Pede ao servidor para enviar o código de 2FA por e-mail.
+    /// Asks the server to send the 2FA code by email.
     ///
-    /// O servidor oficial autentica o pedido pelo `session_token` que veio em
-    /// [`TwoFactorChallenge::email_session_token`]; o Vaultwarden, pelo hash da
-    /// senha. Mandamos os dois.
+    /// The official server authenticates the request with the `session_token` that came in
+    /// [`TwoFactorChallenge::email_session_token`]; Vaultwarden, with the password
+    /// hash. We send both.
     pub async fn send_email_login_code(
         &self,
         email: &str,
@@ -444,7 +444,7 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// Troca o refresh token por um access token novo.
+    /// Exchanges the refresh token for a new access token.
     pub async fn refresh(&self, refresh_token: &str) -> Result<RefreshedTokens, ApiError> {
         let res = self
             .http
@@ -465,7 +465,7 @@ impl Client {
         read_json(res).await
     }
 
-    /// `POST /api/ciphers` — cria um item pessoal. Devolve o item como ficou no servidor.
+    /// `POST /api/ciphers` — creates a personal item. Returns the item as stored on the server.
     pub async fn create_cipher(
         &self,
         access_token: &str,
@@ -481,7 +481,7 @@ impl Client {
         read_json(res).await
     }
 
-    /// `POST /api/ciphers/create` — cria um item **numa organização**, já nas coleções.
+    /// `POST /api/ciphers/create` — creates an item **in an organization**, already in its collections.
     pub async fn create_cipher_in_org(
         &self,
         access_token: &str,
@@ -498,8 +498,8 @@ impl Client {
         read_json(res).await
     }
 
-    /// Troca as coleções de um item de organização. Servidores novos usam
-    /// `collections_v2`; os antigos, `collections`.
+    /// Changes the collections of an organization item. Newer servers use
+    /// `collections_v2`; older ones, `collections`.
     pub async fn update_collections(
         &self,
         access_token: &str,
@@ -523,7 +523,7 @@ impl Client {
         Ok(())
     }
 
-    /// `PUT /api/ciphers/{id}` — grava a edição de um item.
+    /// `PUT /api/ciphers/{id}` — saves an item edit.
     pub async fn update_cipher(
         &self,
         access_token: &str,
@@ -540,8 +540,8 @@ impl Client {
         read_json(res).await
     }
 
-    /// `PUT /api/ciphers/{id}/partial` — muda só a pasta (e o favorito) do item,
-    /// sem recifrar nada. Vale também para itens de organização (a pasta é pessoal).
+    /// `PUT /api/ciphers/{id}/partial` — changes only the item's folder (and favorite),
+    /// without re-encrypting anything. Also works for organization items (the folder is personal).
     pub async fn move_cipher_to_folder(
         &self,
         access_token: &str,
@@ -559,7 +559,7 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// `POST /api/folders` — cria uma pasta. `name` já vem cifrado com a user key.
+    /// `POST /api/folders` — creates a folder. `name` is already encrypted with the user key.
     pub async fn create_folder(
         &self,
         access_token: &str,
@@ -575,7 +575,7 @@ impl Client {
         read_json(res).await
     }
 
-    /// `PUT /api/folders/{id}` — renomeia (nome cifrado).
+    /// `PUT /api/folders/{id}` — renames (encrypted name).
     pub async fn rename_folder(
         &self,
         access_token: &str,
@@ -592,7 +592,7 @@ impl Client {
         read_json(res).await
     }
 
-    /// `DELETE /api/folders/{id}` — apaga a pasta; os itens dela ficam sem pasta.
+    /// `DELETE /api/folders/{id}` — deletes the folder; its items end up with no folder.
     pub async fn delete_folder(&self, access_token: &str, id: &str) -> Result<(), ApiError> {
         let res = self
             .http
@@ -603,7 +603,7 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// `PUT /api/ciphers/{id}/delete` — manda para a lixeira (dá para restaurar).
+    /// `PUT /api/ciphers/{id}/delete` — moves to the trash (can be restored).
     pub async fn trash_cipher(&self, access_token: &str, id: &str) -> Result<(), ApiError> {
         let res = self
             .http
@@ -614,7 +614,7 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// `PUT /api/ciphers/{id}/restore` — tira da lixeira.
+    /// `PUT /api/ciphers/{id}/restore` — takes it out of the trash.
     pub async fn restore_cipher(&self, access_token: &str, id: &str) -> Result<(), ApiError> {
         let res = self
             .http
@@ -625,7 +625,7 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// `DELETE /api/ciphers/{id}` — apaga **de vez** (só itens já na lixeira).
+    /// `DELETE /api/ciphers/{id}` — deletes **permanently** (only items already in the trash).
     pub async fn delete_cipher(&self, access_token: &str, id: &str) -> Result<(), ApiError> {
         let res = self
             .http
@@ -636,7 +636,7 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// Endereço de download de um anexo (`GET /api/ciphers/{id}/attachment/{att}`).
+    /// Download address of an attachment (`GET /api/ciphers/{id}/attachment/{att}`).
     pub async fn attachment_url(
         &self,
         access_token: &str,
@@ -660,7 +660,7 @@ impl Client {
         Ok(self.absolute(&r.url))
     }
 
-    /// Endereço relativo ao servidor vira absoluto.
+    /// A server-relative address becomes absolute.
     fn absolute(&self, url: &str) -> String {
         if url.starts_with("http://") || url.starts_with("https://") {
             return url.to_owned();
@@ -669,14 +669,14 @@ impl Client {
         format!("{base}/{}", url.trim_start_matches('/'))
     }
 
-    /// Baixa o arquivo cifrado (o endereço já vem assinado; sem token).
+    /// Downloads the encrypted file (the address is already signed; no token).
     pub async fn download(&self, url: &str) -> Result<Vec<u8>, ApiError> {
         let res = self.http.get(url).send().await?;
         let res = ensure_success(res).await?;
         Ok(res.bytes().await?.to_vec())
     }
 
-    /// Registra um anexo novo e devolve onde enviar o arquivo.
+    /// Registers a new attachment and returns where to upload the file.
     pub async fn create_attachment(
         &self,
         access_token: &str,
@@ -705,7 +705,7 @@ impl Client {
         Ok(up)
     }
 
-    /// Envia o arquivo cifrado para o anexo registrado.
+    /// Uploads the encrypted file to the registered attachment.
     pub async fn upload_attachment(
         &self,
         access_token: &str,
@@ -715,7 +715,7 @@ impl Client {
         data: Vec<u8>,
     ) -> Result<(), ApiError> {
         let res = if upload.file_upload_type == 1 {
-            // Bitwarden na nuvem: direto no armazenamento (Azure), com URL assinada.
+            // Bitwarden cloud: straight to storage (Azure), with a signed URL.
             let url = upload.url.clone().ok_or(ApiError::Status {
                 status: 0,
                 body: "o servidor não mandou o endereço de envio".into(),
@@ -764,9 +764,9 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
-    /// `GET /api/sync` — cofre inteiro, ainda cifrado.
-    /// `GET /api/accounts/revision-date` — quando o cofre mudou pela última vez
-    /// (ms desde 1970). Barato: serve para saber se vale sincronizar.
+    /// `GET /api/sync` — the whole vault, still encrypted.
+    /// `GET /api/accounts/revision-date` — when the vault last changed
+    /// (ms since 1970). Cheap: tells whether a sync is worth it.
     pub async fn revision_date(&self, access_token: &str) -> Result<i64, ApiError> {
         let res = self
             .http
@@ -856,7 +856,7 @@ fn classify_login_error(status: u16, body: &str) -> ApiError {
     };
 
     if let Some(providers) = parsed.two_factor_providers {
-        // O servidor manda os códigos como números ou como strings ("0").
+        // The server sends the codes as numbers or as strings ("0").
         let providers = providers
             .iter()
             .filter_map(|v| match v {
@@ -892,7 +892,7 @@ fn classify_login_error(status: u16, body: &str) -> ApiError {
         .as_deref()
         .unwrap_or_default()
         .to_lowercase();
-    // Mensagens do servidor oficial (DeviceValidator/BaseRequestValidator) e do Vaultwarden.
+    // Messages from the official server (DeviceValidator/BaseRequestValidator) and from Vaultwarden.
     if lower.contains("invalid new device otp") {
         return ApiError::InvalidNewDeviceCode;
     }
@@ -953,7 +953,7 @@ mod tests {
                     [TwoFactorProvider::Authenticator, TwoFactorProvider::Email]
                 );
                 assert_eq!(c.email_session_token, None);
-                // TwoFactorProviders2 vem com chaves numéricas em texto.
+                // TwoFactorProviders2 comes with numeric keys as text.
                 assert!(c
                     .provider_data
                     .iter()
@@ -1077,7 +1077,7 @@ mod tests {
 
     #[test]
     fn sso_tokens_expose_email_and_decryption_options() {
-        // JWT de exemplo: payload {"email":"eu@exemplo.com"} (assinatura irrelevante aqui).
+        // Sample JWT: payload {"email":"eu@exemplo.com"} (signature irrelevant here).
         let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"1","email":"eu@exemplo.com"}"#);
         let body = format!(
             r#"{{"access_token":"h.{payload}.s","refresh_token":"r","Key":"2.a|b|c",

@@ -1,5 +1,5 @@
-//! Embute o ícone e os metadados no executável do Windows.
-//! O GPUI usa o ícone de ID 1 na janela e na barra de tarefas.
+//! Embeds the icon and the metadata in the Windows executable.
+//! GPUI uses the icon with ID 1 for the window and the taskbar.
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/brand/scout-vault.ico");

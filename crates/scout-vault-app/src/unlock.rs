@@ -1,5 +1,5 @@
-//! Tela de desbloqueio: o cofre continua sincronizado (cifrado) em memória;
-//! basta a senha mestra para abri-lo de novo, sem rede.
+//! Unlock screen: the vault stays synced (encrypted) in memory;
+//! the master password is enough to open it again, without network.
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{button::*, *};
@@ -14,7 +14,7 @@ pub enum UnlockEvent {
     Unlocked(Handoff),
     LogOut,
     OpenSettings,
-    /// Pediu para abrir com o Windows Hello (o app conduz).
+    /// Asked to open with Windows Hello (the app drives it).
     UseHello,
 }
 
@@ -22,7 +22,7 @@ pub struct UnlockView {
     session: Session,
     password: Entity<InputState>,
     busy: bool,
-    /// O botão "Usar Windows Hello" aparece (opção ligada e configurada).
+    /// The "Use Windows Hello" button shows up (option on and set up).
     hello: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
@@ -35,7 +35,7 @@ impl UnlockView {
         let password = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
-                .placeholder("Senha mestra")
+                .placeholder(t!("common.vault_password"))
         });
         let sub = cx.subscribe_in(
             &password,
@@ -56,6 +56,14 @@ impl UnlockView {
         }
     }
 
+    /// Rebuilds the field placeholder in the current language.
+    pub fn relabel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.password.update(cx, |s, cx| {
+            s.set_placeholder(t!("common.vault_password"), window, cx)
+        });
+        cx.notify();
+    }
+
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
     }
@@ -69,7 +77,7 @@ impl UnlockView {
         cx.notify();
     }
 
-    /// Andamento do Windows Hello (o app avisa ao começar e ao terminar).
+    /// Windows Hello progress (the app reports when it starts and when it ends).
     pub fn set_hello_progress(
         &mut self,
         busy: bool,
@@ -87,7 +95,7 @@ impl UnlockView {
         }
         let password = Zeroizing::new(self.password.read(cx).value().to_string());
         if password.is_empty() {
-            self.error = Some("Informe a senha mestra.".into());
+            self.error = Some(t!("login.password_required").into());
             cx.notify();
             return;
         }
@@ -127,8 +135,8 @@ impl Render for UnlockView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status: SharedString = match (&self.error, self.busy) {
             (Some(e), _) => e.clone(),
-            (None, true) if self.hello => "Confirme no Windows Hello…".into(),
-            (None, true) => "Abrindo o cofre…".into(),
+            (None, true) if self.hello => t!("unlock.confirm_hello").into(),
+            (None, true) => t!("unlock.opening").into(),
             (None, false) => "".into(),
         };
         let body = v_flex()
@@ -152,7 +160,7 @@ impl Render for UnlockView {
                         Button::new("unlock-submit")
                             .primary()
                             .w_full()
-                            .label("Desbloquear")
+                            .label(t!("unlock.submit"))
                             .loading(self.busy)
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
@@ -163,7 +171,7 @@ impl Render for UnlockView {
                                 .outline()
                                 .w_full()
                                 .icon(gpui_kit::assets::IconName::ScanFace)
-                                .label("Usar Windows Hello")
+                                .label(t!("unlock.use_hello"))
                                 .disabled(self.busy)
                                 .on_click(
                                     cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::UseHello)),
@@ -174,14 +182,14 @@ impl Render for UnlockView {
                         Button::new("unlock-logout")
                             .ghost()
                             .w_full()
-                            .label("Sair da conta")
+                            .label(t!("unlock.log_out"))
                             .disabled(self.busy)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(UnlockEvent::LogOut))),
                     ),
             );
         crate::ui::entry_screen(
             "unlock-settings",
-            "Cofre bloqueado",
+            t!("app.vault_locked"),
             self.session.email.clone(),
             px(380.),
             body,

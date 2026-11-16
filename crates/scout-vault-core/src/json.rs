@@ -1,12 +1,12 @@
-//! JSON com chaves normalizadas para camelCase.
+//! JSON with keys normalized to camelCase.
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// Desserializa depois de normalizar as chaves do JSON para camelCase.
+/// Deserializes after normalizing the JSON keys to camelCase.
 ///
-/// O servidor oficial antigo responde em PascalCase (`"Name"`), o atual e o
-/// Vaultwarden em camelCase (`"name"`). Normalizar uma vez evita aliases em todo campo.
+/// The old official server answers in PascalCase (`"Name"`), the current one and
+/// Vaultwarden in camelCase (`"name"`). Normalizing once avoids aliases on every field.
 pub fn from_slice_normalized<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json::Error> {
     let value: Value = serde_json::from_slice(bytes)?;
     serde_json::from_value(normalize_keys(value))
@@ -25,8 +25,8 @@ fn normalize_keys(value: Value) -> Value {
 }
 
 pub(crate) fn camel_case(key: &str) -> String {
-    // Siglas inteiras ("SSN") viram minúsculas; "PrivateKey" vira "privateKey";
-    // chaves já em camelCase ou snake_case ("access_token") ficam iguais.
+    // All-caps acronyms ("SSN") become lowercase; "PrivateKey" becomes "privateKey";
+    // keys already in camelCase or snake_case ("access_token") stay the same.
     if !key.chars().any(char::is_lowercase) {
         return key.to_lowercase();
     }

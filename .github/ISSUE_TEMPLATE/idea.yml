@@ -1,0 +1,21 @@
+name: Idea or request
+description: Something Scout Vault could do (or do better).
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: First, take a look at the [roadmap](https://github.com/qedrohenrique/scout-vault/blob/main/docs/ROADMAP.md) — it may already be planned.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do that you can't today
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How you imagine it would work
+  - type: textarea
+    id: others
+    attributes:
+      label: How other password managers do it (if you know)

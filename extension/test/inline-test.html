@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scout Vault inline menu test</title>
+    <style>
+      body { font: 14px system-ui; margin: 24px; max-width: 720px; }
+      form { border: 1px solid #ccc; padding: 16px; margin: 12px 0; display: grid; gap: 8px; }
+      input { font: inherit; padding: 8px 10px; }
+      nav a { margin-right: 10px; }
+      pre { background: #f4f4f4; padding: 12px; }
+      .tall { height: 900px; }
+    </style>
+  </head>
+  <body>
+    <h1>Inline menu test</h1>
+    <p>
+      Runs <code>inline.js</code> and <code>fill.js</code> with a fake <code>chrome</code>
+      (serve the <code>extension</code> folder with <code>python -m http.server</code>).
+      App state:
+    </p>
+    <nav>
+      <a href="?state=items">with logins</a>
+      <a href="?state=locked">locked</a>
+      <a href="?state=empty">no logins</a>
+      <a href="?state=missing">app closed</a>
+    </nav>
+
+    <form id="login" onsubmit="event.preventDefault(); log('submitted (should not happen with Enter in the menu)')">
+      <input id="search" type="search" placeholder="Search the site" />
+      <input id="user" name="username" autocomplete="username" placeholder="E-mail" />
+      <input id="pass" type="password" placeholder="Password" />
+      <button>Sign in</button>
+    </form>
+
+    <form id="other" onsubmit="event.preventDefault()">
+      <input id="code" autocomplete="one-time-code" placeholder="2FA code (no icon)" />
+      <input id="comment" placeholder="Comment (no icon)" />
+    </form>
+
+    <pre id="result"></pre>
+    <div class="tall"></div>
+
+    <script>
+      const state = new URLSearchParams(location.search).get("state") || "items";
+      const result = document.getElementById("result");
+      const lines = [];
+      function log(text) {
+        lines.push(text);
+        result.textContent = lines.join("\n");
+      }
+      window.__inlineLog = lines;
+
+      const items = [
+        { id: "a", name: "GitHub personal", username: "me@example.com" },
+        { id: "b", name: "GitHub work", username: "me@company.com" },
+        { id: "c", name: "Account without username", username: null },
+      ];
+      const store = { inlineMenu: true, inlineOff: [] };
+      const listeners = [];
+      const changed = [];
+      window.chrome = {
+        // Without the extension loaded there is no catalog: texts show up as keys.
+        i18n: { getMessage: () => "" },
+        runtime: {
+          async sendMessage(msg) {
+            log(`→ ${JSON.stringify(msg)}`);
+            await new Promise((r) => setTimeout(r, 60));
+            if (state === "missing") return { error: "app" };
+            if (state === "locked") return { locked: true };
+            if (msg.type === "inline-list") return { locked: false, items: state === "empty" ? [] : items };
+            if (msg.type === "inline-fill") {
+              if (msg.id === "c") return { error: "This item asks for the master password." };
+              const item = items.find((i) => i.id === msg.id);
+              return { username: item.username, password: `password-${msg.id}` };
+            }
+            return null;
+          },
+          onMessage: { addListener: (f) => listeners.push(f) },
+        },
+        storage: {
+          local: {
+            async get(defaults) {
+              return { ...defaults, ...JSON.parse(JSON.stringify(store)) };
+            },
+            async set(values) {
+              Object.assign(store, values);
+              log(`storage ${JSON.stringify(values)}`);
+              changed.forEach((f) => f(Object.fromEntries(Object.keys(values).map((k) => [k, {}]))));
+            },
+          },
+          onChanged: { addListener: (f) => changed.push(f) },
+        },
+      };
+      // Simulates the browser's Alt+Shift+L shortcut.
+      window.__openInline = () => listeners.forEach((f) => f({ type: "open-inline" }));
+      window.__store = store;
+      // Test only: opens the menu's shadow DOM for inspection.
+      const attach = Element.prototype.attachShadow;
+      Element.prototype.attachShadow = function (init) {
+        const root = attach.call(this, { ...init, mode: "open" });
+        window.__inlineRoot = root;
+        return root;
+      };
+
+      for (const id of ["user", "pass"]) {
+        document.getElementById(id).addEventListener("input", (e) => log(`input #${id} = ${e.target.value}`));
+      }
+    </script>
+    <script src="../fill.js"></script>
+    <script src="../inline.js"></script>
+  </body>
+</html>

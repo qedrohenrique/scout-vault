@@ -1,16 +1,16 @@
-//! "Pedir a senha mestra ao abrir: a cada N dias".
+//! "Ask for the master password on open: every N days".
 //!
-//! Depois que a pessoa digita a senha mestra, a **user key** fica guardada no
-//! Gerenciador de Credenciais do Windows (protegido pelo usuário do Windows)
-//! com uma validade. Ao abrir o app dentro do prazo, o cofre abre direto.
+//! After the person types the master password, the **user key** is stored in
+//! Windows Credential Manager (protected by the Windows user)
+//! with an expiry. Opening the app within that period opens the vault directly.
 //!
-//! Junto vai a user key **cifrada** como o servidor a tinha (`profile.key`).
-//! Se a senha mestra for trocada (em outro aparelho, no cofre web…), esse
-//! valor muda no próximo sync e a chave guardada é descartada: o app volta a
-//! pedir a senha — agora a nova.
+//! Along with it goes the **encrypted** user key as the server had it (`profile.key`).
+//! If the master password changes (on another device, in the web vault…), that
+//! value changes on the next sync and the stored key is discarded: the app asks
+//! for the password again — now the new one.
 //!
-//! A validade conta a partir da última vez que a senha foi digitada; abrir o
-//! app sem senha não estende o prazo.
+//! The expiry counts from the last time the password was typed; opening the
+//! app without a password doesn't extend it.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 use crate::flow::{now_secs, Session};
 use crate::settings::SettingsStore;
 
-/// Separador dos campos guardados (`EncString` usa `|`, então não serve).
+/// Separator of the stored fields (`EncString` uses `|`, so it won't do).
 const SEP: char = '\n';
 
 fn key_name(session: &Session) -> String {
@@ -32,7 +32,7 @@ fn key_name(session: &Session) -> String {
     )
 }
 
-/// Guarda a chave por `days` dias (se a opção estiver ligada).
+/// Stores the key for `days` days (if the option is on).
 pub fn remember(store: &SettingsStore, session: &Session, keys: &Keys) {
     let days = store.load().unlock_memory_days;
     if days == 0 {
@@ -51,8 +51,8 @@ pub fn remember(store: &SettingsStore, session: &Session, keys: &Keys) {
     store.secrets().set(&key_name(session), &value);
 }
 
-/// Abre as chaves sem senha, se houver uma chave guardada dentro do prazo e
-/// ainda válida para este perfil. Qualquer problema descarta a chave.
+/// Opens the keys without a password, if there is a stored key within the period and
+/// still valid for this profile. Any problem discards the key.
 pub fn open(store: &SettingsStore, session: &Session) -> Option<Keys> {
     if store.load().unlock_memory_days == 0 {
         forget(store, session);
@@ -75,7 +75,7 @@ pub fn open(store: &SettingsStore, session: &Session) -> Option<Keys> {
     keys
 }
 
-/// A senha mestra mudou desde que a chave foi guardada? (então ela é descartada)
+/// Has the master password changed since the key was stored? (then it is discarded)
 pub fn password_changed(store: &SettingsStore, session: &Session) -> bool {
     let Some(value) = store.secrets().get(&key_name(session)).map(Zeroizing::new) else {
         return false;

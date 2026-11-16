@@ -1,12 +1,12 @@
-//! Transição ao trocar a aparência: a interface **se transforma** no lugar.
+//! Transition when changing the appearance: the interface **transforms** in place.
 //!
-//! Cada cor do tema (fundos, textos, bordas, botões, destaque) vai do valor
-//! antigo ao novo quadro a quadro, junto com o tamanho do texto e os cantos —
-//! nada some, os botões só mudam de cor. Ao trocar entre claro e escuro, uma
-//! onda suave sai do botão clicado.
+//! Each theme color (backgrounds, texts, borders, buttons, accent) goes from the
+//! old value to the new one frame by frame, along with the text size and the corners —
+//! nothing disappears, buttons just change color. When switching between light and dark, a
+//! soft wave starts from the clicked button.
 //!
-//! Com Configurações → Movimento → Parado, troca direto, sem animação.
-//! O tempo vem do relógio do executor do GPUI (os testes conseguem avançá-lo).
+//! With Settings → Motion → Still, it switches directly, without animation.
+//! Time comes from the GPUI executor's clock (tests can advance it).
 
 use std::time::{Duration, Instant};
 
@@ -16,14 +16,14 @@ use serde_json::Value;
 
 use crate::appearance::{self, Appearance, Motion};
 
-/// Duração da transformação ao trocar entre claro e escuro.
+/// Duration of the transformation when switching between light and dark.
 pub const FLIP: Duration = Duration::from_millis(520);
-/// Duração das outras mudanças (cor de destaque, texto, cantos).
+/// Duration of the other changes (accent color, text, corners).
 pub const TWEAK: Duration = Duration::from_millis(280);
-/// Intervalo entre quadros da mistura.
+/// Interval between blend frames.
 const FRAME: Duration = Duration::from_millis(16);
 
-/// O que a transição mistura.
+/// What the transition blends.
 #[derive(Clone)]
 struct Look {
     colors: ThemeColor,
@@ -54,7 +54,7 @@ impl Look {
     }
 }
 
-/// Mistura pronta: as cores de saída e chegada já separadas por campo.
+/// Ready blend: the start and end colors already split per field.
 struct Blend {
     base: serde_json::Map<String, Value>,
     pairs: Vec<(String, Rgba, Rgba)>,
@@ -109,7 +109,7 @@ impl Blend {
     }
 }
 
-/// Onda que sai do botão clicado (só ao trocar claro ↔ escuro).
+/// Wave that starts from the clicked button (only when switching light ↔ dark).
 #[derive(Clone, Copy)]
 struct Ripple {
     origin: Point<Pixels>,
@@ -128,13 +128,13 @@ struct State(Option<Fx>);
 
 impl Global for State {}
 
-/// Há uma transição em andamento? (testes)
+/// Is a transition in progress? (tests)
 pub fn running(cx: &App) -> bool {
     cx.try_global::<State>().is_some_and(|s| s.0.is_some())
 }
 
 fn ease(t: f32) -> f32 {
-    // Suave nas pontas (ease-in-out cúbico).
+    // Smooth at both ends (cubic ease-in-out).
     if t < 0.5 {
         4. * t * t * t
     } else {
@@ -142,7 +142,7 @@ fn ease(t: f32) -> f32 {
     }
 }
 
-/// Troca de `prev` para `next` com transição; `origin` é onde foi o clique.
+/// Switches from `prev` to `next` with a transition; `origin` is where the click was.
 pub fn change(
     prev: &Appearance,
     next: &Appearance,
@@ -155,12 +155,12 @@ pub fn change(
         appearance::apply(next, Some(window), cx);
         return;
     }
-    // Parte do que está na tela agora (inclusive no meio de outra transição).
+    // Starts from what is on screen now (even in the middle of another transition).
     let from = Look::of(cx);
     let system = window.appearance();
     let flips = appearance::mode_for(prev.theme, system).is_dark()
         != appearance::mode_for(next.theme, system).is_dark();
-    // Aplica o novo (modo, configs) e guarda aonde chegar; a tela volta ao começo.
+    // Applies the new one (mode, settings) and keeps the target; the screen goes back to the start.
     appearance::apply(next, Some(window), cx);
     let to = Look::of(cx);
     from.put(cx);
@@ -182,7 +182,7 @@ pub fn change(
                     .saturating_duration_since(started);
                 let t = (elapsed.as_secs_f32() / duration.as_secs_f32()).min(1.);
                 if t >= 1. {
-                    // Fim: o tema exato (tokens e tudo), sem resto de mistura.
+                    // End: the exact theme (tokens and all), with no blend leftovers.
                     cx.set_global(State(None));
                     appearance::apply(&next, Some(window), cx);
                     window.refresh();
@@ -206,7 +206,7 @@ pub fn change(
     window.refresh();
 }
 
-/// Raio que cobre a janela inteira a partir de `origin`.
+/// Radius that covers the whole window from `origin`.
 fn cover_radius(bounds: Bounds<Pixels>, origin: Point<Pixels>) -> f32 {
     [
         bounds.origin,
@@ -222,7 +222,7 @@ fn cover_radius(bounds: Bounds<Pixels>, origin: Point<Pixels>) -> f32 {
     .fold(0., f32::max)
 }
 
-/// A onda por cima da interface (translúcida: a interface continua à vista).
+/// The wave on top of the interface (translucent: the interface stays visible).
 pub fn overlay(cx: &App) -> Option<AnyElement> {
     let fx = cx.try_global::<State>()?.0.as_ref()?;
     let ripple = fx.ripple?;

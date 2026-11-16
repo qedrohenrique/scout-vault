@@ -1,4 +1,4 @@
-//! Raiz da janela: decide qual tela aparece e bloqueia por inatividade.
+//! Window root: decides which screen shows up and locks on inactivity.
 
 use std::time::{Duration, Instant};
 
@@ -10,6 +10,7 @@ use crate::autotype::{self, Request, Typer};
 use crate::autotype_view::{AutoTypeEvent, AutoTypeView};
 use crate::flow::{Handoff, Session, Unlocked};
 use crate::generator_view::{GeneratorEvent, GeneratorView};
+use crate::health_view::{HealthEvent, HealthView};
 use crate::login::{LoginEvent, LoginView};
 use crate::settings::SettingsStore;
 use crate::settings_view::{SettingsEvent, SettingsView};
@@ -39,46 +40,51 @@ pub struct ScoutVaultApp {
     screen: Screen,
     last_activity: Instant,
     auto_lock_after: Duration,
-    /// Configurações abertas por cima da tela atual (que segue viva por baixo).
+    /// "Lock on minimize" (read from settings; updated when they close).
+    lock_on_minimize: bool,
+    _minimize_task: Task<()>,
+    /// Settings open on top of the current screen (which stays alive underneath).
     settings: Option<(Entity<SettingsView>, Subscription)>,
-    /// Gerador de senhas aberto por cima da tela atual.
+    /// Password generator open on top of the current screen.
     generator: Option<(Entity<GeneratorView>, Subscription)>,
+    /// "Password health" open (holds decrypted copies: goes away on lock).
+    health: Option<(Entity<HealthView>, Subscription)>,
     _screen_subscription: Subscription,
     _appearance_subscription: Subscription,
     _idle_task: Task<()>,
-    /// Foco da raiz: garante que os atalhos funcionem mesmo sem campo focado.
+    /// Root focus: makes sure shortcuts work even with no field focused.
     focus: FocusHandle,
-    /// Avisos curtos por cima de tudo.
+    /// Short notices on top of everything.
     toasts: Entity<crate::toast::Toasts>,
-    /// Escolha do login para preencher em outro app.
+    /// Choosing the login to fill in another app.
     autotype_picker: Option<(Entity<AutoTypeView>, Subscription)>,
-    /// Pedido que chegou com o cofre bloqueado; atendido ao desbloquear.
+    /// Request that arrived with the vault locked; handled on unlock.
     pending_autotype: Option<Request>,
-    /// Login do navegador esperando o desbloqueio para ser salvo (url, usuário, senha).
+    /// Browser login waiting for unlock to be saved (url, username, password).
     pending_browser_save: Option<(String, String, zeroize::Zeroizing<String>)>,
-    /// Digitação esperando a senha mestra de um item que a pede (número do pedido).
+    /// Typing waiting for the master password of an item that asks for it (request number).
     reprompt_autotype: Option<(u64, Item, Request)>,
     reprompt_counter: u64,
-    /// Atalho global registrado (soltar desliga).
+    /// Registered global shortcut (dropping it turns it off).
     hotkey: Option<autotype::Listener>,
-    /// Atalho da busca rápida (`Ctrl+Shift+Espaço`).
+    /// Quick search shortcut (`Ctrl+Shift+Space`).
     quick_hotkey: Option<autotype::Listener>,
     quick_tx: std::sync::mpsc::Sender<Request>,
-    /// Janela da busca rápida aberta e o app onde digitar.
+    /// Open quick search window and the app to type into.
     quick_search: Option<(AnyWindowHandle, Entity<crate::quick_search::QuickSearch>)>,
     quick_target: Option<Request>,
     autotype_tx: std::sync::mpsc::Sender<Request>,
-    /// Servidor do pipe do navegador (soltar desliga).
+    /// Browser pipe server (dropping it turns it off).
     browser_server: Option<crate::io::Background>,
     browser_tx: std::sync::mpsc::Sender<crate::browser::Incoming>,
-    /// Ícone na bandeja do Windows (soltar remove).
+    /// Windows tray icon (dropping it removes it).
     tray: Option<crate::tray::Tray>,
     tray_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
-    /// Menu do botão direito da bandeja, se estiver aberto.
+    /// Tray right-click menu, if open.
     tray_menu: Option<(AnyWindowHandle, Entity<crate::tray_menu::TrayMenu>)>,
     typer: Typer,
     _autotype_task: Task<()>,
-    /// Escuta do bloqueio/suspensão do Windows (só no app de verdade).
+    /// Listener for Windows lock/sleep (real app only).
     _os_watcher: Option<crate::windows_events::Watcher>,
     _tray_task: Task<()>,
 }
@@ -86,8 +92,8 @@ pub struct ScoutVaultApp {
 impl ScoutVaultApp {
     pub fn new(store: SettingsStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
         appearance::apply(&store.load().appearance, Some(window), cx);
-        // Sessão lembrada: abre direto no desbloqueio (só a senha mestra) — ou
-        // já desbloqueado, se a senha foi digitada há menos de N dias.
+        // Remembered session: opens straight to unlock (master password only) — or
+        // already unlocked, if the password was typed less than N days ago.
         let (screen, sub) = match crate::saved_session::load(&store) {
             Some(session) => match crate::quick_unlock::open(&store, &session) {
                 Some(keys) => {
@@ -114,7 +120,7 @@ impl ScoutVaultApp {
         this
     }
 
-    /// Opções do gerador e itens fixados para uma tela do cofre recém-aberta.
+    /// Generator options and pinned items for a freshly opened vault screen.
     fn configure_vault(&self, view: &Entity<VaultView>, cx: &mut App) {
         let settings = self.store.load();
         view.update(cx, |v, _| {
@@ -124,7 +130,7 @@ impl ScoutVaultApp {
         });
     }
 
-    /// Prazo do bloqueio por inatividade, das configurações (0 = nunca).
+    /// Idle lock timeout, from the settings (0 = never).
     fn auto_lock_from_settings(store: &SettingsStore) -> Duration {
         match store.load().auto_lock_minutes {
             0 => Duration::from_secs(u64::MAX / 4),
@@ -132,7 +138,7 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Começa já com o cofre aberto (usado pelos testes de UI).
+    /// Starts with the vault already open (used by the UI tests).
     pub fn with_unlocked(
         store: SettingsStore,
         unlocked: Unlocked,
@@ -160,11 +166,28 @@ impl ScoutVaultApp {
                 break;
             }
         });
-        // Pedidos do atalho global chegam por um canal (a thread do atalho não é a da UI).
+        // "Lock on minimize": GPUI doesn't report minimization, so check
+        // twice a second (cheap: one call into Windows).
+        let minimize_task = cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let alive = this.update_in(cx, |this, window, cx| {
+                if this.lock_on_minimize && crate::tray::is_minimized(window) {
+                    this.on_minimized(window, cx);
+                }
+            });
+            if alive.is_err() {
+                break;
+            }
+        });
+        crate::clipboard::set_clear_after_secs(store.load().clipboard_clear_secs, cx);
+        crate::item_icons::set_all(store.load().item_icons, cx);
+        // Global shortcut requests arrive through a channel (the shortcut thread isn't the UI thread).
         let (autotype_tx, autotype_rx) = std::sync::mpsc::channel::<Request>();
         let (quick_tx, quick_rx) = std::sync::mpsc::channel::<Request>();
         let (browser_tx, browser_rx) = std::sync::mpsc::channel::<crate::browser::Incoming>();
-        // Bloqueio/suspensão do Windows (só no app de verdade, como a bandeja).
+        // Windows lock/sleep (real app only, like the tray).
         let (os_tx, os_rx) = std::sync::mpsc::channel::<crate::windows_events::OsEvent>();
         let os_watcher = if crate::tray::system_enabled() {
             crate::windows_events::watch(os_tx).ok()
@@ -184,6 +207,9 @@ impl ScoutVaultApp {
                 while let Ok(incoming) = browser_rx.try_recv() {
                     this.handle_browser(incoming, window, cx);
                 }
+                if let Some(error) = crate::browser::take_server_error() {
+                    crate::toast::error(error, cx);
+                }
                 while let Ok(event) = os_rx.try_recv() {
                     this.handle_os_event(event, window, cx);
                 }
@@ -192,17 +218,17 @@ impl ScoutVaultApp {
                 break;
             }
         });
-        // Voltar o foco para a janela retoma a arte animada das telas de entrada.
+        // Bringing focus back to the window resumes the entry screens' animated art.
         cx.observe_window_activation(window, |_, _, cx| cx.notify())
             .detach();
-        // Tema "Sistema": acompanha a troca de claro/escuro do Windows ao vivo.
+        // "System" theme: follows Windows light/dark switching live.
         let appearance_sub = cx.observe_window_appearance(window, |this, window, cx| {
             let current = this.store.load().appearance;
             if current.theme == ThemeChoice::System {
                 appearance::apply(&current, Some(window), cx);
             }
         });
-        // A bandeja (e o menu dela) responde na hora, sem esperar o próximo ciclo.
+        // The tray (and its menu) responds right away, without waiting for the next cycle.
         let tray_task = cx.spawn_in(window, async move |this, cx| {
             while let Some(command) = tray_rx.recv().await {
                 if this
@@ -214,6 +240,7 @@ impl ScoutVaultApp {
             }
         });
         let auto_lock_after = Self::auto_lock_from_settings(&store);
+        let lock_on_minimize = store.load().lock_on_minimize;
         let mut this = Self {
             autotype_picker: None,
             pending_autotype: None,
@@ -239,8 +266,11 @@ impl ScoutVaultApp {
             screen,
             last_activity: Instant::now(),
             auto_lock_after,
+            lock_on_minimize,
+            _minimize_task: minimize_task,
             settings: None,
             generator: None,
+            health: None,
             _screen_subscription: sub,
             _appearance_subscription: appearance_sub,
             _idle_task: idle_task,
@@ -250,7 +280,7 @@ impl ScoutVaultApp {
         this.refresh_hotkey(window, cx);
         this.refresh_browser();
         this.refresh_tray(window, cx);
-        // Fechar a janela (X, Alt+F4) só esconde, se a bandeja estiver ligada.
+        // Closing the window (X, Alt+F4) only hides it, if the tray is on.
         let app = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             app.update(cx, |this, cx| this.on_close_requested(window, cx))
@@ -259,8 +289,8 @@ impl ScoutVaultApp {
         this
     }
 
-    /// O Windows bloqueou a sessão ou vai suspender: bloqueia o cofre também
-    /// (se a opção estiver ligada).
+    /// Windows locked the session or is about to sleep: lock the vault too
+    /// (if the option is on).
     pub fn handle_os_event(
         &mut self,
         event: crate::windows_events::OsEvent,
@@ -274,7 +304,7 @@ impl ScoutVaultApp {
         self.lock(window, cx);
     }
 
-    /// Cria ou remove o ícone da bandeja conforme a configuração.
+    /// Creates or removes the tray icon according to the setting.
     fn refresh_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = self.store.load().close_to_tray && crate::tray::system_enabled();
         if !wanted {
@@ -283,16 +313,13 @@ impl ScoutVaultApp {
             match crate::tray::start(self.tray_tx.clone()) {
                 Ok(tray) => self.tray = Some(tray),
                 Err(e) => cx.defer_in(window, move |_, _, cx| {
-                    crate::toast::error(
-                        format!("Não foi possível criar o ícone na bandeja: {e}"),
-                        cx,
-                    )
+                    crate::toast::error(t!("app.tray_icon_failed", e = e), cx)
                 }),
             }
         }
     }
 
-    /// `true` deixa a janela fechar (e o app sair); `false` só a esconde na bandeja.
+    /// `true` lets the window close (and the app quit); `false` only hides it in the tray.
     pub fn on_close_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(tray) = &self.tray else {
             return true;
@@ -303,18 +330,25 @@ impl ScoutVaultApp {
         }
         crate::tray::hide_window(window);
         if !settings.tray_hint_shown {
-            tray.notify(
-                "O Scout Vault continua aberto",
-                "Ele fica aqui na bandeja. Clique para abrir; botão direito para sair.",
-            );
+            tray.notify(t!("app.tray_hint_title"), t!("app.tray_hint_body"));
             settings.tray_hint_shown = true;
             self.store.save(&settings);
         }
-        let _ = cx;
+        if settings.lock_on_minimize {
+            self.on_minimized(window, cx);
+        }
         false
     }
 
-    /// Comandos do ícone da bandeja.
+    /// The window was minimized (or went to the tray) with "Lock on
+    /// minimize" on: locks if the vault is open.
+    pub fn on_minimized(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.lock_on_minimize && matches!(self.screen, Screen::Vault(_)) {
+            self.lock(window, cx);
+        }
+    }
+
+    /// Commands from the tray icon.
     pub fn handle_tray(
         &mut self,
         command: crate::tray::Command,
@@ -326,10 +360,10 @@ impl ScoutVaultApp {
             Command::Show => crate::tray::show_window(window),
             Command::Lock => {
                 self.lock(window, cx);
-                crate::toast::info("Cofre bloqueado", cx);
+                crate::toast::info(t!("app.vault_locked"), cx);
             }
             Command::Quit => {
-                // Sai de vez: solta o ícone antes de encerrar.
+                // Quit for good: drop the icon before exiting.
                 self.tray = None;
                 cx.quit();
             }
@@ -338,9 +372,9 @@ impl ScoutVaultApp {
                 let password = scout_vault_core::generator::password(&options);
                 crate::clipboard::copy_and_clear_later(&password, cx);
                 crate::toast::success(
-                    format!(
-                        "Senha gerada e copiada · some em {} s",
-                        crate::clipboard::CLEAR_AFTER.as_secs()
+                    t!(
+                        "app.password_generated",
+                        note = crate::clipboard::clear_note(cx)
                     ),
                     cx,
                 );
@@ -349,7 +383,7 @@ impl ScoutVaultApp {
                 Screen::Vault(view) => view.update(cx, |v, cx| v.sync_now(cx)),
                 _ => {
                     crate::tray::show_window(window);
-                    crate::toast::info("Desbloqueie o cofre para sincronizar.", cx);
+                    crate::toast::info(t!("app.unlock_to_sync"), cx);
                 }
             },
             Command::OpenMenu { x, y } => self.open_tray_menu((x, y), cx),
@@ -375,7 +409,7 @@ impl ScoutVaultApp {
                     Some(item) => self.type_item(&item, request, window, cx),
                     None => {
                         crate::tray::show_window(window);
-                        crate::toast::info("Desbloqueie o cofre para preencher.", cx);
+                        crate::toast::info(t!("app.unlock_to_fill"), cx);
                     }
                 }
             }
@@ -388,7 +422,7 @@ impl ScoutVaultApp {
             }
             Command::Copy { item_id, what } => match &self.screen {
                 Screen::Vault(view) => {
-                    // Item que pede a senha mestra: mostra a janela com o pedido.
+                    // Item that asks for the master password: show the window with the prompt.
                     let needs_window =
                         view.update(cx, |v, cx| v.copy_item_field(&item_id, what, window, cx));
                     if needs_window {
@@ -398,13 +432,13 @@ impl ScoutVaultApp {
                 }
                 _ => {
                     crate::tray::show_window(window);
-                    crate::toast::info("Desbloqueie o cofre para copiar.", cx);
+                    crate::toast::info(t!("app.unlock_to_copy"), cx);
                 }
             },
         }
     }
 
-    /// O que o menu da bandeja deve mostrar agora.
+    /// What the tray menu should show now.
     pub fn tray_menu_state(&self, cx: &App) -> crate::tray::MenuState {
         let Screen::Vault(view) = &self.screen else {
             return crate::tray::MenuState::default();
@@ -421,7 +455,7 @@ impl ScoutVaultApp {
                     has_username,
                     has_password,
                     has_totp,
-                    icon: Some(crate::item_list::kind_icon(&item.kind)),
+                    icon: Some(crate::item_icons::icon_for(item, cx)),
                 }
             })
             .collect();
@@ -431,7 +465,7 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Abre o menu da bandeja no cursor (fecha o anterior, se houver).
+    /// Opens the tray menu at the cursor (closes the previous one, if any).
     pub fn open_tray_menu(&mut self, cursor: (i32, i32), cx: &mut Context<Self>) {
         self.close_tray_menu(cx);
         let state = self.tray_menu_state(cx);
@@ -441,8 +475,8 @@ impl ScoutVaultApp {
             (f32::from(size.width) * scale).round() as i32,
             (f32::from(size.height) * scale).round() as i32,
         );
-        // O cartão tem uma folga transparente em volta (sombra): o canto visível
-        // fica colado no cursor.
+        // The card has a transparent margin around it (shadow): the visible corner
+        // sits right at the cursor.
         let margin = (crate::tray_menu::MARGIN * scale).round() as i32;
         let (x, y) = crate::tray::place_menu(
             (cursor.0 + margin, cursor.1 + margin),
@@ -476,11 +510,15 @@ impl ScoutVaultApp {
         match opened {
             Ok((handle, view)) => {
                 handle
-                    .update(cx, |_, window, _| window.activate_window())
+                    .update(cx, |_, window, cx| {
+                        crate::tray::frameless(window);
+                        transparent_root(window, cx);
+                        window.activate_window()
+                    })
                     .ok();
                 self.tray_menu = Some((handle, view));
             }
-            Err(e) => crate::toast::error(format!("Não foi possível abrir o menu: {e}"), cx),
+            Err(e) => crate::toast::error(t!("app.menu_failed", e = e), cx),
         }
     }
 
@@ -492,12 +530,12 @@ impl ScoutVaultApp {
         }
     }
 
-    /// O menu da bandeja aberto agora (para os testes).
+    /// The tray menu open right now (for tests).
     pub fn tray_menu(&self) -> Option<(AnyWindowHandle, Entity<crate::tray_menu::TrayMenu>)> {
         self.tray_menu.clone()
     }
 
-    /// Liga ou desliga o pipe do navegador conforme a configuração.
+    /// Turns the browser pipe on or off according to the setting.
     fn refresh_browser(&mut self) {
         let wanted = self.store.load().browser_fill && crate::browser::system_enabled();
         if !wanted {
@@ -507,7 +545,7 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Responde um pedido da extensão do navegador.
+    /// Answers a request from the browser extension.
     pub fn handle_browser(
         &mut self,
         incoming: crate::browser::Incoming,
@@ -517,11 +555,11 @@ impl ScoutVaultApp {
         if !self.store.load().browser_fill {
             let _ = incoming
                 .reply
-                .send(serde_json::json!({ "error": "A integração com o navegador está desligada no Scout Vault." }));
+                .send(serde_json::json!({ "error": t!("app.browser_disabled") }));
             return;
         }
         use crate::browser::Request as BrowserRequest;
-        // Salvar um login: o app decide e grava (ou guarda para depois do desbloqueio).
+        // Saving a login: the app decides and saves (or keeps it for after unlock).
         if let BrowserRequest::Save {
             url,
             username,
@@ -540,7 +578,7 @@ impl ScoutVaultApp {
         }
         let response = match &self.screen {
             Screen::Vault(view) => {
-                // "É novo?" só olha o que dá para alterar.
+                // "Is it new?" only looks at what can be changed.
                 if matches!(incoming.request, BrowserRequest::Check { .. }) {
                     let items = view.read(cx).editable_items(cx);
                     crate::browser::handle(&incoming.request, Some(&items))
@@ -550,13 +588,13 @@ impl ScoutVaultApp {
                 }
             }
             _ => {
-                // Status e "é novo?" não chamam atenção (acontece a cada login nos sites).
+                // Status and "is it new?" don't draw attention (they happen on every site login).
                 if !matches!(
                     incoming.request,
                     BrowserRequest::Status | BrowserRequest::Check { .. }
                 ) {
                     crate::tray::show_window(window);
-                    crate::toast::info("Desbloqueie o cofre para preencher no navegador.", cx);
+                    crate::toast::info(t!("app.unlock_to_fill_browser"), cx);
                 }
                 crate::browser::handle(&incoming.request, None)
             }
@@ -567,8 +605,8 @@ impl ScoutVaultApp {
         let _ = incoming.reply.send(response);
     }
 
-    /// Salva (ou atualiza) um login enviado num site, depois do "Salvar" na página.
-    /// Com o cofre bloqueado, mostra o app e salva logo depois do desbloqueio.
+    /// Saves (or updates) a login submitted on a site, after "Save" on the page.
+    /// With the vault locked, shows the app and saves right after unlock.
     fn save_from_browser(
         &mut self,
         url: String,
@@ -582,10 +620,7 @@ impl ScoutVaultApp {
             let host = crate::browser::host_of(&url).unwrap_or_default();
             self.pending_browser_save = Some((url, username, password));
             crate::tray::show_window(window);
-            crate::toast::info(
-                format!("Desbloqueie o cofre para salvar o login de {host}."),
-                cx,
-            );
+            crate::toast::info(t!("app.unlock_to_save_login", host = host), cx);
             return serde_json::json!({ "queued": true });
         };
         let view = view.clone();
@@ -594,16 +629,16 @@ impl ScoutVaultApp {
             SaveDecision::Nothing => return serde_json::json!({ "ok": true, "unchanged": true }),
             SaveDecision::New => {
                 let item = new_login(&url, &username, &password);
-                let message = format!("Login salvo do navegador: {}", item.name);
+                let message = t!("app.login_saved_from_browser", name = item.name);
                 (item, message)
             }
             SaveDecision::Update { id, name } => {
                 let Some(base) = items.iter().find(|i| i.id == id) else {
-                    return serde_json::json!({ "error": "Login não encontrado." });
+                    return serde_json::json!({ "error": t!("app.login_not_found") });
                 };
                 (
                     with_password(base, &password),
-                    format!("Senha atualizada: {name}"),
+                    t!("app.password_updated", name = name),
                 )
             }
         };
@@ -617,14 +652,14 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Depois do desbloqueio: salva o login que o navegador mandou enquanto estava bloqueado.
+    /// After unlock: saves the login the browser sent while the vault was locked.
     fn finish_pending_browser_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((url, username, password)) = self.pending_browser_save.take() {
             self.save_from_browser(url, username, password, window, cx);
         }
     }
 
-    /// Registra ou solta o atalho global conforme a configuração.
+    /// Registers or drops the global shortcut according to the setting.
     fn refresh_hotkey(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self.store.load();
         let wanted = settings.autotype.enabled && autotype::system_hotkey_enabled();
@@ -633,8 +668,8 @@ impl ScoutVaultApp {
         } else if self.hotkey.is_none() {
             match autotype::listen(self.autotype_tx.clone()) {
                 Ok(listener) => self.hotkey = Some(listener),
-                // Avisa depois: durante a criação da janela a camada de
-                // notificações ainda não existe.
+                // Report it later: while the window is being created the
+                // notification layer doesn't exist yet.
                 Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
             }
         }
@@ -649,8 +684,8 @@ impl ScoutVaultApp {
         }
     }
 
-    /// `Ctrl+Shift+Espaço`: abre a busca rápida por cima de tudo (ou, com o
-    /// cofre bloqueado, o app pedindo a senha).
+    /// `Ctrl+Shift+Space`: opens quick search on top of everything (or, with the
+    /// vault locked, the app asking for the password).
     pub fn open_quick_search(
         &mut self,
         request: Request,
@@ -663,7 +698,7 @@ impl ScoutVaultApp {
         self.close_quick_search(cx);
         let Screen::Vault(view) = &self.screen else {
             crate::tray::show_window(window);
-            crate::toast::info("Desbloqueie o cofre para usar a busca rápida.", cx);
+            crate::toast::info(t!("app.unlock_to_quick_search"), cx);
             return;
         };
         let items: Vec<crate::quick_search::QuickItem> = view
@@ -677,16 +712,21 @@ impl ScoutVaultApp {
             .filter(|i| {
                 !i.deleted && !matches!(i.kind, scout_vault_core::vault::ItemKind::Unknown(_))
             })
-            .map(crate::quick_search::QuickItem::from_item)
+            .map(|i| {
+                let mut q = crate::quick_search::QuickItem::from_item(i);
+                q.icon = crate::item_icons::icon_for(i, cx);
+                q.color = crate::item_icons::choice(&i.id, cx).and_then(|c| c.color);
+                q
+            })
             .collect();
-        // Usado no próprio Scout Vault: não há outro app para digitar.
+        // Used in Scout Vault itself: there is no other app to type into.
         let target = (!request.own_window).then(|| request.title.clone());
         self.quick_target = (!request.own_window).then_some(request);
         let size = size(
             px(crate::quick_search::WIDTH),
             px(crate::quick_search::HEIGHT),
         );
-        // Centralizada, no terço de cima da área de trabalho (como os lançadores).
+        // Centered, in the top third of the work area (like launchers).
         let (work, scale) = crate::tray::work_area_and_scale();
         let (wx, wy, ww, wh) = (
             work.0 as f32 / scale,
@@ -717,13 +757,15 @@ impl ScoutVaultApp {
         match opened {
             Ok((handle, view)) => {
                 handle
-                    .update(cx, |_, window, _| window.activate_window())
+                    .update(cx, |_, window, cx| {
+                        crate::tray::frameless(window);
+                        transparent_root(window, cx);
+                        window.activate_window()
+                    })
                     .ok();
                 self.quick_search = Some((handle, view));
             }
-            Err(e) => {
-                crate::toast::error(format!("Não foi possível abrir a busca rápida: {e}"), cx)
-            }
+            Err(e) => crate::toast::error(t!("app.quick_search_failed", e = e), cx),
         }
     }
 
@@ -735,14 +777,14 @@ impl ScoutVaultApp {
         }
     }
 
-    /// A busca rápida aberta agora (testes).
+    /// The quick search open right now (tests).
     pub fn quick_search(
         &self,
     ) -> Option<(AnyWindowHandle, Entity<crate::quick_search::QuickSearch>)> {
         self.quick_search.clone()
     }
 
-    /// Troca o digitador (os testes usam um falso que só registra o que digitaria).
+    /// Swaps the typist (tests use a fake one that only records what it would type).
     pub fn set_typer(&mut self, typer: Typer) {
         self.typer = typer;
     }
@@ -751,9 +793,9 @@ impl ScoutVaultApp {
         self.autotype_picker.as_ref().map(|(v, _)| v)
     }
 
-    /// Atende um `Ctrl+Alt+A`: digita direto se só um login combina com o
-    /// título da janela; senão mostra a lista. Com o cofre fechado, guarda o
-    /// pedido para depois do desbloqueio.
+    /// Handles a `Ctrl+Alt+A`: types directly if only one login matches the
+    /// window title; otherwise shows the list. With the vault closed, keeps the
+    /// request for after unlock.
     pub fn handle_autotype(
         &mut self,
         request: Request,
@@ -765,19 +807,13 @@ impl ScoutVaultApp {
         }
         if request.own_window {
             crate::toast::info(
-                format!(
-                    "Abra o app onde quer entrar e use {} lá.",
-                    autotype::HOTKEY_LABEL
-                ),
+                t!("app.autotype_own_window", hotkey = autotype::HOTKEY_LABEL),
                 cx,
             );
             return;
         }
         let Screen::Vault(view) = &self.screen else {
-            let message = format!(
-                "Desbloqueie o cofre para preencher em “{}”.",
-                request.title.trim()
-            );
+            let message = t!("app.unlock_to_autotype", title = request.title.trim());
             self.pending_autotype = Some(request);
             crate::tray::show_window(window);
             crate::toast::info(message, cx);
@@ -849,7 +885,7 @@ impl ScoutVaultApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Item que pede a senha mestra: confirma no app antes de digitar.
+        // Item that asks for the master password: confirm in the app before typing.
         if item.reprompt {
             if let Screen::Vault(view) = &self.screen {
                 self.reprompt_counter += 1;
@@ -859,10 +895,7 @@ impl ScoutVaultApp {
                 if !free {
                     self.reprompt_autotype = Some((token, item.clone(), request));
                     crate::tray::show_window(window);
-                    crate::toast::info(
-                        "Este item pede a senha mestra. Confirme e ele será digitado.",
-                        cx,
-                    );
+                    crate::toast::info(t!("app.autotype_reprompt"), cx);
                     return;
                 }
             }
@@ -894,7 +927,7 @@ impl ScoutVaultApp {
         .detach();
     }
 
-    /// Pilha de toasts (para testes).
+    /// Toast stack (for tests).
     pub fn toasts(&self) -> &Entity<crate::toast::Toasts> {
         &self.toasts
     }
@@ -908,6 +941,7 @@ impl ScoutVaultApp {
             return;
         }
         self.generator = None;
+        self.health = None;
         let view = cx.new(|_| SettingsView::new(self.store.clone()));
         let sub = cx.subscribe_in(
             &view,
@@ -919,6 +953,7 @@ impl ScoutVaultApp {
                     this.refresh_browser();
                     this.refresh_tray(window, cx);
                     this.auto_lock_after = Self::auto_lock_from_settings(&this.store);
+                    this.lock_on_minimize = this.store.load().lock_on_minimize;
                     this.refresh_hello_button(cx);
                     if let Screen::Vault(view) = &this.screen {
                         let on = this.store.load().background_sync;
@@ -926,10 +961,69 @@ impl ScoutVaultApp {
                     }
                 }
                 SettingsEvent::WindowsHello(on) => this.windows_hello_changed(*on, window, cx),
+                SettingsEvent::Language => this.language_changed(window, cx),
             },
         );
         self.settings = Some((view, sub));
         cx.notify();
+    }
+
+    /// The language changed: rebuilds the texts the screens keep (field placeholders,
+    /// for example). The rest comes with the next draw.
+    fn language_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.screen {
+            Screen::Vault(view) => view.update(cx, |v, cx| v.relabel(window, cx)),
+            Screen::Login(view) => view.update(cx, |v, cx| v.relabel(window, cx)),
+            Screen::Locked(view) => view.update(cx, |v, cx| v.relabel(window, cx)),
+        }
+        cx.notify();
+    }
+
+    pub fn health_view(&self) -> Option<&Entity<HealthView>> {
+        self.health.as_ref().map(|(v, _)| v)
+    }
+
+    /// Opens "Password health" with the open vault's items.
+    pub fn open_health(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Vault(vault) = &self.screen else {
+            return;
+        };
+        if self.health.is_some() {
+            return;
+        }
+        self.settings = None;
+        self.generator = None;
+        let (items, dates) = {
+            let v = vault.read(cx);
+            (
+                v.list().read(cx).delegate().vault().items.clone(),
+                scout_vault_core::health::password_dates(&v.session().sync),
+            )
+        };
+        let view = cx.new(|_| HealthView::new(items, &dates));
+        let sub =
+            cx.subscribe_in(
+                &view,
+                window,
+                |this, _, event: &HealthEvent, window, cx| match event {
+                    HealthEvent::Close => this.close_health(cx),
+                    HealthEvent::OpenItem(id) => {
+                        let id = id.clone();
+                        this.close_health(cx);
+                        if let Screen::Vault(v) = &this.screen {
+                            v.update(cx, |v, cx| v.open_pinned(&id, window, cx));
+                        }
+                    }
+                },
+            );
+        self.health = Some((view, sub));
+        cx.notify();
+    }
+
+    pub fn close_health(&mut self, cx: &mut Context<Self>) {
+        if self.health.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub fn generator_view(&self) -> Option<&Entity<GeneratorView>> {
@@ -983,12 +1077,21 @@ impl ScoutVaultApp {
             }
         } else if k.key == "escape" && self.settings.is_some() {
             self.close_settings(cx);
+        } else if k.key == "h" && k.modifiers.secondary(cx) && k.modifiers.shift {
+            if self.health.is_some() {
+                self.close_health(cx);
+            } else {
+                self.open_health(window, cx);
+            }
         } else if k.key == "escape" && self.generator.is_some() {
             self.close_generator(cx);
+        } else if k.key == "escape" && self.health.is_some() {
+            self.close_health(cx);
         } else if k.key == "escape" && self.autotype_picker.is_some() {
             self.close_autotype(cx);
         } else if self.settings.is_none()
             && self.generator.is_none()
+            && self.health.is_none()
             && self.autotype_picker.is_none()
             && k.modifiers.secondary(cx)
             && !k.modifiers.shift
@@ -997,8 +1100,8 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Atalhos do cofre aberto: `Ctrl+L` bloqueia, `Ctrl+F` busca,
-    /// `Ctrl+U`/`Ctrl+P`/`Ctrl+T` copiam usuário, senha e código do item aberto.
+    /// Shortcuts of the open vault: `Ctrl+L` locks, `Ctrl+F` searches,
+    /// `Ctrl+U`/`Ctrl+P`/`Ctrl+T` copy the open item's username, password and code.
     fn vault_shortcut(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Screen::Vault(view) = &self.screen else {
             return;
@@ -1052,7 +1155,7 @@ impl ScoutVaultApp {
         self.last_activity = Instant::now();
     }
 
-    /// Bloqueia se o cofre estiver aberto e ninguém mexeu desde `auto_lock_after`.
+    /// Locks if the vault is open and nobody touched anything since `auto_lock_after`.
     pub fn lock_if_idle(&mut self, now: Instant, window: &mut Window, cx: &mut Context<Self>) {
         if now.saturating_duration_since(self.last_activity) >= self.auto_lock_after {
             self.lock(window, cx);
@@ -1067,9 +1170,10 @@ impl ScoutVaultApp {
     }
 
     fn set_screen(&mut self, (screen, sub): (Screen, Subscription), cx: &mut Context<Self>) {
-        // Trocar a tela solta a anterior: o cofre decifrado sai da memória junto
-        // (inclusive a cópia que a lista de preenchimento tinha).
+        // Switching the screen drops the previous one: the decrypted vault leaves memory with it
+        // (including the copy the fill list had and the health screen's).
         self.autotype_picker = None;
+        self.health = None;
         self.screen = screen;
         self._screen_subscription = sub;
         self.record_activity();
@@ -1088,7 +1192,7 @@ impl ScoutVaultApp {
         self.refresh_hello_button(cx);
     }
 
-    /// Mostra "Usar Windows Hello" no desbloqueio quando ele está pronto.
+    /// Shows "Use Windows Hello" on unlock when it is ready.
     fn refresh_hello_button(&self, cx: &mut App) {
         if let Screen::Locked(view) = &self.screen {
             let session = view.read(cx).session().clone();
@@ -1099,7 +1203,7 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Sessão do cofre aberto ou bloqueado.
+    /// Session of the open or locked vault.
     fn current_session(&self, cx: &App) -> Option<Session> {
         match &self.screen {
             Screen::Vault(view) => Some(view.read(cx).session().clone()),
@@ -1108,7 +1212,7 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Ligou/desligou a opção nas configurações.
+    /// Turned the option on/off in settings.
     fn windows_hello_changed(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !on {
             if let Some(session) = self.current_session(cx) {
@@ -1125,14 +1229,11 @@ impl ScoutVaultApp {
                 };
                 self.enroll_hello(session, keys, window, cx);
             }
-            _ => crate::toast::info(
-                "O Windows Hello será configurado no próximo desbloqueio com a senha mestra.",
-                cx,
-            ),
+            _ => crate::toast::info(t!("app.hello_next_unlock"), cx),
         }
     }
 
-    /// Pede o Windows Hello uma vez e guarda a user key cifrada por ele.
+    /// Asks for Windows Hello once and stores the user key encrypted by it.
     fn enroll_hello(
         &mut self,
         session: Session,
@@ -1153,7 +1254,7 @@ impl ScoutVaultApp {
                     crate::hello::seal(&this.store, &session, &keys, &challenge, &sig)
                 });
                 match result {
-                    Ok(()) => crate::toast::success("Windows Hello ligado para desbloquear", cx),
+                    Ok(()) => crate::toast::success(t!("app.hello_enabled"), cx),
                     Err(e) => this.hello_failed(e, cx),
                 }
             })
@@ -1162,7 +1263,7 @@ impl ScoutVaultApp {
         .detach();
     }
 
-    /// Não deu para ligar: desfaz a opção e explica.
+    /// Couldn't turn it on: undoes the option and explains.
     fn hello_failed(&mut self, error: crate::hello::HelloError, cx: &mut Context<Self>) {
         let mut settings = self.store.load();
         settings.windows_hello = false;
@@ -1173,7 +1274,7 @@ impl ScoutVaultApp {
         crate::toast::error(error.message(), cx);
     }
 
-    /// "Usar Windows Hello" na tela de desbloqueio.
+    /// "Use Windows Hello" on the unlock screen.
     pub fn unlock_with_hello(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Screen::Locked(view) = &self.screen else {
             return;
@@ -1186,11 +1287,7 @@ impl ScoutVaultApp {
         ) else {
             view.update(cx, |v, cx| {
                 v.set_hello(false, cx);
-                v.set_hello_progress(
-                    false,
-                    Some("O Windows Hello não está pronto. Use a senha mestra.".into()),
-                    cx,
-                )
+                v.set_hello_progress(false, Some(t!("app.hello_not_ready").into()), cx)
             });
             return;
         };
@@ -1221,7 +1318,7 @@ impl ScoutVaultApp {
         .detach();
     }
 
-    /// Abre o cofre já decifrado (Windows Hello): sem mexer no "abrir sem senha".
+    /// Opens the already decrypted vault (Windows Hello): without touching "open without password".
     fn open_unlocked(&mut self, unlocked: Unlocked, window: &mut Window, cx: &mut Context<Self>) {
         crate::saved_session::save(&self.store, &unlocked.session);
         let next = Self::vault_screen(unlocked, window, cx);
@@ -1261,7 +1358,7 @@ impl ScoutVaultApp {
         (Screen::Locked(view), sub)
     }
 
-    /// Estado atual do app é "cofre lembrado" (usado pelos testes).
+    /// Current app state is "remembered vault" (used by tests).
     pub fn store(&self) -> &SettingsStore {
         &self.store
     }
@@ -1269,7 +1366,7 @@ impl ScoutVaultApp {
     fn show_vault_from(&mut self, handoff: &Handoff, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(unlocked) = handoff.take() {
             crate::saved_session::save(&self.store, &unlocked.session);
-            // Senha digitada agora: vale para abrir sem senha pelos próximos N dias.
+            // Password typed now: valid for opening without a password for the next N days.
             if self.store.load().remember_session {
                 crate::quick_unlock::remember(&self.store, &unlocked.session, &unlocked.keys);
             }
@@ -1331,6 +1428,12 @@ impl ScoutVaultApp {
                     VaultEvent::Lock(session) => this.show_locked(session.clone(), window, cx),
                     VaultEvent::OpenSettings => this.open_settings(window, cx),
                     VaultEvent::OpenGenerator => this.open_generator(window, cx),
+                    VaultEvent::OpenHealth => this.open_health(window, cx),
+                    VaultEvent::IconsChanged(icons) => {
+                        let mut settings = this.store.load();
+                        settings.item_icons = icons.clone();
+                        this.store.save(&settings);
+                    }
                     VaultEvent::RepromptPassed(token) => {
                         if let Some((t, item, request)) = this.reprompt_autotype.take() {
                             if t == *token {
@@ -1346,16 +1449,10 @@ impl ScoutVaultApp {
                             let mut settings = this.store.load();
                             settings.windows_hello = false;
                             this.store.save(&settings);
-                            crate::toast::info(
-                                "A senha mestra mudou: ligue o Windows Hello de novo nas configurações.",
-                                cx,
-                            );
+                            crate::toast::info(t!("app.hello_password_changed"), cx);
                         }
                         if crate::quick_unlock::password_changed(&this.store, session) {
-                            crate::toast::info(
-                                "A senha mestra mudou. Na próxima vez, o app vai pedir a nova.",
-                                cx,
-                            );
+                            crate::toast::info(t!("app.quick_unlock_password_changed"), cx);
                         }
                     }
                     VaultEvent::PinsChanged(ids) => {
@@ -1367,9 +1464,7 @@ impl ScoutVaultApp {
                         crate::saved_session::clear(&this.store);
                         this.show_login(window, cx);
                         if let Screen::Login(login) = &this.screen {
-                            login.update(cx, |l, cx| {
-                                l.set_notice("A sessão expirou no servidor. Entre novamente.", cx)
-                            });
+                            login.update(cx, |l, cx| l.set_notice(t!("app.session_expired"), cx));
                         }
                     }
                 },
@@ -1380,14 +1475,15 @@ impl ScoutVaultApp {
 
 impl Render for ScoutVaultApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Trocar de tela solta o campo que tinha foco; sem foco nenhum, as
-        // teclas não chegariam aos atalhos.
+        // Switching screens drops the field that had focus; with no focus at all, the
+        // keys wouldn't reach the shortcuts.
         if window.focused(cx).is_none() {
             self.focus.focus(window, cx);
         }
         let content: AnyView = match (&self.settings, &self.screen) {
             _ if self.autotype_picker.is_some() => self.autotype_view().unwrap().clone().into(),
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
+            _ if self.health.is_some() => self.health_view().unwrap().clone().into(),
             (Some((v, _)), _) => v.clone().into(),
             (None, Screen::Login(v)) => v.clone().into(),
             (None, Screen::Locked(v)) => v.clone().into(),
@@ -1397,18 +1493,30 @@ impl Render for ScoutVaultApp {
             .track_focus(&self.focus)
             .relative()
             .size_full()
-            // Qualquer tecla ou movimento do mouse adia o bloqueio automático.
-            // Ctrl+, abre/fecha as configurações; Esc fecha.
+            // Any key or mouse movement postpones the automatic lock.
+            // Ctrl+, opens/closes settings; Esc closes.
             .capture_key_down(cx.listener(Self::on_key))
             .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, _| this.record_activity()))
-            // Cada tela nova (login → cofre, abrir configurações…) entra suave.
+            // Each new screen (login → vault, opening settings…) eases in.
             .child(crate::motion::rise(
                 div().size_full().child(content.clone()),
                 crate::motion::key("tela", content.entity_id()),
                 10.,
             ))
             .child(self.toasts.clone())
-            // Transição de tema por cima de tudo.
+            // Theme transition on top of everything.
             .children(crate::theme_fx::overlay(cx))
+    }
+}
+
+/// gpui-kit's `Root` paints the theme background over the whole window. In the
+/// floating windows (tray menu, quick search) only the card should show: the rest
+/// stays transparent, without a darker "frame" around it.
+fn transparent_root(window: &mut Window, cx: &mut App) {
+    if let Some(Some(root)) = window.root::<gpui_kit::base::Root>() {
+        root.update(cx, |root, cx| {
+            root.style().background = Some(gpui_kit::transparent_black().into());
+            cx.notify();
+        });
     }
 }

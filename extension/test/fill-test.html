@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Teste do preenchimento do Scout Vault</title>
+    <title>Scout Vault fill test</title>
     <style>
       body { font: 14px system-ui; margin: 24px; }
       section { border: 1px solid #ccc; padding: 12px; margin: 12px 0; }
@@ -11,39 +11,39 @@
     </style>
   </head>
   <body>
-    <h1>Teste do preenchimento</h1>
-    <p>Abre <code>fill.js</code> e roda <code>scoutVaultFillPage</code> em cada cenário, isolado num iframe.</p>
-    <pre id="result">rodando…</pre>
+    <h1>Fill test</h1>
+    <p>Loads <code>fill.js</code> and runs <code>scoutVaultFillPage</code> in each scenario, isolated in an iframe.</p>
+    <pre id="result">running…</pre>
     <script>
-      // Cada cenário: HTML do formulário e o que esperar depois de preencher.
+      // Each scenario: the form's HTML and what to expect after filling.
       const scenarios = [
         {
-          name: "form comum: usuário + senha",
+          name: "plain form: username + password",
           html: `<form><input name="search" type="search"><input id="u" name="user"><input id="p" type="password"></form>`,
           expect: { u: "eu", p: "s3nh@" },
         },
         {
-          name: "autocomplete=username tem prioridade e campo de busca é ignorado",
+          name: "autocomplete=username takes priority and the search field is ignored",
           html: `<input id="q" placeholder="buscar"><form><input id="e" type="email" autocomplete="username"><input id="x" name="cupom"><input id="p" type="password"></form>`,
           expect: { e: "eu", p: "s3nh@", x: "" },
         },
         {
-          name: "campos escondidos e desabilitados são pulados",
+          name: "hidden and disabled fields are skipped",
           html: `<form><input id="h" class="hidden"><input id="d" disabled><input id="u" type="text"><input id="p2" type="password" class="hidden"><input id="p" type="password"></form>`,
           expect: { h: "", d: "", u: "eu", p: "s3nh@", p2: "" },
         },
         {
-          name: "duas etapas: só o e-mail na primeira página",
+          name: "two steps: only the email on the first page",
           html: `<form><input id="m" name="login_email" type="email"></form>`,
           expect: { m: "eu" },
         },
         {
-          name: "sem form, campos soltos",
+          name: "no form, loose fields",
           html: `<div><input id="u" name="usuario"><input id="p" type="password"></div>`,
           expect: { u: "eu", p: "s3nh@" },
         },
         {
-          name: "React escuta o evento input",
+          name: "React listens to the input event",
           html: `<form><input id="u"><input id="p" type="password"></form><span id="log"></span>`,
           setup: (doc) => {
             doc.getElementById("p").addEventListener("input", (e) => {
@@ -75,16 +75,16 @@
             const got = doc.getElementById(id).value;
             if (got !== want) {
               pass = false;
-              lines.push(`  ${id}: esperado "${want}", veio "${got}"`);
+              lines.push(`  ${id}: expected "${want}", got "${got}"`);
             }
           }
           if (sc.check && !sc.check(doc)) pass = false;
           ok = ok && pass;
-          lines.unshift(`${pass ? "OK  " : "FALHA"} ${sc.name} ${JSON.stringify(filled)}`);
+          lines.unshift(`${pass ? "OK  " : "FAIL"} ${sc.name} ${JSON.stringify(filled)}`);
         }
         document.getElementById("result").textContent =
-          (ok ? "TODOS PASSARAM\n" : "HÁ FALHAS\n") + lines.join("\n");
-        document.title = ok ? "ok" : "falha";
+          (ok ? "ALL PASSED\n" : "THERE ARE FAILURES\n") + lines.join("\n");
+        document.title = ok ? "ok" : "fail";
       }
       run();
     </script>

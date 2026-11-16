@@ -1,23 +1,23 @@
-//! Preencher no navegador: a extensão do Scout Vault (pasta `extension/`) conversa
-//! com o app pelo *native messaging* do Chrome/Edge.
+//! Browser autofill: the Scout Vault extension (`extension/` folder) talks
+//! to the app through Chrome/Edge *native messaging*.
 //!
 //! ```text
-//! extensão ──stdin/stdout──▶ scout-vault.exe (ponte, iniciado pelo navegador)
-//!                               │ pipe local, só deste usuário do Windows
+//! extension ──stdin/stdout──▶ scout-vault.exe (bridge, started by the browser)
+//!                               │ local pipe, this Windows user only
 //!                               ▼
-//!                           Scout Vault aberto (responde se o cofre estiver desbloqueado)
+//!                           running Scout Vault (answers if the vault is unlocked)
 //! ```
 //!
-//! Segurança:
-//! - O navegador só inicia a ponte para a extensão com o ID registrado
-//!   ([`EXTENSION_ID`], fixo pela chave pública no `manifest.json`).
-//! - O pipe recusa conexões remotas e tem ACL só para o usuário atual.
-//! - A lista mostra nomes e usuários; a **senha só sai** quando a pessoa clica
-//!   num login, e só se o item tiver um endereço do mesmo site da aba.
-//! - **Salvar logins:** quando um formulário de login é enviado num site, a
-//!   extensão pergunta ao app (`check`) se aquilo é novo ou uma senha nova;
-//!   a resposta não traz senha nenhuma. Só depois do "Salvar"/"Atualizar" da
-//!   pessoa a extensão manda `save`, e o app decide de novo o que fazer.
+//! Security:
+//! - The browser only starts the bridge for the extension with the registered ID
+//!   ([`EXTENSION_ID`], fixed by the public key in `manifest.json`).
+//! - The pipe refuses remote connections and has an ACL for the current user only.
+//! - The list shows names and usernames; the **password only leaves** when the person clicks
+//!   a login, and only if the item has an address on the same site as the tab.
+//! - **Saving logins:** when a login form is submitted on a site, the
+//!   extension asks the app (`check`) whether it is new or a new password;
+//!   the answer carries no password at all. Only after the person's "Save"/"Update"
+//!   does the extension send `save`, and the app decides again what to do.
 
 use std::io::{BufRead, BufReader, Read, Write};
 
@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 
 static SYSTEM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Permite registrar no navegador e abrir o pipe (só o app real, nunca nos testes).
+/// Allows registering with the browser and opening the pipe (real app only, never in tests).
 pub fn enable_system() {
     SYSTEM.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -36,9 +36,9 @@ pub fn system_enabled() -> bool {
     SYSTEM.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Nome do host de native messaging (precisa bater com `popup.js`).
+/// Native messaging host name (must match `popup.js`).
 pub const HOST_NAME: &str = "com.scoutvault.desktop";
-/// ID da extensão, derivado da chave pública em `extension/manifest.json`.
+/// Extension ID, derived from the public key in `extension/manifest.json`.
 pub const EXTENSION_ID: &str = "emnfjpfkonpjndbkkhamknedgdljjnoe";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -52,13 +52,13 @@ pub enum Request {
         id: String,
         url: String,
     },
-    /// Um login foi enviado num site: é novo, é uma senha nova ou já está salvo?
+    /// A login was submitted on a site: is it new, a new password or already saved?
     Check {
         url: String,
         username: String,
         password: String,
     },
-    /// A pessoa confirmou: salvar (ou atualizar a senha d)o login.
+    /// The person confirmed: save the login (or update its password).
     Save {
         url: String,
         username: String,
@@ -66,20 +66,20 @@ pub enum Request {
     },
 }
 
-/// O que fazer com um login enviado num site.
+/// What to do with a login submitted on a site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveDecision {
-    /// Já está salvo assim (ou não dá para salvar).
+    /// Already saved like this (or can't be saved).
     Nothing,
     New,
-    /// Mesmo usuário neste site com outra senha.
+    /// Same username on this site with another password.
     Update {
         id: String,
         name: String,
     },
 }
 
-/// Decide entre salvar, atualizar ou nada, olhando os logins **editáveis** do site.
+/// Decides between save, update or nothing, looking at the site's **editable** logins.
 pub fn decide_save(items: &[Item], url: &str, username: &str, password: &str) -> SaveDecision {
     if password.is_empty() || host_of(url).is_none() {
         return SaveDecision::Nothing;
@@ -113,7 +113,7 @@ pub fn decide_save(items: &[Item], url: &str, username: &str, password: &str) ->
     }
 }
 
-/// Endereço salvo no login novo: esquema + host (sem caminho nem parâmetros).
+/// Address saved in the new login: scheme + host (no path or parameters).
 fn origin_of(url: &str) -> String {
     let url = url.trim();
     let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
@@ -126,7 +126,7 @@ fn origin_of(url: &str) -> String {
     )
 }
 
-/// Login novo a partir do que foi enviado no site.
+/// New login from what was submitted on the site.
 pub fn new_login(url: &str, username: &str, password: &str) -> Item {
     let host = host_of(url).unwrap_or_default();
     let username = username.trim();
@@ -152,7 +152,7 @@ pub fn new_login(url: &str, username: &str, password: &str) -> Item {
     }
 }
 
-/// O mesmo login com a senha nova (o histórico guarda a antiga ao salvar).
+/// The same login with the new password (the history keeps the old one on save).
 pub fn with_password(item: &Item, password: &str) -> Item {
     let mut item = item.clone();
     if let ItemKind::Login(login) = &mut item.kind {
@@ -161,22 +161,16 @@ pub fn with_password(item: &Item, password: &str) -> Item {
     item
 }
 
-/// Pedido vindo do navegador + onde responder.
+/// Request coming from the browser + where to reply.
 pub struct Incoming {
     pub request: Request,
     pub reply: std::sync::mpsc::Sender<Value>,
 }
 
 // ---------------------------------------------------------------------------
-// Qual login vale para qual site
+// Which login applies to which site
 
-/// Domínios de segundo nível comuns (`.com.br`, `.co.uk`…): o "site" é o rótulo antes deles.
-const MULTI_SUFFIXES: &[&str] = &[
-    "com.br", "net.br", "org.br", "gov.br", "edu.br", "co.uk", "org.uk", "ac.uk", "gov.uk",
-    "com.au", "net.au", "org.au", "co.jp", "co.nz", "com.mx", "com.ar", "co.in", "com.pt",
-];
-
-/// Host de uma URL, em minúsculas e sem `www.`. Sem esquema, assume https.
+/// Host of a URL, lowercase and without `www.`. Without a scheme, assumes https.
 pub fn host_of(url: &str) -> Option<String> {
     let url = url.trim();
     let rest = match url.split_once("://") {
@@ -199,23 +193,18 @@ pub fn host_of(url: &str) -> Option<String> {
     (!host.is_empty() && host.contains('.') || host == "localhost").then_some(host)
 }
 
-/// Domínio registrável aproximado (`login.github.com` → `github.com`).
+/// Registrable domain (`login.github.com` → `github.com`), by the Public Suffix List
+/// **with the private section**: `alice.github.io` and `bob.github.io` are different sites,
+/// just like `loja.co.za` and `outra.co.za`. With no registrable domain (IP,
+/// `localhost`, a public suffix alone), the whole host applies.
 pub fn base_domain(host: &str) -> String {
     if host.parse::<std::net::IpAddr>().is_ok() {
         return host.to_owned();
     }
-    let labels: Vec<&str> = host.split('.').collect();
-    let take = if labels.len() >= 3
-        && MULTI_SUFFIXES.contains(&labels[labels.len() - 2..].join(".").as_str())
-    {
-        3
-    } else {
-        2
-    };
-    labels[labels.len().saturating_sub(take)..].join(".")
+    psl::domain_str(host).unwrap_or(host).to_owned()
 }
 
-/// O endereço salvo no item vale para a página? (regra "domínio base", o padrão do Bitwarden)
+/// Does the address saved in the item apply to the page? ("base domain" rule, Bitwarden's default)
 pub fn uri_matches(saved: &str, page_url: &str) -> bool {
     match (host_of(saved), host_of(page_url)) {
         (Some(a), Some(b)) => base_domain(&a) == base_domain(&b),
@@ -232,7 +221,7 @@ fn login_for<'a>(item: &'a Item, url: &str) -> Option<&'a scout_vault_core::vaul
     }
 }
 
-/// Responde um pedido. `items` é `None` com o cofre bloqueado.
+/// Answers a request. `items` is `None` with the vault locked.
 pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
     let Some(items) = items else {
         return json!({ "locked": true });
@@ -260,16 +249,16 @@ pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
         }
         Request::Fill { id, url } => match items.iter().find(|i| &i.id == id) {
             Some(item) if item.reprompt => json!({
-                "error": "Este item pede a senha mestra. Use o Scout Vault para copiar ou digitar (Ctrl+Alt+A)."
+                "error": t!("browser.reprompt")
             }),
             Some(item) => match login_for(item, url) {
                 Some(l) => json!({
                     "username": l.username,
                     "password": l.password.as_ref().map(|p| p.expose()),
                 }),
-                None => json!({ "error": "Este login não é deste site." }),
+                None => json!({ "error": t!("browser.wrong_site") }),
             },
-            None => json!({ "error": "Login não encontrado." }),
+            None => json!({ "error": t!("app.login_not_found") }),
         },
         Request::Check {
             url,
@@ -280,13 +269,13 @@ pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
             SaveDecision::New => json!({ "action": "save" }),
             SaveDecision::Update { name, .. } => json!({ "action": "update", "name": name }),
         },
-        // Salvar mexe no cofre: quem atende é o app (`ScoutVaultApp::handle_browser`).
-        Request::Save { .. } => json!({ "error": "Pedido desconhecido." }),
+        // Saving touches the vault: the app handles it (`ScoutVaultApp::handle_browser`).
+        Request::Save { .. } => json!({ "error": t!("browser.unknown_request") }),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Pipe local entre a ponte e o app
+// Local pipe between the bridge and the app
 
 pub fn pipe_name() -> String {
     let user: String = std::env::var("USERNAME")
@@ -297,7 +286,7 @@ pub fn pipe_name() -> String {
     format!(r"\\.\pipe\scout-vault-navegador-{user}")
 }
 
-/// Uma troca no pipe: uma linha de JSON de cada lado.
+/// One exchange on the pipe: one line of JSON each way.
 fn exchange(stream: &mut (impl Read + Write), request: &Value) -> std::io::Result<Value> {
     let mut line = serde_json::to_vec(request)?;
     line.push(b'\n');
@@ -309,7 +298,7 @@ fn exchange(stream: &mut (impl Read + Write), request: &Value) -> std::io::Resul
     serde_json::from_str(&response).map_err(std::io::Error::other)
 }
 
-/// Lado da ponte: manda um pedido ao app aberto.
+/// Bridge side: sends a request to the running app.
 pub fn ask_app(request: &Value) -> Value {
     let name = pipe_name();
     for _ in 0..20 {
@@ -319,20 +308,27 @@ pub fn ask_app(request: &Value) -> Value {
             .open(&name)
         {
             Ok(mut pipe) => {
+                // The pipe name is predictable and the namespace is machine-wide:
+                // another Windows user could create it before the app.
+                // Only talk to a server running as this same user.
+                #[cfg(windows)]
+                if !ident::pipe_server_is_current_user(&pipe) {
+                    return json!({ "error": "closed" });
+                }
                 return exchange(&mut pipe, request)
-                    .unwrap_or_else(|_| json!({ "error": "O Scout Vault não respondeu." }));
+                    .unwrap_or_else(|_| json!({ "error": t!("browser.no_answer") }));
             }
-            // Ocupado com outra conexão: tenta de novo.
+            // Busy with another connection: try again.
             Err(e) if e.raw_os_error() == Some(231) => {
                 std::thread::sleep(std::time::Duration::from_millis(50))
             }
             Err(_) => return json!({ "error": "closed" }),
         }
     }
-    json!({ "error": "O Scout Vault está ocupado." })
+    json!({ "error": t!("browser.busy") })
 }
 
-/// Lê uma mensagem do navegador (4 bytes de tamanho + JSON).
+/// Reads a message from the browser (4-byte length + JSON).
 fn read_message(input: &mut impl Read) -> Option<Value> {
     let mut len = [0u8; 4];
     input.read_exact(&mut len).ok()?;
@@ -352,14 +348,14 @@ fn write_message(output: &mut impl Write, value: &Value) -> std::io::Result<()> 
     output.flush()
 }
 
-/// O navegador iniciou o `scout-vault.exe` como ponte? (`chrome-extension://…` no argumento)
+/// Did the browser start `scout-vault.exe` as a bridge? (`chrome-extension://…` in the argument)
 pub fn is_native_host_launch(args: &[String]) -> bool {
     args.iter()
         .skip(1)
         .any(|a| a.starts_with("chrome-extension://"))
 }
 
-/// Laço da ponte: repassa cada mensagem do navegador ao app e devolve a resposta.
+/// Bridge loop: forwards each browser message to the app and returns the answer.
 pub fn run_native_host(
     input: &mut impl Read,
     output: &mut impl Write,
@@ -369,7 +365,7 @@ pub fn run_native_host(
         let response = if serde_json::from_value::<Request>(message.clone()).is_ok() {
             ask(&message)
         } else {
-            json!({ "error": "Pedido desconhecido." })
+            json!({ "error": t!("browser.unknown_request") })
         };
         if write_message(output, &response).is_err() {
             break;
@@ -378,34 +374,24 @@ pub fn run_native_host(
 }
 
 // ---------------------------------------------------------------------------
-// Servidor no app (Windows)
+// Who is who (Windows)
 
 #[cfg(windows)]
-mod server {
-    use std::sync::mpsc::Sender;
-
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::windows::named_pipe::ServerOptions;
-    use windows::core::PCWSTR;
+mod ident {
     use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL};
-    use windows::Win32::Security::Authorization::{
-        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        SDDL_REVISION_1,
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows::Win32::Security::{
-        GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-        TOKEN_USER,
-    };
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    use super::{Incoming, Request};
-
-    /// SID do usuário atual em texto (`S-1-5-21-…`).
-    fn current_user_sid() -> Option<String> {
-        // SAFETY: chamadas de consulta do próprio processo; buffers do tamanho pedido pela API.
+    /// SID (text, `S-1-5-21-…`) of the user that owns a process.
+    fn process_user_sid(process: HANDLE) -> Option<String> {
+        // SAFETY: queries only; buffers of the size the API asked for; handles closed.
         unsafe {
             let mut token = HANDLE::default();
-            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
+            OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
             let mut len = 0u32;
             let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
             let mut buf = vec![0u8; len as usize];
@@ -427,12 +413,67 @@ mod server {
         }
     }
 
-    /// Descritor de segurança: acesso total só para o usuário atual.
+    /// SID of the current user.
+    pub fn current_user_sid() -> Option<String> {
+        // SAFETY: pseudo-handle of our own process; no need to close it.
+        process_user_sid(unsafe { GetCurrentProcess() })
+    }
+
+    /// SID of the user running the server on the other side of a pipe (connected client).
+    pub fn pipe_server_sid(pipe: &impl std::os::windows::io::AsRawHandle) -> Option<String> {
+        // SAFETY: the pipe handle lives during the call; the process handle is closed here.
+        unsafe {
+            let mut pid = 0u32;
+            GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &mut pid).ok()?;
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let sid = process_user_sid(process);
+            let _ = CloseHandle(process);
+            sid
+        }
+    }
+
+    /// Does the pipe server run as `expected`? Any failure counts as "no".
+    pub fn pipe_server_is(pipe: &impl std::os::windows::io::AsRawHandle, expected: &str) -> bool {
+        pipe_server_sid(pipe).is_some_and(|sid| sid == expected)
+    }
+
+    pub fn pipe_server_is_current_user(pipe: &impl std::os::windows::io::AsRawHandle) -> bool {
+        current_user_sid().is_some_and(|me| pipe_server_is(pipe, &me))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server in the app (Windows)
+
+/// Pipe server error not shown yet (the app reports it on the next loop iteration).
+static SERVER_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Takes (and clears) the pipe server error, if any.
+pub fn take_server_error() -> Option<String> {
+    SERVER_ERROR.lock().ok()?.take()
+}
+
+#[cfg(windows)]
+mod server {
+    use std::sync::mpsc::Sender;
+
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ServerOptions;
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+
+    use super::ident::current_user_sid;
+    use super::{Incoming, Request};
+
+    /// Security descriptor: full access for the current user only.
     fn user_only_descriptor() -> Option<PSECURITY_DESCRIPTOR> {
         let sddl = format!("D:P(A;;GA;;;{})", current_user_sid()?);
         let wide: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
         let mut sd = PSECURITY_DESCRIPTOR::default();
-        // SAFETY: string terminada em zero; o descritor vive enquanto o app roda.
+        // SAFETY: zero-terminated string; the descriptor lives while the app runs.
         unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 PCWSTR(wide.as_ptr()),
@@ -448,8 +489,8 @@ mod server {
     pub async fn serve(name: String, tx: Sender<Incoming>) -> std::io::Result<()> {
         let sd = user_only_descriptor()
             .ok_or_else(|| std::io::Error::other("não foi possível proteger o pipe"))?;
-        // O descritor vive até o app fechar; guardado como número para o
-        // futuro poder trocar de thread.
+        // The descriptor lives until the app closes; stored as a number so the
+        // future can switch threads.
         let sd_addr = sd.0 as usize;
         let create = |first: bool| {
             let mut attrs = SECURITY_ATTRIBUTES {
@@ -457,7 +498,7 @@ mod server {
                 lpSecurityDescriptor: sd_addr as *mut std::ffi::c_void,
                 bInheritHandle: false.into(),
             };
-            // SAFETY: `attrs` aponta para um descritor válido durante a chamada.
+            // SAFETY: `attrs` points to a valid descriptor during the call.
             unsafe {
                 ServerOptions::new()
                     .first_pipe_instance(first)
@@ -468,7 +509,7 @@ mod server {
                     )
             }
         };
-        // `first_pipe_instance`: se outro processo já criou um pipe com esse nome, falha.
+        // `first_pipe_instance`: if another process already created a pipe with this name, fail.
         let mut server = create(true)?;
         loop {
             server.connect().await?;
@@ -501,11 +542,9 @@ mod server {
                         .await
                         .ok()
                         .flatten()
-                        .unwrap_or_else(
-                            || serde_json::json!({ "error": "O Scout Vault não respondeu." }),
-                        )
+                        .unwrap_or_else(|| serde_json::json!({ "error": t!("browser.no_answer") }))
                     }
-                    Err(_) => serde_json::json!({ "error": "Pedido desconhecido." }),
+                    Err(_) => serde_json::json!({ "error": t!("browser.unknown_request") }),
                 };
                 let mut bytes = serde_json::to_vec(&response).unwrap_or_default();
                 bytes.push(b'\n');
@@ -516,13 +555,25 @@ mod server {
     }
 }
 
-/// Liga o servidor do pipe (só Windows). Soltar o valor devolvido desliga.
+/// Starts the pipe server (Windows only). Dropping the returned value turns it off.
 pub fn start_server(tx: std::sync::mpsc::Sender<Incoming>) -> Option<crate::io::Background> {
     #[cfg(windows)]
     {
         Some(crate::io::spawn(async move {
             if let Err(e) = server::serve(pipe_name(), tx).await {
                 eprintln!("servidor do navegador parou: {e}");
+                // Pipe already exists (`first_pipe_instance`): another program, maybe from
+                // another user, took the name. Report it instead of failing silently.
+                let message = if e.raw_os_error() == Some(5) || e.raw_os_error() == Some(231) {
+                    "Outro programa está ocupando o canal do navegador. Por segurança, \
+                     o preenchimento no navegador ficou desligado até o Scout Vault reiniciar."
+                        .to_owned()
+                } else {
+                    format!("O preenchimento no navegador parou: {e}")
+                };
+                if let Ok(mut slot) = SERVER_ERROR.lock() {
+                    *slot = Some(message);
+                }
             }
         }))
     }
@@ -534,9 +585,9 @@ pub fn start_server(tx: std::sync::mpsc::Sender<Incoming>) -> Option<crate::io::
 }
 
 // ---------------------------------------------------------------------------
-// Registro no navegador
+// Browser registration
 
-/// Manifesto do host que o navegador lê para iniciar a ponte.
+/// Host manifest the browser reads to start the bridge.
 pub fn host_manifest(exe: &std::path::Path) -> Value {
     json!({
         "name": HOST_NAME,
@@ -547,7 +598,7 @@ pub fn host_manifest(exe: &std::path::Path) -> Value {
     })
 }
 
-/// Chaves do Registro (HKCU) em que cada navegador procura o host.
+/// Registry keys (HKCU) where each browser looks for the host.
 #[cfg(windows)]
 const REGISTRY_KEYS: &[&str] = &[
     r"Software\Google\Chrome\NativeMessagingHosts\com.scoutvault.desktop",
@@ -555,7 +606,7 @@ const REGISTRY_KEYS: &[&str] = &[
     r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.scoutvault.desktop",
 ];
 
-/// Registros do nome antigo do app ("Cofre"), apagados ao registrar ou desfazer.
+/// Registrations under the app's old name ("Cofre"), deleted when registering or undoing.
 #[cfg(windows)]
 const OLD_REGISTRY_KEYS: &[&str] = &[
     r"Software\Google\Chrome\NativeMessagingHosts\com.cofre.desktop",
@@ -563,8 +614,8 @@ const OLD_REGISTRY_KEYS: &[&str] = &[
     r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.cofre.desktop",
 ];
 
-/// Grava o manifesto em `%APPDATA%\Scout Vault` e aponta os navegadores para ele
-/// (só no usuário atual; não precisa de administrador).
+/// Writes the manifest to `%APPDATA%\Scout Vault` and points the browsers to it
+/// (current user only; no administrator needed).
 pub fn register(manifest_dir: &std::path::Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(manifest_dir).map_err(|e| e.to_string())?;
@@ -582,7 +633,7 @@ pub fn register(manifest_dir: &std::path::Path) -> Result<(), String> {
             .collect();
         delete_keys(OLD_REGISTRY_KEYS);
         for key in REGISTRY_KEYS {
-            // SAFETY: strings válidas; o valor é uma REG_SZ terminada em zero.
+            // SAFETY: valid strings; the value is a zero-terminated REG_SZ.
             let status = unsafe {
                 RegSetKeyValueW(
                     HKEY_CURRENT_USER,
@@ -594,8 +645,9 @@ pub fn register(manifest_dir: &std::path::Path) -> Result<(), String> {
                 )
             };
             if status.is_err() {
-                return Err(format!(
-                    "não foi possível registrar no navegador ({status:?})"
+                return Err(t!(
+                    "browser.register_failed",
+                    status = format!("{status:?}")
                 ));
             }
         }
@@ -608,12 +660,12 @@ fn delete_keys(keys: &[&str]) {
     use windows::core::HSTRING;
     use windows::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
     for key in keys {
-        // SAFETY: só apaga chaves do próprio Scout Vault.
+        // SAFETY: only deletes Scout Vault's own keys.
         let _ = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(*key)) };
     }
 }
 
-/// Desfaz o [`register`].
+/// Undoes [`register`].
 pub fn unregister(manifest_dir: &std::path::Path) {
     let _ = std::fs::remove_file(manifest_dir.join("navegador-host.json"));
     #[cfg(windows)]
@@ -623,8 +675,8 @@ pub fn unregister(manifest_dir: &std::path::Path) {
     }
 }
 
-/// Pasta da extensão para "Carregar sem compactação": ao lado do executável
-/// (instalação) ou a do repositório (desenvolvimento).
+/// Extension folder for "Load unpacked": next to the executable
+/// (installation) or the repository's (development).
 pub fn extension_dir() -> std::path::PathBuf {
     if let Some(dir) = std::env::current_exe()
         .ok()
@@ -672,12 +724,12 @@ mod tests {
             login("b", &["https://gitlab.com"]),
         ];
         let url = "https://github.com/session";
-        // Já salvo igual (usuário sem diferença de maiúsculas/espaços).
+        // Already saved the same (username ignoring case/spaces).
         assert_eq!(
             decide_save(&items, url, " USER-A ", "senha-a"),
             SaveDecision::Nothing
         );
-        // Mesmo usuário, senha nova: atualizar.
+        // Same username, new password: update.
         assert_eq!(
             decide_save(&items, url, "user-a", "nova"),
             SaveDecision::Update {
@@ -685,13 +737,13 @@ mod tests {
                 name: "Item a".into()
             }
         );
-        // Outro usuário no mesmo site, ou site sem login salvo: novo.
+        // Another username on the same site, or a site with no saved login: new.
         assert_eq!(decide_save(&items, url, "outra", "x"), SaveDecision::New);
         assert_eq!(
             decide_save(&items, "https://example.org", "user-a", "senha-a"),
             SaveDecision::New
         );
-        // Sem senha ou sem site: nada.
+        // No password or no site: nothing.
         assert_eq!(
             decide_save(&items, url, "user-a", ""),
             SaveDecision::Nothing
@@ -700,7 +752,7 @@ mod tests {
             decide_save(&items, "javascript:alert(1)", "u", "p"),
             SaveDecision::Nothing
         );
-        // A resposta do `check` nunca leva senha.
+        // The `check` answer never carries a password.
         let r = handle(
             &Request::Check {
                 url: url.into(),
@@ -786,6 +838,43 @@ mod tests {
             "https://github.com.evil.io/"
         ));
         assert!(!uri_matches("https://bb.com.br", "https://itau.com.br"));
+        // Public suffixes outside a short list and private suffixes (shared
+        // hosting): the neighboring site doesn't get the password.
+        for (saved, page) in [
+            ("https://meubanco.com.co/login", "https://atacante.com.co/"),
+            ("https://loja.co.za/", "https://atacante.co.za/"),
+            ("https://servico.gob.mx/", "https://atacante.gob.mx/"),
+            ("https://minhaempresa.adv.br/", "https://atacante.adv.br/"),
+            ("https://alice.github.io/", "https://atacante.github.io/"),
+            (
+                "https://meuapp.herokuapp.com/",
+                "https://atacante.herokuapp.com/",
+            ),
+            ("https://meuapp.vercel.app/", "https://atacante.vercel.app/"),
+            (
+                "https://intranet.azurewebsites.net/",
+                "https://atacante.azurewebsites.net/",
+            ),
+        ] {
+            assert!(!uri_matches(saved, page), "{saved} não vale em {page}");
+        }
+        // …but subdomains of the same site still apply.
+        assert!(uri_matches(
+            "https://alice.github.io/",
+            "https://docs.alice.github.io/"
+        ));
+        assert!(uri_matches(
+            "https://bb.com.br",
+            "https://internet.bb.com.br/"
+        ));
+        assert!(uri_matches(
+            "http://localhost:8000",
+            "http://localhost:3000/"
+        ));
+        assert!(uri_matches(
+            "http://intranet.local",
+            "http://app.intranet.local/"
+        ));
     }
 
     #[test]
@@ -821,7 +910,7 @@ mod tests {
             Some(&items),
         );
         assert_eq!(ok["password"], "senha-a");
-        // Pedir a senha do GitLab numa página do GitHub é recusado.
+        // Asking for the GitLab password on a GitHub page is refused.
         let wrong = handle(
             &Request::Fill {
                 id: "b".into(),
@@ -895,7 +984,7 @@ mod tests {
         assert_eq!(id, EXTENSION_ID);
     }
 
-    /// Pipe de verdade (só local, sem mexer em nada do sistema): servidor + ponte.
+    /// Real pipe (local only, without touching anything in the system): server + bridge.
     #[cfg(windows)]
     #[test]
     fn pipe_round_trip() {
@@ -905,7 +994,7 @@ mod tests {
         let _server = crate::io::spawn(async move {
             let _ = server::serve(pipe, tx).await;
         });
-        // "App": responde o que chegar.
+        // "App": answers whatever arrives.
         std::thread::spawn(move || {
             while let Ok(incoming) = rx.recv() {
                 let items = vec![login("a", &["https://github.com"])];
@@ -924,7 +1013,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response["username"], "user-a");
-        // Um segundo processo não consegue criar outro servidor com o mesmo nome.
+        // The bridge checks who runs the server: here it is this same user…
+        let me = ident::current_user_sid().unwrap();
+        let check = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+            .unwrap();
+        assert_eq!(ident::pipe_server_sid(&check).as_deref(), Some(me.as_str()));
+        assert!(ident::pipe_server_is_current_user(&check));
+        // …and a server from another user (here, SYSTEM) would be refused.
+        assert!(!ident::pipe_server_is(&check, "S-1-5-18"));
+        drop(check);
+        // A second process can't create another server with the same name.
         let again = tokio::runtime::Runtime::new().unwrap().block_on(async {
             tokio::net::windows::named_pipe::ServerOptions::new()
                 .first_pipe_instance(true)

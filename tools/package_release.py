@@ -1,10 +1,10 @@
-"""Monta o zip da release a partir do binário já compilado.
+"""Builds the release zip from the already compiled binary.
 
-Uso: python tools/package_release.py 0.3.0 [--exe target/release/scout-vault.exe] [--out dist]
+Usage: python tools/package_release.py 0.3.0 [--exe target/release/scout-vault.exe] [--out dist]
 
-Gera `dist/scout-vault-<versão>-windows-x64.zip` com `scout-vault.exe`, a
-pasta `extension/` (sem a página de teste), `LICENSE`, `README.md` e
-`CHANGELOG.md`, e o `.sha256` ao lado (mesmo formato do `sha256sum`).
+Creates `dist/scout-vault-<version>-windows-x64.zip` with `scout-vault.exe`, the
+`extension/` folder (without the test page), `LICENSE`, `README.md` and
+`CHANGELOG.md`, and the `.sha256` next to it (same format as `sha256sum`).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def main() -> None:
     args = parser.parse_args()
     version = args.version.removeprefix("v")
     if not args.exe.is_file():
-        sys.exit(f"Não achei o executável em {args.exe}. Rode `cargo build --release` antes.")
+        sys.exit(f"Could not find the executable at {args.exe}. Run `cargo build --release` first.")
     args.out.mkdir(parents=True, exist_ok=True)
     zip_path = args.out / f"scout-vault-{version}-windows-x64.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:

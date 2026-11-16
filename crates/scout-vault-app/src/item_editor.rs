@@ -1,5 +1,5 @@
-//! Editor de item: criar e editar logins, notas, cartões, identidades e
-//! chaves SSH. Só monta o [`Item`] em texto claro; cifrar e enviar é com
+//! Item editor: create and edit logins, notes, cards, identities and
+//! SSH keys. It only builds the plaintext [`Item`]; encrypting and sending is done by
 //! [`crate::flow::write`].
 
 use gpui_kit::assets::IconName;
@@ -15,7 +15,7 @@ use scout_vault_core::Secret;
 use crate::flow::NewFile;
 use crate::ui::{self, Segment};
 
-/// Onde um item pode morar: pastas pessoais, organizações e as coleções delas.
+/// Where an item can live: personal folders, organizations and their collections.
 #[derive(Clone, Default)]
 pub struct Places {
     pub folders: Vec<(String, String)>,
@@ -24,7 +24,7 @@ pub struct Places {
 }
 
 impl Places {
-    /// Coleções em que dá para pôr itens, de uma organização.
+    /// Collections of an organization that items can be put in.
     fn writable(&self, org: &str) -> Vec<&scout_vault_core::vault::Collection> {
         self.collections
             .iter()
@@ -34,12 +34,12 @@ impl Places {
 }
 
 pub enum EditorEvent {
-    /// O item e os arquivos novos a anexar.
+    /// The item and the new files to attach.
     Save(Box<Item>, Vec<NewFile>),
     Cancel,
 }
 
-/// Tipos que dá para criar.
+/// Types that can be created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewKind {
     Login,
@@ -53,10 +53,10 @@ impl NewKind {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Login => "Login",
-            Self::Note => "Nota",
-            Self::Card => "Cartão",
-            Self::Identity => "Identidade",
+            Self::Login => t!("kind.login"),
+            Self::Note => t!("kind.note"),
+            Self::Card => t!("kind.card"),
+            Self::Identity => t!("kind.identity"),
         }
     }
 
@@ -79,7 +79,7 @@ impl NewKind {
     }
 }
 
-/// Um campo de texto simples do formulário.
+/// A simple text field of the form.
 struct Line {
     key: &'static str,
     label: &'static str,
@@ -94,7 +94,7 @@ struct CustomField {
 }
 
 pub struct ItemEditor {
-    /// Item original (edição) ou um molde vazio (novo).
+    /// Original item (edit) or an empty template (new).
     base: Item,
     is_new: bool,
     name: Entity<InputState>,
@@ -102,20 +102,20 @@ pub struct ItemEditor {
     uris: Vec<Entity<InputState>>,
     fields: Vec<CustomField>,
     notes: Entity<TextareaState>,
-    /// Chave privada SSH (várias linhas).
+    /// SSH private key (several lines).
     ssh_private: Option<Entity<TextareaState>>,
     folder_id: Option<String>,
     favorite: bool,
-    /// "Pedir a senha mestra" para mostrar, copiar, editar ou preencher.
+    /// Ask for the master password to show, copy, edit or fill.
     reprompt: bool,
     places: Places,
-    /// Organização dona do item (`None` = cofre pessoal).
+    /// Organization that owns the item (`None` = personal vault).
     owner: Option<String>,
     collection_ids: Vec<String>,
     generator: PasswordOptions,
     saving: bool,
     error: Option<SharedString>,
-    /// Arquivos escolhidos para anexar ao salvar.
+    /// Files chosen to attach on save.
     files: Vec<NewFile>,
 }
 
@@ -137,43 +137,40 @@ fn input_with(
     })
 }
 
-const URI_PLACEHOLDER: &str = "https://exemplo.com";
-const FIELD_NAME_PLACEHOLDER: &str = "Nome (ex.: PIN)";
-
 fn field_value_placeholder(kind: FieldKind) -> &'static str {
     match kind {
-        FieldKind::Hidden => "Valor oculto",
-        FieldKind::Boolean => "true ou false",
-        _ => "Valor",
+        FieldKind::Hidden => t!("editor.hidden_value"),
+        FieldKind::Boolean => t!("editor.boolean_value"),
+        _ => t!("editor.value"),
     }
 }
 
-/// Exemplo dentro do campo vazio: mostra o formato esperado.
+/// Placeholder inside the empty field: shows the expected format.
 fn placeholder_for(key: &str) -> &'static str {
     match key {
-        "username" => "nome ou e-mail",
-        "password" => "senha",
-        "totp" => "chave ou otpauth://…",
-        "card-holder" => "como está no cartão",
+        "username" => t!("editor.ph_username"),
+        "password" => t!("editor.ph_password"),
+        "totp" => t!("editor.ph_totp"),
+        "card-holder" => t!("editor.ph_cardholder"),
         "card-brand" => "Visa",
         "card-number" => "0000 0000 0000 0000",
         "card-month" => "MM",
-        "card-year" => "AAAA",
+        "card-year" => t!("editor.ph_year"),
         "card-code" => "123",
-        "id-title" => "Sr., Sra.",
-        "id-email" => "nome@exemplo.com",
-        "id-phone" => "(00) 00000-0000",
-        "id-postal" => "00000-000",
-        "id-state" => "UF",
-        "id-country" => "Brasil",
-        "id-ssn" => "000.000.000-00",
+        "id-title" => t!("editor.ph_title"),
+        "id-email" => t!("editor.ph_email"),
+        "id-phone" => t!("editor.ph_phone"),
+        "id-postal" => t!("editor.ph_postal"),
+        "id-state" => t!("editor.ph_state"),
+        "id-country" => t!("editor.ph_country"),
+        "id-ssn" => t!("editor.ph_ssn"),
         "ssh-fingerprint" => "SHA256:…",
         _ => "",
     }
 }
 
-/// Como os campos se arrumam em linhas: `None` = ocupa o espaço que sobra,
-/// `Some(px)` = largura fixa para campos curtos (mês, CEP, CVV…).
+/// How the fields are arranged in rows: `None` = takes the remaining space,
+/// `Some(px)` = fixed width for short fields (month, ZIP code, CVV…).
 fn layout(kind: &ItemKind) -> &'static [&'static [(&'static str, Option<f32>)]] {
     match kind {
         ItemKind::Login(_) => &[&[("username", None), ("password", None)], &[("totp", None)]],
@@ -221,7 +218,7 @@ impl ItemEditor {
         Self::build(item.clone(), false, places, generator, window, cx)
     }
 
-    /// Item novo. `owner`: organização (e coleção) já escolhidas pelo filtro atual.
+    /// New item. `owner`: organization (and collection) already chosen by the current filter.
     pub fn create(
         kind: NewKind,
         folder_id: Option<String>,
@@ -273,7 +270,7 @@ impl ItemEditor {
     ) -> Self {
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Nome do item")
+                .placeholder(t!("editor.item_name"))
                 .default_value(base.name.clone())
         });
         let notes_text = base
@@ -284,7 +281,7 @@ impl ItemEditor {
         let notes = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 12)
-                .placeholder("Notas")
+                .placeholder(t!("field.notes"))
                 .default_value(notes_text)
         });
         let mut lines = Vec::new();
@@ -308,7 +305,7 @@ impl ItemEditor {
                 ItemKind::Login(l) => {
                     line(
                         "username",
-                        "Usuário",
+                        t!("field.username"),
                         l.username.as_deref(),
                         false,
                         window,
@@ -316,7 +313,7 @@ impl ItemEditor {
                     );
                     line(
                         "password",
-                        "Senha",
+                        t!("field.password"),
                         l.password.as_ref().map(|s| s.expose()),
                         true,
                         window,
@@ -324,23 +321,35 @@ impl ItemEditor {
                     );
                     line(
                         "totp",
-                        "Autenticador (TOTP)",
+                        t!("editor.totp"),
                         l.totp.as_ref().map(|s| s.expose()),
                         true,
                         window,
                         cx,
                     );
                     for u in &l.uris {
-                        uris.push(input_with(window, cx, Some(u), false, URI_PLACEHOLDER));
+                        uris.push(input_with(
+                            window,
+                            cx,
+                            Some(u),
+                            false,
+                            t!("editor.uri_placeholder"),
+                        ));
                     }
                     if uris.is_empty() {
-                        uris.push(input_with(window, cx, None, false, URI_PLACEHOLDER));
+                        uris.push(input_with(
+                            window,
+                            cx,
+                            None,
+                            false,
+                            t!("editor.uri_placeholder"),
+                        ));
                     }
                 }
                 ItemKind::Card(c) => {
                     line(
                         "card-holder",
-                        "Nome no cartão",
+                        t!("editor.cardholder"),
                         c.cardholder_name.as_deref(),
                         false,
                         window,
@@ -348,7 +357,7 @@ impl ItemEditor {
                     );
                     line(
                         "card-brand",
-                        "Bandeira",
+                        t!("field.brand"),
                         c.brand.as_deref(),
                         false,
                         window,
@@ -356,7 +365,7 @@ impl ItemEditor {
                     );
                     line(
                         "card-number",
-                        "Número",
+                        t!("field.number"),
                         c.number.as_ref().map(|s| s.expose()),
                         true,
                         window,
@@ -364,16 +373,23 @@ impl ItemEditor {
                     );
                     line(
                         "card-month",
-                        "Mês",
+                        t!("editor.month"),
                         c.exp_month.as_deref(),
                         false,
                         window,
                         cx,
                     );
-                    line("card-year", "Ano", c.exp_year.as_deref(), false, window, cx);
+                    line(
+                        "card-year",
+                        t!("editor.year"),
+                        c.exp_year.as_deref(),
+                        false,
+                        window,
+                        cx,
+                    );
                     line(
                         "card-code",
-                        "CVV",
+                        t!("editor.cvv"),
                         c.code.as_ref().map(|s| s.expose()),
                         true,
                         window,
@@ -383,24 +399,69 @@ impl ItemEditor {
                 ItemKind::Identity(i) => {
                     let s = |v: &Option<Secret>| v.as_ref().map(|s| s.expose().to_owned());
                     let pairs: [(&'static str, &'static str, Option<String>, bool); 18] = [
-                        ("id-title", "Tratamento", i.title.clone(), false),
-                        ("id-first", "Nome", i.first_name.clone(), false),
-                        ("id-middle", "Nome do meio", i.middle_name.clone(), false),
-                        ("id-last", "Sobrenome", i.last_name.clone(), false),
-                        ("id-company", "Empresa", i.company.clone(), false),
-                        ("id-email", "E-mail", i.email.clone(), false),
-                        ("id-phone", "Telefone", i.phone.clone(), false),
-                        ("id-username", "Usuário", i.username.clone(), false),
-                        ("id-address1", "Endereço", i.address1.clone(), false),
-                        ("id-address2", "Complemento", i.address2.clone(), false),
-                        ("id-address3", "Complemento 2", i.address3.clone(), false),
-                        ("id-city", "Cidade", i.city.clone(), false),
-                        ("id-state", "Estado", i.state.clone(), false),
-                        ("id-postal", "CEP", i.postal_code.clone(), false),
-                        ("id-country", "País", i.country.clone(), false),
-                        ("id-ssn", "CPF / SSN", s(&i.ssn), true),
-                        ("id-passport", "Passaporte", s(&i.passport_number), true),
-                        ("id-license", "CNH", s(&i.license_number), true),
+                        ("id-title", t!("field.title"), i.title.clone(), false),
+                        (
+                            "id-first",
+                            t!("field.first_name"),
+                            i.first_name.clone(),
+                            false,
+                        ),
+                        (
+                            "id-middle",
+                            t!("field.middle_name"),
+                            i.middle_name.clone(),
+                            false,
+                        ),
+                        ("id-last", t!("field.last_name"), i.last_name.clone(), false),
+                        ("id-company", t!("field.company"), i.company.clone(), false),
+                        ("id-email", t!("login.email"), i.email.clone(), false),
+                        ("id-phone", t!("field.phone"), i.phone.clone(), false),
+                        (
+                            "id-username",
+                            t!("field.username"),
+                            i.username.clone(),
+                            false,
+                        ),
+                        (
+                            "id-address1",
+                            t!("field.address"),
+                            i.address1.clone(),
+                            false,
+                        ),
+                        (
+                            "id-address2",
+                            t!("field.address2"),
+                            i.address2.clone(),
+                            false,
+                        ),
+                        (
+                            "id-address3",
+                            t!("field.address3"),
+                            i.address3.clone(),
+                            false,
+                        ),
+                        ("id-city", t!("field.city"), i.city.clone(), false),
+                        ("id-state", t!("field.state"), i.state.clone(), false),
+                        (
+                            "id-postal",
+                            t!("field.postal_code"),
+                            i.postal_code.clone(),
+                            false,
+                        ),
+                        ("id-country", t!("field.country"), i.country.clone(), false),
+                        ("id-ssn", t!("field.ssn"), s(&i.ssn), true),
+                        (
+                            "id-passport",
+                            t!("field.passport"),
+                            s(&i.passport_number),
+                            true,
+                        ),
+                        (
+                            "id-license",
+                            t!("field.license"),
+                            s(&i.license_number),
+                            true,
+                        ),
                     ];
                     for (key, label, value, secret) in pairs {
                         line(key, label, value.as_deref(), secret, window, cx);
@@ -409,7 +470,7 @@ impl ItemEditor {
                 ItemKind::SshKey(k) => {
                     line(
                         "ssh-public",
-                        "Chave pública",
+                        t!("field.public_key"),
                         k.public_key.as_deref(),
                         false,
                         window,
@@ -417,7 +478,7 @@ impl ItemEditor {
                     );
                     line(
                         "ssh-fingerprint",
-                        "Impressão digital",
+                        t!("field.fingerprint"),
                         k.fingerprint.as_deref(),
                         false,
                         window,
@@ -431,7 +492,7 @@ impl ItemEditor {
                     ssh_private = Some(cx.new(|cx| {
                         TextareaState::new(window, cx)
                             .auto_grow(4, 12)
-                            .placeholder("Chave privada")
+                            .placeholder(t!("field.private_key"))
                             .default_value(private)
                     }));
                 }
@@ -443,7 +504,13 @@ impl ItemEditor {
             .iter()
             .map(|f| CustomField {
                 kind: f.kind,
-                name: input_with(window, cx, f.name.as_deref(), false, FIELD_NAME_PLACEHOLDER),
+                name: input_with(
+                    window,
+                    cx,
+                    f.name.as_deref(),
+                    false,
+                    t!("editor.field_name_placeholder"),
+                ),
                 value: input_with(
                     window,
                     cx,
@@ -480,7 +547,7 @@ impl ItemEditor {
         self.is_new
     }
 
-    /// Liga/desliga "pedir a senha mestra" neste item.
+    /// Turns "ask for the master password" on/off for this item.
     pub fn set_reprompt(&mut self, on: bool, cx: &mut Context<Self>) {
         self.reprompt = on;
         cx.notify();
@@ -496,7 +563,7 @@ impl ItemEditor {
         cx.notify();
     }
 
-    /// Troca o tipo de um item novo (só antes de salvar).
+    /// Changes the type of a new item (only before saving).
     pub fn set_kind(&mut self, kind: NewKind, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_new {
             return;
@@ -523,7 +590,7 @@ impl ItemEditor {
     }
 
     fn secret(&self, key: &str, cx: &App) -> Option<Secret> {
-        // Senhas não são aparadas: espaço pode fazer parte delas.
+        // Passwords are not trimmed: spaces can be part of them.
         let v = self
             .lines
             .iter()
@@ -535,7 +602,7 @@ impl ItemEditor {
         (!v.is_empty()).then(|| Secret::new(v))
     }
 
-    /// O item como está no formulário.
+    /// The item as it is in the form.
     pub fn to_item(&self, cx: &App) -> Item {
         let mut item = self.base.clone();
         item.name = self.name.read(cx).value().trim().to_owned();
@@ -622,12 +689,12 @@ impl ItemEditor {
         }
         let item = self.to_item(cx);
         if item.organization_id.is_some() && item.collection_ids.is_empty() {
-            self.error = Some("Escolha pelo menos uma coleção da organização.".into());
+            self.error = Some(t!("editor.collection_required").into());
             cx.notify();
             return;
         }
         if item.name.is_empty() {
-            self.error = Some("Dê um nome ao item.".into());
+            self.error = Some(t!("editor.name_required").into());
             cx.notify();
             return;
         }
@@ -643,12 +710,12 @@ impl ItemEditor {
         }
     }
 
-    /// Arquivos que serão anexados ao salvar.
+    /// Files that will be attached on save.
     pub fn pending_files(&self) -> Vec<String> {
         self.files.iter().map(|f| f.name.clone()).collect()
     }
 
-    /// Lê os arquivos e põe na lista para anexar (erros viram toast).
+    /// Reads the files and puts them in the list to attach (errors become toasts).
     pub fn add_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
         for path in paths {
             if path.is_dir() {
@@ -667,7 +734,7 @@ impl ItemEditor {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Anexar".into()),
+            prompt: Some(t!("vault.attach_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = paths.await {
@@ -680,7 +747,7 @@ impl ItemEditor {
     fn render_files(&self, busy: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         let mut list = v_flex().gap_1p5();
-        // Os que já estão no item (gerenciados no detalhe).
+        // The ones already in the item (managed in the detail).
         for a in &self.base.attachments {
             list = list.child(
                 h_flex()
@@ -695,7 +762,7 @@ impl ItemEditor {
                             .truncate()
                             .child(a.file_name.clone()),
                     )
-                    .child(div().text_xs().child("já anexado")),
+                    .child(div().text_xs().child(t!("editor.already_attached"))),
             );
         }
         for (ix, f) in self.files.iter().enumerate() {
@@ -726,7 +793,7 @@ impl ItemEditor {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
-                            .tooltip("Tirar da lista")
+                            .tooltip(t!("editor.remove_from_list"))
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if ix < this.files.len() {
@@ -753,8 +820,13 @@ impl ItemEditor {
     }
 
     fn add_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.uris
-            .push(input_with(window, cx, None, false, URI_PLACEHOLDER));
+        self.uris.push(input_with(
+            window,
+            cx,
+            None,
+            false,
+            t!("editor.uri_placeholder"),
+        ));
         cx.notify();
     }
 
@@ -765,13 +837,17 @@ impl ItemEditor {
             } else {
                 FieldKind::Text
             },
-            name: input_with(window, cx, None, false, FIELD_NAME_PLACEHOLDER),
+            name: input_with(window, cx, None, false, t!("editor.field_name_placeholder")),
             value: input_with(
                 window,
                 cx,
                 None,
                 hidden,
-                if hidden { "Valor oculto" } else { "Valor" },
+                if hidden {
+                    t!("editor.hidden_value")
+                } else {
+                    t!("editor.value")
+                },
             ),
         });
         cx.notify();
@@ -783,14 +859,14 @@ impl ItemEditor {
             .child(
                 div()
                     .text_sm()
-                    .font_medium()
+                    .font_semibold()
                     .text_color(cx.theme().foreground.opacity(0.8))
                     .child(label),
             )
             .child(control)
     }
 
-    /// Campo de uma linha do formulário (com o botão de gerar, na senha).
+    /// Single-line form field (with the generate button, for the password).
     fn render_line(&self, line: &Line, busy: bool, cx: &mut Context<Self>) -> Div {
         let mut control = h_flex().gap_1().child(
             div().flex_1().min_w_0().child(
@@ -806,7 +882,7 @@ impl ItemEditor {
                     .ghost()
                     .small()
                     .icon(IconName::Dices)
-                    .tooltip("Gerar senha")
+                    .tooltip(t!("editor.generate_password"))
                     .disabled(busy)
                     .on_click(
                         cx.listener(|this, _, window, cx| this.generate_password(window, cx)),
@@ -816,7 +892,7 @@ impl ItemEditor {
         Self::labeled(line.label, control, cx)
     }
 
-    /// Organização escolhida para o item (para os testes).
+    /// Organization chosen for the item (for tests).
     pub fn owner(&self) -> Option<&str> {
         self.owner.as_deref()
     }
@@ -825,8 +901,8 @@ impl ItemEditor {
         &self.collection_ids
     }
 
-    /// Escolhe o dono de um item novo: o cofre pessoal ou uma organização
-    /// (já com a primeira coleção em que dá para escrever).
+    /// Chooses the owner of a new item: the personal vault or an organization
+    /// (already with the first collection that can be written to).
     pub fn set_owner(&mut self, org: Option<String>, cx: &mut Context<Self>) {
         if !self.is_new {
             return;
@@ -853,7 +929,7 @@ impl ItemEditor {
         cx.notify();
     }
 
-    /// Botão-etiqueta que acende quando escolhido.
+    /// Tag button that lights up when chosen.
     fn chip(
         id: SharedString,
         label: String,
@@ -904,7 +980,7 @@ impl ItemEditor {
             )
     }
 
-    /// Dono (cofre pessoal ou organização) e coleções do item.
+    /// Owner (personal vault or organization) and collections of the item.
     fn render_owner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let orgs: Vec<(String, String)> = self
             .places
@@ -922,7 +998,7 @@ impl ItemEditor {
         if self.is_new {
             let mut row = h_flex().flex_wrap().gap_2().child(Self::chip(
                 "editor-owner-personal".into(),
-                "Meu cofre".into(),
+                t!("editor.my_vault").into(),
                 self.owner.is_none(),
                 false,
                 |this, cx| this.set_owner(None, cx),
@@ -969,7 +1045,7 @@ impl ItemEditor {
                 .filter(|c| c.organization_id == org)
             {
                 let selected = self.collection_ids.contains(&c.id);
-                // Só leitura: mostra se o item já está nela, mas não deixa mexer.
+                // Read-only: shows whether the item is already in it, but doesn't allow changes.
                 if c.read_only && !selected {
                     continue;
                 }
@@ -990,7 +1066,7 @@ impl ItemEditor {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Coleções (quem tem acesso a elas vê o item)"),
+                            .child(t!("editor.collections")),
                     )
                     .child(cols),
             );
@@ -1044,7 +1120,7 @@ impl ItemEditor {
         let mut row = h_flex().flex_wrap().gap_2();
         row = row.child(chip(
             "editor-folder-none".into(),
-            "Sem pasta".into(),
+            t!("vault.no_folder").into(),
             None,
             self.folder_id.is_none(),
             cx,
@@ -1096,13 +1172,13 @@ impl Render for ItemEditor {
         });
 
         form = form.child(Self::labeled(
-            "Nome",
+            t!("editor.item_name_label"),
             Input::new(&self.name).id("editor-name").disabled(busy),
             cx,
         ));
-        // Dono logo abaixo do nome: define quem vê o item.
+        // Owner right below the name: defines who sees the item.
         if let Some(owner) = self.render_owner(cx) {
-            form = form.child(Self::labeled("Dono", owner, cx));
+            form = form.child(Self::labeled(t!("editor.owner"), owner, cx));
         }
 
         let rows = layout(&self.base.kind);
@@ -1122,7 +1198,7 @@ impl Render for ItemEditor {
             }
             form = form.child(line_row);
         }
-        // Algum campo sem lugar no layout ainda aparece, numa linha só dele.
+        // A field with no place in the layout still shows up, on a row of its own.
         for line in &self.lines {
             if !placed.contains(&line.key) {
                 form = form.child(self.render_line(line, busy, cx));
@@ -1149,7 +1225,7 @@ impl Render for ItemEditor {
                                     .ghost()
                                     .small()
                                     .icon(IconName::Close)
-                                    .tooltip("Remover endereço")
+                                    .tooltip(t!("editor.remove_uri"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if ix < this.uris.len() {
                                             this.uris.remove(ix);
@@ -1165,22 +1241,22 @@ impl Render for ItemEditor {
                     .ghost()
                     .small()
                     .icon(IconName::Plus)
-                    .label("Adicionar endereço")
+                    .label(t!("editor.add_uri"))
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| this.add_uri(window, cx))),
             );
-            form = form.child(Self::labeled("Sites (https://…)", list, cx));
+            form = form.child(Self::labeled(t!("editor.sites"), list, cx));
         }
 
         if let Some(private) = &self.ssh_private {
             form = form.child(Self::labeled(
-                "Chave privada",
+                t!("field.private_key"),
                 Textarea::new(private).disabled(busy),
                 cx,
             ));
         }
 
-        // Campos personalizados.
+        // Custom fields.
         let mut custom = v_flex().gap_2();
         for (ix, f) in self.fields.iter().enumerate() {
             custom = custom.child(
@@ -1206,7 +1282,7 @@ impl Render for ItemEditor {
                             .ghost()
                             .small()
                             .icon(IconName::Close)
-                            .tooltip("Remover campo")
+                            .tooltip(t!("editor.remove_field"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if ix < this.fields.len() {
                                     this.fields.remove(ix);
@@ -1224,7 +1300,7 @@ impl Render for ItemEditor {
                         .ghost()
                         .small()
                         .icon(IconName::Plus)
-                        .label("Campo de texto")
+                        .label(t!("editor.text_field"))
                         .disabled(busy)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.add_field(false, window, cx)),
@@ -1235,7 +1311,7 @@ impl Render for ItemEditor {
                         .ghost()
                         .small()
                         .icon(IconName::EyeOff)
-                        .label("Campo oculto")
+                        .label(t!("editor.hidden_field"))
                         .disabled(busy)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.add_field(true, window, cx)),
@@ -1243,20 +1319,28 @@ impl Render for ItemEditor {
                 ),
         );
         form = form
-            .child(Self::labeled("Campos personalizados", custom, cx))
+            .child(Self::labeled(t!("editor.custom_fields"), custom, cx))
             .child(Self::labeled(
-                "Notas",
+                t!("field.notes"),
                 Textarea::new(&self.notes).disabled(busy),
                 cx,
             ))
-            .child(Self::labeled("Anexos", self.render_files(busy, cx), cx))
-            .child(Self::labeled("Pasta", self.render_folders(cx), cx))
+            .child(Self::labeled(
+                t!("editor.attachments"),
+                self.render_files(busy, cx),
+                cx,
+            ))
+            .child(Self::labeled(
+                t!("editor.folder"),
+                self.render_folders(cx),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_6()
                     .child(
                         Checkbox::new("editor-favorite")
-                            .label("Favorito")
+                            .label(t!("editor.favorite"))
                             .checked(self.favorite)
                             .disabled(busy)
                             .on_change(cx.listener(|this, v: &bool, _, cx| {
@@ -1266,7 +1350,7 @@ impl Render for ItemEditor {
                     )
                     .child(
                         Checkbox::new("editor-reprompt")
-                            .label("Pedir a senha mestra")
+                            .label(t!("editor.reprompt"))
                             .checked(self.reprompt)
                             .disabled(busy)
                             .on_change(
@@ -1276,11 +1360,11 @@ impl Render for ItemEditor {
             );
 
         let title = if self.is_new {
-            "Novo item"
+            t!("editor.new_item")
         } else {
-            "Editar item"
+            t!("editor.edit_item")
         };
-        // Barra fixa no topo: título, erro e os botões sempre visíveis.
+        // Bar fixed at the top: title, error and the buttons always visible.
         let bar = h_flex()
             .gap_2()
             .items_center()
@@ -1288,8 +1372,8 @@ impl Render for ItemEditor {
             .py_3()
             .border_b_1()
             .border_color(cx.theme().border)
-            // Item novo: o seletor de tipo fica centralizado no espaço livre da
-            // barra (entre a borda e os botões). Edição: título à esquerda.
+            // New item: the type picker is centered in the bar's free space
+            // (between the edge and the buttons). Edit: title on the left.
             .map(|bar| match kind_selector {
                 Some(selector) => bar
                     .child(div().flex_1())
@@ -1303,7 +1387,7 @@ impl Render for ItemEditor {
                 Button::new("editor-cancel")
                     .ghost()
                     .small()
-                    .label("Cancelar")
+                    .label(t!("common.cancel"))
                     .disabled(busy)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(EditorEvent::Cancel))),
             )
@@ -1311,12 +1395,16 @@ impl Render for ItemEditor {
                 Button::new("editor-save")
                     .primary()
                     .small()
-                    .label(if busy { "Salvando…" } else { "Salvar" })
+                    .label(if busy {
+                        t!("editor.saving")
+                    } else {
+                        t!("common.save")
+                    })
                     .loading(busy)
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
             );
-        // Erro logo abaixo da barra, onde há espaço para a frase inteira.
+        // Error right below the bar, where there is room for the whole sentence.
         let status = div()
             .id("editor-status")
             .test_support()

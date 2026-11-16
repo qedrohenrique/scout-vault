@@ -1,8 +1,8 @@
-//! Ponte entre o executor do GPUI e o Tokio.
+//! Bridge between the GPUI executor and Tokio.
 //!
-//! O `reqwest` precisa de um runtime Tokio; a UI roda no executor do GPUI.
-//! `run` agenda o futuro no Tokio e devolve o `JoinHandle`, que pode ser
-//! aguardado de dentro de um `cx.spawn` como qualquer outro futuro.
+//! `reqwest` needs a Tokio runtime; the UI runs on the GPUI executor.
+//! `run` schedules the future on Tokio and returns the `JoinHandle`, which can be
+//! awaited from inside a `cx.spawn` like any other future.
 
 use std::future::Future;
 use std::sync::OnceLock;
@@ -19,7 +19,7 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// Executa `fut` no runtime de rede e espera o resultado.
+/// Runs `fut` on the network runtime and waits for the result.
 pub async fn run<F>(fut: F) -> F::Output
 where
     F: Future + Send + 'static,
@@ -31,7 +31,7 @@ where
     }
 }
 
-/// Tarefa de fundo que para quando o valor é solto.
+/// Background task that stops when the value is dropped.
 pub struct Background(tokio::task::JoinHandle<()>);
 
 impl Drop for Background {
@@ -40,7 +40,7 @@ impl Drop for Background {
     }
 }
 
-/// Roda `fut` no runtime de rede até terminar ou o [`Background`] ser solto.
+/// Runs `fut` on the network runtime until it finishes or the [`Background`] is dropped.
 pub fn spawn<F>(fut: F) -> Background
 where
     F: Future<Output = ()> + Send + 'static,
@@ -48,7 +48,7 @@ where
     Background(runtime().spawn(fut))
 }
 
-/// Executa trabalho de CPU pesado (KDF, decifrar o cofre) fora da thread de UI.
+/// Runs heavy CPU work (KDF, decrypting the vault) off the UI thread.
 pub async fn blocking<F, T>(f: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,

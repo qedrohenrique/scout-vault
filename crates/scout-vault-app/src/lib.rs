@@ -1,14 +1,19 @@
-//! Interface desktop do Scout Vault.
+//! Scout Vault desktop interface.
 //!
-//! - [`app`]        — raiz da janela, troca de telas e bloqueio automático
-//! - [`login`]      — servidor, e-mail, senha, 2FA, verificação de dispositivo
-//! - [`unlock`]     — desbloqueio offline com a senha mestra
-//! - [`vault_view`] — filtros, lista, detalhe, copiar/revelar
-//! - [`item_list`]  — dados da lista: filtro e busca
-//! - [`flow`]       — fluxos de login/sync sem UI
-//! - [`settings`]   — preferências não sensíveis em disco
-//! - [`settings_view`] — tela de configurações (aparência)
-//! - [`appearance`] — temas claro/escuro, cor de destaque, texto e cantos
+//! - [`app`]        — window root, screen switching and automatic lock
+//! - [`login`]      — server, email, password, 2FA, device verification
+//! - [`unlock`]     — offline unlock with the master password
+//! - [`vault_view`] — filters, list, detail, copy/reveal
+//! - [`item_list`]  — list data: filtering and search
+//! - [`flow`]       — login/sync flows without UI
+//! - [`settings`]   — non-sensitive preferences on disk
+//! - [`settings_view`] — settings screen (appearance)
+//! - [`appearance`] — light/dark themes, accent color, text and corners
+//! - [`i18n`]       — interface languages (`t!("key")`, catalogs in `locales/`)
+
+// First: makes the `t!` macro visible in the modules below.
+#[macro_use]
+pub mod i18n;
 
 pub mod app;
 pub mod appearance;
@@ -22,9 +27,11 @@ pub mod clipboard;
 pub mod dnd;
 pub mod flow;
 pub mod generator_view;
+pub mod health_view;
 pub mod hello;
 mod io;
 pub mod item_editor;
+pub mod item_icons;
 pub mod item_list;
 pub mod login;
 pub mod motion;
@@ -47,9 +54,9 @@ pub mod windows_events;
 
 use gpui_kit::*;
 
-/// Abre a janela principal.
+/// Opens the main window.
 pub fn run() {
-    // Já está rodando (talvez escondido na bandeja)? Só pede para aparecer.
+    // Already running (maybe hidden in the tray)? Just ask it to show up.
     if tray::wake_existing_instance() {
         return;
     }
@@ -57,19 +64,21 @@ pub fn run() {
         .with_assets(assets::AppAssets)
         .run(|cx| {
             gpui_kit::init(cx);
-            // Textos internos dos componentes (busca, menus) em português.
-            gpui_kit::component::set_locale("pt-BR");
-            // Senhas copiadas ficam fora do histórico (Win+V) e da nuvem.
+            // Language chosen in Settings or, by default, the Windows one
+            // (also applies to the components' internal texts).
+            let language = settings::SettingsStore::default_location().load().language;
+            i18n::set(i18n::Language::from_setting(&language));
+            // Copied passwords stay out of the history (Win+V) and the cloud.
             clipboard::use_native_clipboard();
-            // Sobras de anexos abertos numa execução anterior (ex.: o app caiu).
+            // Leftovers of attachments opened in a previous run (e.g. the app crashed).
             attachments::cleanup_temp();
             attachments::enable_system_open();
             browser::enable_system();
-            // Atalho global de preenchimento em outros apps (Ctrl+Alt+A).
+            // Global shortcut for filling in other apps (Ctrl+Alt+A).
             autotype::enable_system_hotkey();
-            // Fechar a janela deixa o app na bandeja do Windows.
+            // Closing the window leaves the app in the Windows tray.
             tray::enable_system();
-            // Desbloquear com Windows Hello (se configurado no Windows).
+            // Unlock with Windows Hello (if set up in Windows).
             hello::install_system(cx);
             let options = WindowOptions {
                 titlebar: Some(TitlebarOptions {

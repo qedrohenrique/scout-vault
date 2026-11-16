@@ -1,11 +1,11 @@
-"""Gera um cofre sintético para testar o `scout-vault-core` contra uma implementação
-independente (biblioteca `cryptography` do Python), sem servidor nem conta real.
+"""Generates a synthetic vault to test `scout-vault-core` against an independent
+implementation (Python's `cryptography` library), with no server or real account.
 
-Uso:  python tools/gen_fixtures.py
-Saída: crates/scout-vault-core/tests/fixtures/{sync.json,vectors.json}
+Usage:  python tools/gen_fixtures.py
+Output: crates/scout-vault-core/tests/fixtures/{sync.json,vectors.json}
 
-Os IVs e chaves são aleatórios a cada execução; os textos claros e as
-expectativas do teste Rust (crates/scout-vault-core/tests/fixtures.rs) não mudam.
+IVs and keys are random on each run; the plaintexts and the expectations of the
+Rust test (crates/scout-vault-core/tests/fixtures.rs) don't change.
 """
 
 import base64
@@ -24,9 +24,9 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 
 OUT = Path(__file__).resolve().parent.parent / "crates" / "scout-vault-core" / "tests" / "fixtures"
 
-EMAIL = "  Pessoa.Teste@Example.COM "  # o cliente deve aparar e pôr em minúsculas
+EMAIL = "  Pessoa.Teste@Example.COM "  # the client must trim and lowercase it
 PASSWORD = "cavalo correto bateria grampo ção 🔐"
-PBKDF2_ITERATIONS = 5000  # baixo de propósito: o teste roda em debug
+PBKDF2_ITERATIONS = 5000  # low on purpose: the test runs in debug
 ARGON = dict(iterations=3, memory_mib=16, parallelism=2)
 
 
@@ -124,7 +124,7 @@ def main() -> None:
             {"id": "col-ro", "organizationId": "org-1", "name": o("Só leitura"), "readOnly": True},
         ],
         "ciphers": [
-            # Em PascalCase, como o servidor oficial antigo responde.
+            # In PascalCase, as the old official server responds.
             {
                 "Id": "login-1",
                 "Type": 1,
@@ -146,7 +146,7 @@ def main() -> None:
             {
                 "id": "login-item-key",
                 "type": 1,
-                "reprompt": 1,  # pede a senha mestra
+                "reprompt": 1,  # asks for the master password
                 "name": i("Com chave própria"),
                 "key": u(item_key),
                 "login": {"username": None, "password": i("item-key-pw"), "uris": None},
@@ -207,7 +207,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "sync.json").write_text(json.dumps(sync, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (OUT / "vectors.json").write_text(json.dumps(vectors, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"fixtures escritas em {OUT}")
+    print(f"fixtures written to {OUT}")
 
 
 if __name__ == "__main__":

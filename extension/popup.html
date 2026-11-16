@@ -11,9 +11,17 @@
       <span id="site" class="site"></span>
     </header>
     <main>
-      <p id="message" class="message">Procurando logins…</p>
+      <p id="message" class="message" data-i18n="searching"></p>
       <ul id="items" class="items"></ul>
     </main>
+    <footer>
+      <label class="toggle">
+        <input id="inline-menu" type="checkbox" />
+        <span data-i18n="popupInlineToggle"></span>
+        <span class="hint">Alt+Shift+L</span>
+      </label>
+      <button id="inline-site" class="link" data-i18n="popupInlineSite" hidden></button>
+    </footer>
     <script src="fill.js"></script>
     <script src="popup.js"></script>
   </body>

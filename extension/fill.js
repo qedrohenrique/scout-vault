@@ -1,7 +1,9 @@
-// Preenche usuário e senha na página. Injetada pelo popup com
+// Fills username and password on the page. Injected by the popup with
 // chrome.scripting.executeScript({ func: scoutVaultFillPage, args: [...] }):
-// precisa ser autocontida (o navegador serializa só o corpo da função).
-function scoutVaultFillPage(username, password) {
+// it must be self-contained (the browser serializes only the function body).
+// The inline menu (inline.js) passes `anchor`, the field the person clicked: then
+// that field's form applies, not the first one on the page.
+function scoutVaultFillPage(username, password, anchor) {
   const visible = (el) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
@@ -22,15 +24,24 @@ function scoutVaultFillPage(username, password) {
   const auto = (i) => (i.getAttribute("autocomplete") || "").toLowerCase();
   const set = (el, value) => {
     el.focus();
-    // O setter nativo dispara o que frameworks (React, Vue) observam.
+    // The native setter triggers what frameworks (React, Vue) observe.
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
     setter.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
-  const inputs = [...document.querySelectorAll("input")].filter(visible);
-  const password_field = inputs.find((i) => i.type === "password") || null;
+  const root = (anchor && anchor.form) || document;
+  let inputs = [...root.querySelectorAll("input")].filter(visible);
+  if (!inputs.some((i) => i.type === "password") && root !== document && anchor.type !== "password") {
+    // Form with only the username (two-step login) and the password outside it: the whole page.
+    const all = [...document.querySelectorAll("input")].filter(visible);
+    if (all.some((i) => i.type === "password")) inputs = all;
+  }
+  const password_field =
+    (anchor && anchor.type === "password" && visible(anchor) ? anchor : null) ||
+    inputs.find((i) => i.type === "password") ||
+    null;
   let user_field = null;
   if (password_field) {
     const scope = password_field.form
@@ -41,8 +52,11 @@ function scoutVaultFillPage(username, password) {
       scope.find((i) => /username|email/.test(auto(i)) && isUserLike(i)) ||
       before[before.length - 1] ||
       null;
+  } else if (anchor && isUserLike(anchor) && visible(anchor)) {
+    // Two-step login, starting from the chosen field.
+    user_field = anchor;
   } else {
-    // Login em duas etapas: só o usuário nesta página.
+    // Two-step login: only the username on this page.
     user_field =
       inputs.find((i) => /username|email/.test(auto(i))) ||
       inputs.find((i) => isUserLike(i) && /user|email|login|mail|cpf/i.test(describe(i))) ||

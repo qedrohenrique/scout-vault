@@ -1,4 +1,4 @@
-//! Gerador de senhas com aleatoriedade do sistema (`getrandom`), sem viés de módulo.
+//! Password generator using system randomness (`getrandom`), without modulo bias.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -9,9 +9,9 @@ pub const MAX_LENGTH: usize = 128;
 const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
 const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGITS: &str = "0123456789";
-/// Mesmo conjunto de símbolos do gerador do Bitwarden.
+/// Same symbol set as Bitwarden's generator.
 const SYMBOLS: &str = "!@#$%^&*";
-/// Caracteres que se confundem na leitura: `I l 1 O 0`.
+/// Characters that are easy to confuse when reading: `I l 1 O 0`.
 const AMBIGUOUS: &str = "Il1O0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,8 +39,8 @@ impl Default for PasswordOptions {
 }
 
 impl PasswordOptions {
-    /// Conjuntos ativos, já sem os ambíguos se pedido. Se nenhum estiver
-    /// marcado, usa minúsculas (nunca gera senha vazia).
+    /// Active sets, already without the ambiguous ones if asked. If none is
+    /// checked, uses lowercase (never generates an empty password).
     fn sets(&self) -> Vec<Vec<char>> {
         let mut sets: Vec<&str> = Vec::new();
         if self.lowercase {
@@ -67,7 +67,7 @@ impl PasswordOptions {
             .collect()
     }
 
-    /// Entropia aproximada em bits (`comprimento × log2(alfabeto)`).
+    /// Approximate entropy in bits (`length × log2(alphabet)`).
     pub fn entropy_bits(&self) -> f64 {
         let alphabet: usize = self.sets().iter().map(Vec::len).sum();
         self.clamped_length() as f64 * (alphabet as f64).log2()
@@ -78,7 +78,7 @@ impl PasswordOptions {
     }
 }
 
-/// Número uniforme em `0..n` (rejeição: sem viés de módulo).
+/// Uniform number in `0..n` (rejection sampling: no modulo bias).
 fn uniform(n: usize) -> usize {
     assert!(n > 0 && n <= u32::MAX as usize);
     let n = n as u32;
@@ -93,7 +93,7 @@ fn uniform(n: usize) -> usize {
     }
 }
 
-/// Gera uma senha com **pelo menos um caractere de cada conjunto marcado**.
+/// Generates a password with **at least one character from each checked set**.
 pub fn password(opts: &PasswordOptions) -> Zeroizing<String> {
     let sets = opts.sets();
     let length = opts.clamped_length().max(sets.len());
@@ -106,14 +106,14 @@ pub fn password(opts: &PasswordOptions) -> Zeroizing<String> {
     while chars.len() < length {
         chars.push(all[uniform(all.len())]);
     }
-    // Fisher–Yates: os obrigatórios não ficam sempre no começo.
+    // Fisher–Yates: the required ones don't always end up at the start.
     for i in (1..chars.len()).rev() {
         chars.swap(i, uniform(i + 1));
     }
     Zeroizing::new(chars.iter().collect())
 }
 
-/// Força em palavras, a partir da entropia.
+/// Strength in words, from the entropy.
 pub fn strength_label(bits: f64) -> &'static str {
     match bits {
         b if b < 40.0 => "Fraca",
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn distribution_is_roughly_uniform() {
-        // 10 dígitos × 20 000 sorteios: cada um deve sair ~2000 vezes.
+        // 10 digits × 20,000 draws: each should come up ~2000 times.
         let mut counts = [0usize; 10];
         for _ in 0..20_000 {
             counts[uniform(10)] += 1;
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn entropy_and_label() {
         let opts = PasswordOptions::default();
-        // 70 símbolos (26+26+10+8) × 20 ≈ 122 bits.
+        // 70 symbols (26+26+10+8) × 20 ≈ 122 bits.
         assert!((opts.entropy_bits() - 20.0 * 70f64.log2()).abs() < 1e-9);
         assert_eq!(strength_label(opts.entropy_bits()), "Muito forte");
         assert_eq!(strength_label(30.0), "Fraca");

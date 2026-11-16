@@ -1,9 +1,9 @@
-//! Códigos TOTP (RFC 6238) a partir da chave guardada no item.
+//! TOTP codes (RFC 6238) from the key stored in the item.
 //!
-//! Aceita os mesmos formatos que o Bitwarden guarda no campo `totp`:
-//! - a chave em base32 pura (`JBSW Y3DP …`, com ou sem espaços/padding);
-//! - uma URI `otpauth://totp/…?secret=…&algorithm=…&digits=…&period=…`;
-//! - `steam://<chave>` — códigos de 5 caracteres do Steam Guard.
+//! Accepts the same formats Bitwarden stores in the `totp` field:
+//! - the plain base32 key (`JBSW Y3DP …`, with or without spaces/padding);
+//! - an `otpauth://totp/…?secret=…&algorithm=…&digits=…&period=…` URI;
+//! - `steam://<key>` — Steam Guard 5-character codes.
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
@@ -17,7 +17,7 @@ pub enum Algorithm {
     Sha512,
 }
 
-/// Parâmetros de um gerador TOTP. A chave fica zerada ao sair da memória.
+/// Parameters of a TOTP generator. The key is zeroed when it leaves memory.
 pub struct Totp {
     key: Zeroizing<Vec<u8>>,
     pub algorithm: Algorithm,
@@ -37,7 +37,7 @@ impl std::fmt::Debug for Totp {
     }
 }
 
-/// Um código e quantos segundos ele ainda vale.
+/// A code and how many seconds it is still valid for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Code {
     pub code: String,
@@ -48,7 +48,7 @@ pub struct Code {
 const STEAM_CHARS: &[u8] = b"23456789BCDFGHJKMNPQRTVWXY";
 
 impl Totp {
-    /// Lê o campo `totp` do item. `None` se não for uma chave válida.
+    /// Reads the item's `totp` field. `None` if it isn't a valid key.
     pub fn parse(input: &str) -> Option<Self> {
         let input = input.trim();
         let lower = input.to_ascii_lowercase();
@@ -94,7 +94,7 @@ impl Totp {
                 }
                 "digits" => digits = v.parse().ok().filter(|d| (1..=10).contains(d))?,
                 "period" => period = v.parse().ok().filter(|p| *p > 0)?,
-                // Variante usada por alguns exportadores para Steam Guard.
+                // Variant used by some exporters for Steam Guard.
                 "encoder" if v.eq_ignore_ascii_case("steam") => steam = true,
                 _ => {}
             }
@@ -111,7 +111,7 @@ impl Totp {
         })
     }
 
-    /// Código para o instante `unix_secs`.
+    /// Code for the instant `unix_secs`.
     pub fn at(&self, unix_secs: u64) -> Code {
         let counter = unix_secs / self.period;
         let hash = self.hmac(&counter.to_be_bytes());
@@ -146,7 +146,7 @@ impl Totp {
         }
     }
 
-    /// Código para agora.
+    /// Code for now.
     pub fn now(&self) -> Code {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -172,7 +172,7 @@ impl Totp {
     }
 }
 
-/// Mostra o código em dois grupos (`123 456`), como os apps autenticadores.
+/// Shows the code in two groups (`123 456`), like authenticator apps.
 pub fn group(code: &str) -> String {
     if code.len() >= 6 && code.chars().all(|c| c.is_ascii_digit()) {
         let mid = code.len() / 2;
@@ -182,7 +182,7 @@ pub fn group(code: &str) -> String {
     }
 }
 
-/// Base32 (RFC 4648), tolerante a espaços, hífens, minúsculas e padding.
+/// Base32 (RFC 4648), tolerant of spaces, hyphens, lowercase and padding.
 fn base32_decode(input: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(input.len() * 5 / 8);
     let (mut buffer, mut bits) = (0u32, 0u32);
@@ -253,7 +253,7 @@ mod tests {
         out
     }
 
-    /// Vetores do apêndice B da RFC 6238 (8 dígitos).
+    /// Vectors from RFC 6238 appendix B (8 digits).
     #[test]
     fn rfc6238_vectors() {
         let cases = [
@@ -312,7 +312,7 @@ mod tests {
             .join(" ");
         let totp = Totp::parse(&spaced).unwrap();
         assert_eq!(totp.digits, 6);
-        // Os 6 últimos dígitos do vetor de 8 da RFC.
+        // The last 6 digits of the RFC's 8-digit vector.
         assert_eq!(totp.at(59).code, "287082");
         assert_eq!(totp.at(59).remaining, 1);
         assert_eq!(totp.at(60).remaining, 30);

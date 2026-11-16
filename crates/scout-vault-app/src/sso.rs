@@ -1,12 +1,12 @@
-//! Login por SSO da empresa, no mesmo caminho do CLI oficial do Bitwarden:
+//! Company SSO login, following the same path as Bitwarden's official CLI:
 //!
-//! 1. Abre o cofre web em `<vault>/#/sso?clientId=cli&redirectUri=…&state=…&codeChallenge=…&identifier=…`.
-//! 2. A empresa autentica a pessoa no navegador e o servidor redireciona para
-//!    `http://localhost:<8065..8070>/?code=…&state=…` — só essas portas são aceitas
-//!    pelo servidor para o cliente `cli`.
-//! 3. Um servidor HTTP mínimo aqui recebe o código, confere o `state` e responde
-//!    uma página dizendo para voltar ao Scout Vault.
-//! 4. O código é trocado por tokens (`grant_type=authorization_code`, PKCE S256).
+//! 1. Opens the web vault at `<vault>/#/sso?clientId=cli&redirectUri=…&state=…&codeChallenge=…&identifier=…`.
+//! 2. The company authenticates the person in the browser and the server redirects to
+//!    `http://localhost:<8065..8070>/?code=…&state=…` — only these ports are accepted
+//!    by the server for the `cli` client.
+//! 3. A minimal HTTP server here receives the code, checks the `state` and answers with
+//!    a page saying to go back to Scout Vault.
+//! 4. The code is exchanged for tokens (`grant_type=authorization_code`, PKCE S256).
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -17,29 +17,29 @@ use base64::Engine as _;
 use scout_vault_core::api::SsoCode;
 use sha2::{Digest, Sha256};
 
-/// Portas registradas no servidor para o cliente `cli`.
+/// Ports registered on the server for the `cli` client.
 pub const PORTS: std::ops::RangeInclusive<u16> = 8065..=8070;
-/// Quanto esperar a pessoa terminar o login no navegador.
+/// How long to wait for the person to finish logging in in the browser.
 pub const TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-/// 64 caracteres alfanuméricos aleatórios (verificador PKCE e `state`).
+/// 64 random alphanumeric characters (PKCE verifier and `state`).
 pub fn random_token() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut bytes = [0u8; 64];
     getrandom::fill(&mut bytes).expect("RNG do sistema");
-    // 256 não é múltiplo de 62, mas o viés residual é irrelevante para um token de 64 chars.
+    // 256 isn't a multiple of 62, but the residual bias is irrelevant for a 64-char token.
     bytes
         .iter()
         .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
         .collect()
 }
 
-/// `code_challenge` do PKCE (S256): base64url sem padding do SHA-256 do verificador.
+/// PKCE `code_challenge` (S256): unpadded base64url of the verifier's SHA-256.
 pub fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-/// Codificação percentual para valores de query string.
+/// Percent-encoding for query string values.
 pub fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -73,7 +73,7 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Valor de um parâmetro da query string (`a=1&b=2`).
+/// Value of a query string parameter (`a=1&b=2`).
 pub fn query_param(query: &str, name: &str) -> Option<String> {
     query.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
@@ -98,17 +98,17 @@ pub fn sso_url(
     )
 }
 
-/// Primeira porta livre entre 8065 e 8070.
+/// First free port between 8065 and 8070.
 pub fn bind() -> Result<(TcpListener, u16), String> {
     for port in PORTS {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
             return Ok((listener, port));
         }
     }
-    Err("As portas 8065 a 8070 estão ocupadas (outro app de Bitwarden aberto?). Feche-o e tente de novo.".into())
+    Err(t!("sso.ports_busy").into())
 }
 
-/// Abre um endereço no navegador padrão.
+/// Opens an address in the default browser.
 pub fn open_browser(url: &str) -> Result<(), String> {
     #[cfg(windows)]
     let result = std::process::Command::new("rundll32")
@@ -120,15 +120,15 @@ pub fn open_browser(url: &str) -> Result<(), String> {
     let result = std::process::Command::new("xdg-open").arg(url).spawn();
     result
         .map(|_| ())
-        .map_err(|e| format!("Não foi possível abrir o navegador: {e}"))
+        .map_err(|e| t!("sso.browser_failed", e = e))
 }
 
-const PAGE_OK: &str = "<!doctype html><meta charset=utf-8><title>Scout Vault</title>\
-<body style=\"font-family:system-ui;padding:3em;text-align:center\">\
-<h2>Login concluído</h2><p>Pode fechar esta aba e voltar ao Scout Vault.</p>";
-const PAGE_FAIL: &str = "<!doctype html><meta charset=utf-8><title>Scout Vault</title>\
-<body style=\"font-family:system-ui;padding:3em;text-align:center\">\
-<h2>Não deu certo</h2><p>Volte ao Scout Vault e tente de novo.</p>";
+/// Simple page shown in the browser tab at the end of SSO.
+fn page(title: &str, body: &str) -> String {
+    format!(
+        "<!doctype html><meta charset=utf-8><title>Scout Vault</title><body style=\"font-family:system-ui;padding:3em;text-align:center\"><h2>{title}</h2><p>{body}</p>"
+    )
+}
 
 fn respond(mut stream: TcpStream, status: &str, body: &str) {
     let _ = write!(
@@ -138,8 +138,8 @@ fn respond(mut stream: TcpStream, status: &str, body: &str) {
     );
 }
 
-/// Espera o redirecionamento do navegador com `code` e `state`. O `state` que
-/// volta pode trazer `_identifier=<org>` no fim; só a parte antes conta.
+/// Waits for the browser redirect with `code` and `state`. The `state` that
+/// comes back may carry `_identifier=<org>` at the end; only the part before it counts.
 pub fn wait_for_code(
     listener: &TcpListener,
     state: &str,
@@ -158,7 +158,7 @@ pub fn wait_for_code(
                 // "GET /?code=…&state=… HTTP/1.1"
                 let target = request.split_whitespace().nth(1).unwrap_or("");
                 let Some((_, query)) = target.split_once('?') else {
-                    // Pedidos sem query (ex.: favicon) não contam.
+                    // Requests without a query (e.g. favicon) don't count.
                     respond(stream, "404 Not Found", "");
                     continue;
                 };
@@ -170,18 +170,26 @@ pub fn wait_for_code(
                     .unwrap_or(false);
                 return match (code, state_ok) {
                     (Some(code), true) => {
-                        respond(stream, "200 OK", PAGE_OK);
+                        respond(
+                            stream,
+                            "200 OK",
+                            &page(t!("sso.page_ok_title"), t!("sso.page_ok_body")),
+                        );
                         Ok(code)
                     }
                     _ => {
-                        respond(stream, "400 Bad Request", PAGE_FAIL);
-                        Err("O retorno do login por SSO não confere. Tente de novo.".into())
+                        respond(
+                            stream,
+                            "400 Bad Request",
+                            &page(t!("sso.page_fail_title"), t!("sso.page_fail_body")),
+                        );
+                        Err(t!("sso.mismatch").into())
                     }
                 };
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err("O login por SSO não foi concluído a tempo.".into());
+                    return Err(t!("sso.timeout").into());
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -190,8 +198,8 @@ pub fn wait_for_code(
     }
 }
 
-/// Faz a parte do navegador e devolve o código para trocar por tokens.
-/// Bloqueia até a pessoa terminar (ou [`TIMEOUT`]) — chame fora da thread de UI.
+/// Does the browser part and returns the code to exchange for tokens.
+/// Blocks until the person finishes (or [`TIMEOUT`]) — call it off the UI thread.
 pub fn authorize(vault: &str, identifier: &str) -> Result<SsoCode, String> {
     let (listener, port) = bind()?;
     let redirect_uri = format!("http://localhost:{port}");

@@ -1,4 +1,4 @@
-//! Escolha do login a digitar quando o título da janela não decide sozinho.
+//! Choosing the login to type when the window title doesn't decide on its own.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -17,9 +17,9 @@ pub enum AutoTypeEvent {
 
 pub struct AutoTypeView {
     request: Request,
-    /// Logins que podem ser digitados (cópia; sai da memória ao fechar).
+    /// Logins that can be typed (a copy; leaves memory on close).
     items: Vec<Item>,
-    /// Ids sugeridos pelo título da janela.
+    /// Ids suggested by the window title.
     suggested: Vec<String>,
     query: Entity<InputState>,
     _subscription: Subscription,
@@ -45,7 +45,8 @@ impl AutoTypeView {
             .into_iter()
             .map(|i| i.id.clone())
             .collect();
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Buscar login"));
+        let query =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("autotype.search_login")));
         let sub = cx.subscribe_in(
             &query,
             window,
@@ -72,7 +73,7 @@ impl AutoTypeView {
         &self.request
     }
 
-    /// O que a lista mostra: sugestões, ou a busca em todos os logins.
+    /// What the list shows: suggestions, or the search across all logins.
     pub fn shown(&self, cx: &App) -> Vec<&Item> {
         let q = self.query.read(cx).value().trim().to_lowercase();
         if q.is_empty() && !self.suggested.is_empty() {
@@ -103,7 +104,7 @@ impl AutoTypeView {
 
 impl Render for AutoTypeView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown: Vec<(String, String, Option<String>)> = self
+        let shown: Vec<(String, String, Option<String>, Div)> = self
             .shown(cx)
             .into_iter()
             .map(|i| {
@@ -111,13 +112,14 @@ impl Render for AutoTypeView {
                     ItemKind::Login(l) => l.username.clone(),
                     _ => None,
                 };
-                (i.id.clone(), i.name.clone(), user)
+                let chip = crate::item_icons::chip(i, px(28.), false, cx);
+                (i.id.clone(), i.name.clone(), user, chip)
             })
             .collect();
         let suggesting =
             self.query.read(cx).value().trim().is_empty() && !self.suggested.is_empty();
         let title = if self.request.title.trim().is_empty() {
-            "a janela em foco".to_owned()
+            t!("autotype.focused_window").to_owned()
         } else {
             format!("“{}”", self.request.title.trim())
         };
@@ -129,7 +131,7 @@ impl Render for AutoTypeView {
                 v_flex()
                     .min_w_0()
                     .gap_1()
-                    .child(div().text_2xl().font_semibold().child("Preencher em outro app"))
+                    .child(div().text_2xl().font_semibold().child(t!("autotype.title")))
                     .child(
                         div()
                             .id("autotype-target")
@@ -137,9 +139,7 @@ impl Render for AutoTypeView {
                             .aria_label(SharedString::from(title.clone()))
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "Escolha o login. O Scout Vault volta para {title} e digita usuário ⇥ senha."
-                            )),
+                            .child(t!("autotype.pick_hint", title = title)),
                     ),
             )
             .child(
@@ -147,51 +147,54 @@ impl Render for AutoTypeView {
                     .ghost()
                     .small()
                     .icon(IconName::Close)
-                    .tooltip("Cancelar (Esc)")
+                    .tooltip(t!("autotype.cancel_esc"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(AutoTypeEvent::Close))),
             );
 
         let count = shown.len();
-        let rows = shown.into_iter().enumerate().map(|(ix, (id, name, user))| {
-            let chosen = id.clone();
-            h_flex()
-                .id(SharedString::from(format!("autotype-pick-{id}")))
-                .test_support()
-                .role(Role::Button)
-                .aria_label(SharedString::from(name.clone()))
-                .gap_3()
-                .px_4()
-                .py_2p5()
-                .cursor_pointer()
-                .active(|el| el.opacity(0.7))
-                .hover(|el| el.bg(cx.theme().secondary_hover))
-                .when(ix + 1 < count, |el| {
-                    el.border_b_1().border_color(cx.theme().border)
-                })
-                .child(ui::icon_chip(IconName::Globe, px(28.), false, cx))
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .child(div().text_sm().font_medium().truncate().child(name))
-                        .children(user.map(|u| {
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(u)
-                        })),
-                )
-                .on_click(
-                    cx.listener(move |_, _, _, cx| cx.emit(AutoTypeEvent::Chosen(chosen.clone()))),
-                )
-        });
+        let rows = shown
+            .into_iter()
+            .enumerate()
+            .map(|(ix, (id, name, user, chip))| {
+                let chosen = id.clone();
+                h_flex()
+                    .id(SharedString::from(format!("autotype-pick-{id}")))
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(name.clone()))
+                    .gap_3()
+                    .px_4()
+                    .py_2p5()
+                    .cursor_pointer()
+                    .active(|el| el.opacity(0.7))
+                    .hover(|el| el.bg(cx.theme().secondary_hover))
+                    .when(ix + 1 < count, |el| {
+                        el.border_b_1().border_color(cx.theme().border)
+                    })
+                    .child(chip)
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .child(div().text_sm().font_semibold().truncate().child(name))
+                            .children(user.map(|u| {
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .truncate()
+                                    .child(u)
+                            })),
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(AutoTypeEvent::Chosen(chosen.clone()))
+                    }))
+            });
 
         let list = if count == 0 {
             div()
                 .p_4()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("Nenhum login encontrado.")
+                .child(t!("autotype.no_logins"))
                 .into_any_element()
         } else {
             v_flex()
@@ -225,9 +228,9 @@ impl Render for AutoTypeView {
                             .child(
                                 ui::section_label(
                                     if suggesting {
-                                        "SUGESTÕES PELO TÍTULO"
+                                        t!("autotype.suggestions")
                                     } else {
-                                        "LOGINS"
+                                        t!("autotype.logins")
                                     },
                                     cx,
                                 )

@@ -1,4 +1,4 @@
-# Vaultwarden local SÓ para desenvolvimento. Não exponha na rede.
+# Local Vaultwarden for development ONLY. Do not expose it on the network.
 services:
   vaultwarden:
     image: vaultwarden/server:latest

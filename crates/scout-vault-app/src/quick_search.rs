@@ -1,10 +1,10 @@
-//! Busca rápida global (`Ctrl+Shift+Espaço`): uma janelinha por cima de tudo
-//! para achar um item e **preencher** no app que estava em foco, **copiar**
-//! usuário/senha/código ou **abrir** no Scout Vault — sem trocar de janela.
+//! Global quick search (`Ctrl+Shift+Space`): a small window on top of everything
+//! to find an item and **fill** it into the app that had focus, **copy**
+//! username/password/code or **open** it in Scout Vault — without switching windows.
 //!
-//! A janela só recebe nomes e usuários (nada secreto); cada ação vira um
-//! [`Command`] no mesmo canal da bandeja, e é o app quem copia ou digita
-//! (com o pedido de senha mestra, se o item exigir).
+//! The window only receives names and usernames (nothing secret); each action becomes a
+//! [`Command`] on the same channel as the tray, and the app is the one that copies or types
+//! (with the master password prompt, if the item requires it).
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -19,30 +19,34 @@ use crate::tray::Command;
 use crate::vault_view::{CopyShortcut, VaultView};
 use crate::{appearance, motion};
 
-/// Atalho global, para mostrar na interface.
-pub const HOTKEY_LABEL: &str = "Ctrl+Shift+Espaço";
-/// Tamanho da janela (com a folga transparente da sombra).
+/// Global shortcut, to show in the interface.
+pub fn hotkey_label() -> &'static str {
+    t!("quick.hotkey")
+}
+/// Window size (with the transparent margin for the shadow).
 pub const WIDTH: f32 = 580.;
 pub const HEIGHT: f32 = 452.;
 pub const MARGIN: f32 = 14.;
-/// Quantos resultados aparecem.
+/// How many results show up.
 pub const MAX_RESULTS: usize = 7;
 
-/// Um item como a busca rápida mostra (sem segredos).
+/// An item as quick search shows it (no secrets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickItem {
     pub id: String,
     pub name: String,
-    /// Usuário, site ou tipo — a segunda linha.
+    /// Username, website or type — the second line.
     pub detail: String,
-    pub icon: IconName,
-    /// Endereços salvos (só para a busca).
+    pub icon: crate::item_icons::ItemIcon,
+    /// Color chosen for the icon (id from `item_icons::COLORS`).
+    pub color: Option<String>,
+    /// Saved addresses (for search only).
     pub uris: Vec<String>,
     pub favorite: bool,
     pub has_username: bool,
     pub has_password: bool,
     pub has_totp: bool,
-    /// Dá para digitar (login com usuário ou senha).
+    /// Can be typed (login with a username or password).
     pub typeable: bool,
 }
 
@@ -59,19 +63,20 @@ impl QuickItem {
                 l.uris.clone(),
             ),
             ItemKind::Card(c) => (
-                c.brand.clone().unwrap_or_else(|| "Cartão".into()),
+                c.brand.clone().unwrap_or_else(|| t!("kind.card").into()),
                 Vec::new(),
             ),
-            ItemKind::Identity(_) => ("Identidade".into(), Vec::new()),
-            ItemKind::SecureNote => ("Nota".into(), Vec::new()),
-            ItemKind::SshKey(_) => ("Chave SSH".into(), Vec::new()),
+            ItemKind::Identity(_) => (t!("kind.identity").into(), Vec::new()),
+            ItemKind::SecureNote => (t!("kind.note").into(), Vec::new()),
+            ItemKind::SshKey(_) => (t!("quick.ssh_key").into(), Vec::new()),
             ItemKind::Unknown(_) => (String::new(), Vec::new()),
         };
         Self {
             id: item.id.clone(),
             name: item.name.clone(),
             detail,
-            icon: kind_icon(&item.kind),
+            icon: kind_icon(&item.kind).into(),
+            color: None,
             uris,
             favorite: item.favorite,
             has_username,
@@ -82,7 +87,7 @@ impl QuickItem {
     }
 }
 
-/// Os itens que combinam com a busca, do mais ao menos provável.
+/// The items that match the search, from most to least likely.
 pub fn search(items: &[QuickItem], query: &str) -> Vec<QuickItem> {
     let q = query.trim().to_lowercase();
     let mut scored: Vec<(u8, &QuickItem)> = items
@@ -90,7 +95,7 @@ pub fn search(items: &[QuickItem], query: &str) -> Vec<QuickItem> {
         .filter_map(|i| {
             let name = i.name.to_lowercase();
             let score = if q.is_empty() {
-                // Sem busca: favoritos primeiro.
+                // No search: favorites first.
                 if i.favorite {
                     0
                 } else {
@@ -129,12 +134,12 @@ pub struct QuickSearch {
     results: Vec<QuickItem>,
     selected: usize,
     query: Entity<InputState>,
-    /// Há um app de destino para digitar (o atalho não foi usado no próprio Scout Vault).
+    /// There is a target app to type into (the shortcut wasn't used in Scout Vault itself).
     can_fill: bool,
-    /// Título do app de destino.
+    /// Title of the target app.
     target: String,
     tx: UnboundedSender<Command>,
-    /// Aviso depois de copiar ("Senha copiada"), antes de fechar.
+    /// Notice after copying ("Password copied"), before closing.
     flash: Option<SharedString>,
     activated: bool,
     _subscriptions: Vec<Subscription>,
@@ -148,15 +153,13 @@ impl QuickSearch {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let query = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Buscar no cofre — nome, usuário ou site")
-        });
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder(t!("quick.placeholder")));
         let input_sub = cx.subscribe_in(&query, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.refresh(cx);
             }
         });
-        // Clicar fora fecha, como um menu.
+        // Clicking outside closes it, like a menu.
         let activation = cx.observe_window_activation(window, |this, window, _| {
             if window.is_window_active() {
                 this.activated = true;
@@ -210,13 +213,13 @@ impl QuickSearch {
         cx.notify();
     }
 
-    /// Enter: digita no app de destino (logins) ou abre no Scout Vault.
+    /// Enter: types into the target app (logins) or opens it in Scout Vault.
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.selected().cloned() else {
             return;
         };
         if self.can_fill && item.typeable {
-            // Fecha antes: o foco volta ao app de destino, onde o app vai digitar.
+            // Close first: focus goes back to the target app, where the app will type.
             window.remove_window();
             let _ = self.tx.send(Command::Fill { item_id: item.id });
         } else {
@@ -244,9 +247,9 @@ impl QuickSearch {
         if !has {
             self.flash = Some(
                 match what {
-                    CopyShortcut::Username => "Este item não tem usuário",
-                    CopyShortcut::Password => "Este item não tem senha",
-                    CopyShortcut::TotpCode => "Este item não tem código",
+                    CopyShortcut::Username => t!("quick.no_username"),
+                    CopyShortcut::Password => t!("quick.no_password"),
+                    CopyShortcut::TotpCode => t!("quick.no_code"),
                 }
                 .into(),
             );
@@ -257,16 +260,15 @@ impl QuickSearch {
             item_id: item.id,
             what,
         });
-        self.flash = Some(
-            match what {
-                CopyShortcut::Username => "Usuário copiado",
-                CopyShortcut::Password => "Senha copiada · some em 30 s",
-                CopyShortcut::TotpCode => "Código copiado",
+        self.flash = Some(match what {
+            CopyShortcut::Username => t!("quick.username_copied").into(),
+            CopyShortcut::Password => {
+                t!("generator.copied", note = crate::clipboard::clear_note(cx)).into()
             }
-            .into(),
-        );
+            CopyShortcut::TotpCode => t!("quick.code_copied").into(),
+        });
         cx.notify();
-        // Mostra o aviso por um instante e fecha.
+        // Shows the notice for a moment and closes.
         cx.spawn_in(window, async move |_, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(650))
@@ -309,7 +311,15 @@ impl QuickSearch {
             .cursor_pointer()
             .when(selected, |el| el.bg(accent.opacity(0.14)))
             .when(!selected, |el| el.hover(|el| el.bg(hover)))
-            .child(crate::ui::icon_chip(item.icon, px(30.), selected, cx))
+            .child(crate::item_icons::chip_with(
+                item.icon,
+                item.color
+                    .as_deref()
+                    .and_then(|c| crate::item_icons::color_by_id(c, cx)),
+                px(30.),
+                selected,
+                cx,
+            ))
             .child(
                 v_flex()
                     .flex_1()
@@ -318,7 +328,7 @@ impl QuickSearch {
                         div()
                             .truncate()
                             .text_sm()
-                            .font_medium()
+                            .font_semibold()
                             .child(item.name.clone()),
                     )
                     .child(
@@ -332,9 +342,9 @@ impl QuickSearch {
             .when(selected, |el| {
                 el.child(div().text_xs().text_color(accent).child(
                     if self.can_fill && item.typeable {
-                        "↵ preencher"
+                        t!("quick.enter_fill")
                     } else {
-                        "↵ abrir"
+                        t!("quick.enter_open")
                     },
                 ))
             })
@@ -363,13 +373,13 @@ impl Render for QuickSearch {
             .collect();
         let empty = rows.is_empty();
         let target = if self.can_fill {
-            format!("Preencher em: {}", self.target.trim())
+            t!("quick.fill_in", target = self.target.trim())
         } else {
-            "Busca rápida".to_owned()
+            t!("quick.title").to_owned()
         };
         let footer: SharedString = match &self.flash {
             Some(text) => text.clone(),
-            None => "↵ preencher/abrir · Ctrl+P senha · Ctrl+U usuário · Ctrl+T código · Ctrl+O abrir · Esc fechar".into(),
+            None => t!("quick.footer").into(),
         };
         let card = v_flex()
             .size_full()
@@ -406,7 +416,7 @@ impl Render for QuickSearch {
                                 .text_sm()
                                 .text_color(muted)
                                 .child(Icon::new(IconName::Search))
-                                .child("Nada encontrado."),
+                                .child(t!("quick.nothing_found")),
                         )
                     }),
             )
@@ -447,7 +457,8 @@ mod tests {
             id: id.into(),
             name: name.into(),
             detail: detail.into(),
-            icon: IconName::Globe,
+            icon: IconName::Globe.into(),
+            color: None,
             uris: vec![format!("https://{id}.example")],
             favorite,
             has_username: true,
@@ -474,7 +485,7 @@ mod tests {
         assert_eq!(ids("banco"), ["b", "a", "c"]);
         assert_eq!(ids("d.example"), ["d"]);
         assert!(ids("nada-disso").is_empty());
-        // Sem busca: favoritos primeiro.
+        // No search: favorites first.
         assert_eq!(ids("")[0], "d");
     }
 }

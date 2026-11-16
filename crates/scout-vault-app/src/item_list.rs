@@ -1,5 +1,5 @@
-//! Lista de itens do cofre: dono dos dados decifrados, do filtro e da busca.
-//! A `ListState` do gpui-kit cuida da virtualização, seleção e teclado.
+//! Vault item list: owner of the decrypted data, the filter and the search.
+//! gpui-kit's `ListState` handles virtualization, selection and keyboard.
 
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
 use gpui_kit::component::*;
@@ -14,7 +14,7 @@ pub enum Filter {
     Kind(KindFilter),
     Folder(Option<String>),
     Organization(String),
-    /// Itens de uma coleção de organização.
+    /// Items of an organization collection.
     Collection(String),
     Trash,
 }
@@ -39,11 +39,11 @@ impl KindFilter {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Login => "Logins",
-            Self::Card => "Cartões",
-            Self::Identity => "Identidades",
-            Self::Note => "Notas seguras",
-            Self::SshKey => "Chaves SSH",
+            Self::Login => t!("list.logins"),
+            Self::Card => t!("list.cards"),
+            Self::Identity => t!("list.identities"),
+            Self::Note => t!("list.notes"),
+            Self::SshKey => t!("list.ssh_keys"),
         }
     }
 
@@ -96,7 +96,7 @@ pub fn kind_icon(kind: &ItemKind) -> gpui_kit::assets::IconName {
     }
 }
 
-/// Linha secundária da lista. Nunca mostra segredos inteiros.
+/// Secondary line of the list. Never shows whole secrets.
 fn subtitle(item: &Item) -> String {
     match &item.kind {
         ItemKind::Login(l) => l.username.clone().unwrap_or_default(),
@@ -140,7 +140,7 @@ pub struct ItemList {
     vault: Vault,
     filter: Filter,
     query: String,
-    /// Índices em `vault.items`, na ordem exibida.
+    /// Indexes into `vault.items`, in display order.
     visible: Vec<usize>,
     selected: Option<IndexPath>,
 }
@@ -166,7 +166,7 @@ impl ItemList {
         &self.filter
     }
 
-    /// Troca o cofre (após sincronizar) mantendo o filtro e a busca.
+    /// Swaps the vault (after a sync) keeping the filter and the search.
     pub fn set_vault(&mut self, vault: Vault) {
         self.vault = vault;
         self.selected = None;
@@ -244,11 +244,11 @@ impl ListDelegate for ItemList {
         let item = self.item_at(ix)?;
         let sub = subtitle(item);
         let selected = self.selected == Some(ix);
-        // Arrastar o item até uma pasta da barra lateral o leva para lá.
+        // Dragging the item onto a sidebar folder moves it there.
         let dragged = (!item.deleted).then(|| crate::dnd::DraggedItem {
             id: item.id.clone(),
             name: item.name.clone(),
-            icon: kind_icon(&item.kind),
+            icon: crate::item_icons::icon_for(item, cx),
         });
         Some(
             ListItem::new(ix).selected(selected).py_2().child(
@@ -260,10 +260,9 @@ impl ListDelegate for ItemList {
                     .relative()
                     .gap_3()
                     .w_full()
-                    // Item escolhido: a seleção envolve o ícone.
+                    // Chosen item: the selection wraps the icon.
                     .child({
-                        let chip =
-                            crate::ui::icon_chip(kind_icon(&item.kind), px(32.), selected, cx);
+                        let chip = crate::item_icons::chip(item, px(32.), selected, cx);
                         if selected {
                             crate::motion::selection_ring(
                                 chip,
@@ -284,7 +283,7 @@ impl ListDelegate for ItemList {
                                 div()
                                     .truncate()
                                     .text_sm()
-                                    .font_medium()
+                                    .font_semibold()
                                     .child(item.name.clone()),
                             )
                             .child(
@@ -292,7 +291,7 @@ impl ListDelegate for ItemList {
                                     .truncate()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    // Altura fixa mesmo sem subtítulo: a lista exige linhas iguais.
+                                    // Fixed height even without a subtitle: the list requires equal rows.
                                     .child(if sub.is_empty() { " ".to_owned() } else { sub }),
                             ),
                     )
@@ -321,9 +320,9 @@ impl ListDelegate for ItemList {
             .text_color(cx.theme().muted_foreground)
             .child(Icon::new(IconName::Search))
             .child(if self.query.is_empty() {
-                "Nenhum item aqui."
+                t!("list.empty")
             } else {
-                "Nada encontrado para esta busca."
+                t!("list.no_results")
             })
     }
 
@@ -340,8 +339,8 @@ impl ListDelegate for ItemList {
 
 #[cfg(test)]
 mod tests {
-    // Sem `use super::*`: o glob do gpui_kit traria o macro `test` do GPUI,
-    // que sombreia o `#[test]` do Rust.
+    // No `use super::*`: the gpui_kit glob would bring in GPUI's `test` macro,
+    // which shadows Rust's `#[test]`.
     use super::{subtitle, Filter, ItemList, KindFilter};
     use scout_vault_core::vault::{Card, Item, ItemKind, Login, Vault};
 

@@ -1,5 +1,5 @@
-//! Tela de login: servidor, e-mail, senha mestra, segundo fator e código de
-//! novo dispositivo.
+//! Login screen: server, email, master password, second factor and new
+//! device code.
 
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ pub struct LoginView {
     password: Entity<InputState>,
     code: Entity<InputState>,
     sso_identifier: Entity<InputState>,
-    /// Entrar pelo SSO da empresa em vez de e-mail + senha.
+    /// Sign in with company SSO instead of email + password.
     use_sso: bool,
     remember_device: bool,
     step: Step,
@@ -58,23 +58,24 @@ impl LoginView {
         let settings = store.load();
         let server_url = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("https://vault.exemplo.com")
+                .placeholder(t!("login.server_placeholder"))
                 .default_value(settings.self_hosted_url.clone())
         });
         let email = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("voce@exemplo.com")
+                .placeholder(t!("login.email_placeholder"))
                 .default_value(settings.last_email.clone())
         });
         let password = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
-                .placeholder("Senha mestra")
+                .placeholder(t!("common.vault_password"))
         });
-        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Código"));
+        let code =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("login.code_placeholder")));
         let sso_identifier = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("identificador-da-empresa")
+                .placeholder(t!("login.sso_placeholder"))
                 .default_value(settings.last_sso_identifier.clone())
         });
 
@@ -111,9 +112,9 @@ impl LoginView {
         }
     }
 
-    /// Só em builds de debug: preenche e envia o login a partir de
-    /// `SCOUT_VAULT_TEST_URL/EMAIL/PASSWORD` (ver `dev/test-account.env`) quando
-    /// `SCOUT_VAULT_DEV_AUTOLOGIN` está definido. Recusa servidores fora do localhost.
+    /// Debug builds only: fills in and submits the login from
+    /// `SCOUT_VAULT_TEST_URL/EMAIL/PASSWORD` (see `dev/test-account.env`) when
+    /// `SCOUT_VAULT_DEV_AUTOLOGIN` is set. Refuses servers outside localhost.
     #[cfg(debug_assertions)]
     pub fn dev_autologin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Ok(url), Ok(email), Ok(password)) = (
@@ -139,7 +140,22 @@ impl LoginView {
         self.submit(window, cx);
     }
 
-    /// Mensagem informativa mostrada acima do formulário (ex.: sessão expirada).
+    /// Informational message shown above the form (e.g. session expired).
+    /// Rebuilds the field placeholders in the current language.
+    pub fn relabel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hints = [
+            (&self.server_url, t!("login.server_placeholder")),
+            (&self.email, t!("login.email_placeholder")),
+            (&self.password, t!("common.vault_password")),
+            (&self.code, t!("login.code_placeholder")),
+            (&self.sso_identifier, t!("login.sso_placeholder")),
+        ];
+        for (input, hint) in hints {
+            input.update(cx, |s, cx| s.set_placeholder(hint, window, cx));
+        }
+        cx.notify();
+    }
+
     pub fn set_notice(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.info = Some(message.into());
         cx.notify();
@@ -178,7 +194,7 @@ impl LoginView {
             } => {
                 if selected == TwoFactorProvider::WebAuthn {
                     self.run(
-                        "Toque na chave de segurança ou confirme no Windows Hello…",
+                        t!("login.webauthn_busy"),
                         flow::continue_with_webauthn(pending, self.remember_device),
                         cx,
                     );
@@ -193,10 +209,7 @@ impl LoginView {
                     match flow::duo_token(&token) {
                         Some(t) => token = t,
                         None => {
-                            self.error = Some(
-                                "Cole o endereço completo da página que abriu depois de aprovar no Duo."
-                                    .into(),
-                            );
+                            self.error = Some(t!("login.duo_paste_url").into());
                             self.step = Step::TwoFactor {
                                 pending,
                                 providers,
@@ -208,7 +221,7 @@ impl LoginView {
                     }
                 }
                 if token.is_empty() {
-                    self.error = Some("Digite o código.".into());
+                    self.error = Some(t!("login.enter_code").into());
                     self.step = Step::TwoFactor {
                         pending,
                         providers,
@@ -223,7 +236,7 @@ impl LoginView {
                     remember: self.remember_device,
                 };
                 self.run(
-                    "Verificando o código…",
+                    t!("login.checking_code"),
                     flow::continue_login(pending, Some(second), None),
                     cx,
                 );
@@ -231,13 +244,13 @@ impl LoginView {
             Step::NewDevice { pending } => {
                 let code = self.code.read(cx).value().trim().to_owned();
                 if code.is_empty() {
-                    self.error = Some("Digite o código enviado por e-mail.".into());
+                    self.error = Some(t!("login.enter_email_code").into());
                     self.step = Step::NewDevice { pending };
                     cx.notify();
                     return;
                 }
                 self.run(
-                    "Verificando o dispositivo…",
+                    t!("login.checking_device"),
                     flow::continue_login(pending, None, Some(code)),
                     cx,
                 );
@@ -255,9 +268,9 @@ impl LoginView {
         self.settings.self_hosted_url = self.server_url.read(cx).value().trim().to_owned();
 
         let validation = if email.is_empty() || !email.contains('@') {
-            Err("Informe o e-mail da conta.".to_owned())
+            Err(t!("login.email_required").to_owned())
         } else if password.is_empty() {
-            Err("Informe a senha mestra.".to_owned())
+            Err(t!("login.password_required").to_owned())
         } else {
             self.settings.server_urls()
         };
@@ -282,7 +295,7 @@ impl LoginView {
             }
         };
         self.run(
-            "Entrando… (derivar a chave leva alguns segundos)",
+            t!("login.signing_in"),
             flow::start_login(client, email, password, self.store.secrets().clone()),
             cx,
         );
@@ -294,9 +307,9 @@ impl LoginView {
         self.settings.self_hosted_url = self.server_url.read(cx).value().trim().to_owned();
 
         let validation = if identifier.is_empty() {
-            Err("Informe o identificador SSO da organização.".to_owned())
+            Err(t!("login.sso_identifier_required").to_owned())
         } else if password.is_empty() {
-            Err("Informe a senha mestra: ela abre o cofre depois do SSO.".to_owned())
+            Err(t!("login.sso_password_required").to_owned())
         } else {
             self.settings.server_urls()
         };
@@ -320,7 +333,7 @@ impl LoginView {
             }
         };
         self.run(
-            "Conclua o login no navegador que abriu…",
+            t!("login.sso_busy"),
             flow::start_sso_login(client, identifier, password),
             cx,
         );
@@ -363,11 +376,7 @@ impl LoginView {
                         let names: Vec<_> =
                             providers.iter().map(|p| flow::provider_name(*p)).collect();
                         self.error = Some(
-                            format!(
-                                "Esta conta exige {}, que o Scout Vault ainda não suporta.",
-                                names.join(" ou ")
-                            )
-                            .into(),
+                            t!("login.unsupported_2fa", names = names.join(t!("login.or"))).into(),
                         );
                     }
                 }
@@ -395,10 +404,7 @@ impl LoginView {
                 }
             }
             Ok(LoginOutcome::NeedsNewDeviceCode(pending)) => {
-                self.info = Some(
-                    "Primeiro acesso deste dispositivo: digite o código enviado para o seu e-mail."
-                        .into(),
-                );
+                self.info = Some(t!("login.new_device").into());
                 self.step = Step::NewDevice { pending };
             }
             Err(message) => {
@@ -421,16 +427,16 @@ impl LoginView {
         let Step::TwoFactor { pending, .. } = &self.step else {
             return;
         };
-        // `PendingLogin` fica no passo atual; só o necessário vai para a tarefa.
+        // `PendingLogin` stays on the current step; only what is needed goes to the task.
         let request = flow::send_email_code(pending);
-        self.busy = Some("Enviando código…".into());
+        self.busy = Some(t!("login.sending_code").into());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |this, cx| {
                 this.busy = None;
                 match result {
-                    Ok(()) => this.info = Some("Código enviado. Confira o seu e-mail.".into()),
+                    Ok(()) => this.info = Some(t!("login.code_sent").into()),
                     Err(e) => this.error = Some(e.into()),
                 }
                 cx.notify();
@@ -454,7 +460,7 @@ impl LoginView {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(Label::new("Servidor").text_sm())
+                    .child(Label::new(t!("login.server")).text_sm())
                     .child(
                         RadioGroup::horizontal("login-server")
                             .children(ServerChoice::ALL.map(|c| c.label()))
@@ -475,7 +481,7 @@ impl LoginView {
                 el.child(
                     v_flex()
                         .gap_1()
-                        .child(Label::new("E-mail").text_sm())
+                        .child(Label::new(t!("login.email")).text_sm())
                         .child(Input::new(&self.email).id("login-email").disabled(busy)),
                 )
             })
@@ -483,7 +489,7 @@ impl LoginView {
                 el.child(
                     v_flex()
                         .gap_1()
-                        .child(Label::new("Identificador SSO da organização").text_sm())
+                        .child(Label::new(t!("login.sso_identifier")).text_sm())
                         .child(
                             Input::new(&self.sso_identifier)
                                 .id("login-sso-identifier")
@@ -494,7 +500,7 @@ impl LoginView {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(Label::new("Senha mestra").text_sm())
+                    .child(Label::new(t!("common.vault_password")).text_sm())
                     .child(
                         Input::new(&self.password)
                             .id("login-password")
@@ -504,7 +510,7 @@ impl LoginView {
             )
             .child(
                 Checkbox::new("login-use-sso")
-                    .label("Entrar com o SSO da empresa")
+                    .label(t!("login.use_sso"))
                     .checked(self.use_sso)
                     .disabled(busy)
                     .on_change(cx.listener(|this, value: &bool, _, cx| {
@@ -542,7 +548,7 @@ impl LoginView {
                 col = col.child(
                     Button::new("login-send-email-code")
                         .outline()
-                        .label("Enviar código por e-mail")
+                        .label(t!("login.send_email_code"))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| this.send_email_code(cx))),
                 );
@@ -569,7 +575,7 @@ impl LoginView {
             col = col.child(
                 Button::new("login-duo-open")
                     .outline()
-                    .label("Abrir o Duo no navegador")
+                    .label(t!("login.open_duo"))
                     .disabled(busy || url.is_none())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(url) = &url {
@@ -585,7 +591,7 @@ impl LoginView {
             col = col.child(
                 Button::new("login-webauthn")
                     .outline()
-                    .label("Usar chave de segurança ou Windows Hello")
+                    .label(t!("login.use_webauthn"))
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
             );
@@ -596,7 +602,7 @@ impl LoginView {
         if matches!(self.step, Step::TwoFactor { .. }) {
             col = col.child(
                 Checkbox::new("login-remember-device")
-                    .label("Lembrar este dispositivo")
+                    .label(t!("login.remember_device"))
                     .checked(self.remember_device)
                     .on_change(cx.listener(|this, value: &bool, _, cx| {
                         this.remember_device = *value;
@@ -608,7 +614,7 @@ impl LoginView {
         col.child(
             Button::new("login-cancel")
                 .ghost()
-                .label("Voltar")
+                .label(t!("common.back"))
                 .disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
         )
@@ -620,9 +626,9 @@ impl Render for LoginView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.busy.is_some();
         let (title, form) = match self.step {
-            Step::Credentials => ("Entrar", self.render_credentials(cx)),
-            Step::TwoFactor { .. } => ("Verificação em duas etapas", self.render_code_step(cx)),
-            Step::NewDevice { .. } => ("Verificar este dispositivo", self.render_code_step(cx)),
+            Step::Credentials => (t!("login.title"), self.render_credentials(cx)),
+            Step::TwoFactor { .. } => (t!("login.title_2fa"), self.render_code_step(cx)),
+            Step::NewDevice { .. } => (t!("login.title_new_device"), self.render_code_step(cx)),
         };
         let status: SharedString = self
             .error
@@ -631,9 +637,9 @@ impl Render for LoginView {
             .or_else(|| self.info.clone())
             .unwrap_or_default();
         let subtitle = match self.step {
-            Step::Credentials => "Use uma conta Bitwarden ou de um servidor compatível.",
-            Step::TwoFactor { .. } => "Confirme que é você com o segundo fator.",
-            Step::NewDevice { .. } => "Enviamos um código para o seu e-mail.",
+            Step::Credentials => t!("login.subtitle"),
+            Step::TwoFactor { .. } => t!("login.subtitle_2fa"),
+            Step::NewDevice { .. } => t!("login.subtitle_new_device"),
         };
         let body = v_flex()
             .gap_4()
@@ -648,7 +654,7 @@ impl Render for LoginView {
                 Button::new("login-submit")
                     .primary()
                     .w_full()
-                    .label("Continuar")
+                    .label(t!("common.continue"))
                     .loading(busy)
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),

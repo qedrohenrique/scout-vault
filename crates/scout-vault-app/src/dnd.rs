@@ -1,8 +1,8 @@
-//! Arrastar e soltar dentro do cofre: itens para pastas e pastas para dentro
-//! de outras pastas.
+//! Drag and drop inside the vault: items into folders and folders into
+//! other folders.
 //!
-//! No Bitwarden a hierarquia de pastas é só o nome: "Trabalho/Clientes" fica
-//! dentro de "Trabalho". Mover uma pasta é renomear ela e as subpastas.
+//! In Bitwarden the folder hierarchy is just the name: "Work/Clients" lives
+//! inside "Work". Moving a folder means renaming it and its subfolders.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::*;
@@ -10,24 +10,24 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use scout_vault_core::vault::Folder;
 
-/// Um item da lista sendo arrastado.
+/// A list item being dragged.
 #[derive(Clone, Debug)]
 pub struct DraggedItem {
     pub id: String,
     pub name: String,
-    pub icon: IconName,
+    pub icon: crate::item_icons::ItemIcon,
 }
 
-/// Uma pasta da barra lateral sendo arrastada.
+/// A sidebar folder being dragged.
 #[derive(Clone, Debug)]
 pub struct DraggedFolder {
     pub id: String,
     pub name: String,
 }
 
-/// O que aparece embaixo do cursor enquanto arrasta.
+/// What shows up under the cursor while dragging.
 pub struct DragPreview {
-    icon: IconName,
+    icon: crate::item_icons::ItemIcon,
     label: SharedString,
 }
 
@@ -41,7 +41,7 @@ impl DragPreview {
 
     pub fn folder(folder: &DraggedFolder, cx: &mut App) -> Entity<Self> {
         cx.new(|_| Self {
-            icon: IconName::Folder,
+            icon: IconName::Folder.into(),
             label: folder.name.clone().into(),
         })
     }
@@ -68,21 +68,21 @@ impl Render for DragPreview {
     }
 }
 
-/// Uma linha de pasta na barra lateral, já com o recuo da hierarquia.
+/// A folder row in the sidebar, already with the hierarchy indentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderRow {
     pub id: String,
-    /// Nome mostrado (sem o caminho da pasta-mãe).
+    /// Displayed name (without the parent folder's path).
     pub label: String,
-    /// Quantas pastas-mãe existem acima.
+    /// How many parent folders exist above it.
     pub depth: usize,
 }
 
-/// Pastas em ordem de árvore. Um nome "A/B" fica dentro de "A" quando "A"
-/// existe; se não existe, aparece com o nome inteiro.
+/// Folders in tree order. A name "A/B" goes inside "A" when "A"
+/// exists; if it doesn't, it shows up with the full name.
 pub fn folder_rows(folders: &[Folder]) -> Vec<FolderRow> {
     let mut sorted: Vec<&Folder> = folders.iter().collect();
-    // Ordena por segmento ("A/B" logo depois de "A", antes de "A B").
+    // Sort by segment ("A/B" right after "A", before "A B").
     sorted.sort_by_key(|f| {
         f.name
             .split('/')
@@ -102,7 +102,7 @@ pub fn folder_rows(folders: &[Folder]) -> Vec<FolderRow> {
         .collect()
 }
 
-/// (profundidade, nome relativo à pasta-mãe mais próxima que existe)
+/// (depth, name relative to the closest existing parent folder)
 fn place_of(folders: &[Folder], folder: &Folder) -> (usize, String) {
     let name = folder.name.as_str();
     let mut depth = 0;
@@ -124,7 +124,7 @@ fn place_of(folders: &[Folder], folder: &Folder) -> (usize, String) {
     (depth, label)
 }
 
-/// Por que uma pasta não pode ir para onde foi solta.
+/// Why a folder can't go where it was dropped.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MoveError {
     IntoItself,
@@ -134,14 +134,14 @@ pub enum MoveError {
 impl MoveError {
     pub fn message(&self) -> String {
         match self {
-            Self::IntoItself => "Uma pasta não pode ir para dentro dela mesma.".into(),
-            Self::NameTaken(name) => format!("Já existe uma pasta \"{name}\" lá."),
+            Self::IntoItself => t!("dnd.into_itself").into(),
+            Self::NameTaken(name) => t!("dnd.name_taken", name = name),
         }
     }
 }
 
-/// Novos nomes para mover a pasta `moving` (com as subpastas) para dentro de
-/// `target` (`None` = topo). Lista vazia: já está lá.
+/// New names to move the `moving` folder (with its subfolders) into
+/// `target` (`None` = top level). Empty list: it is already there.
 pub fn move_folder(
     folders: &[Folder],
     moving: &str,
@@ -242,12 +242,12 @@ mod tests {
                 ("a".into(), "Pessoal/Clientes/Acme".into()),
             ]
         );
-        // Para o topo.
+        // To the top level.
         assert_eq!(
             move_folder(&folders, "a", None).unwrap(),
             vec![("a".into(), "Acme".into())]
         );
-        // Já está lá.
+        // Already there.
         assert!(move_folder(&folders, "c", Some("t")).unwrap().is_empty());
         assert!(move_folder(&folders, "p", None).unwrap().is_empty());
     }

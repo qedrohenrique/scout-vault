@@ -1,21 +1,21 @@
-//! Avisos do Windows que pedem para o cofre bloquear: a sessão foi bloqueada
-//! (`Win+L`, tela de bloqueio) ou o computador vai suspender/hibernar.
+//! Windows notices that ask the vault to lock: the session was locked
+//! (`Win+L`, lock screen) or the computer is about to sleep/hibernate.
 //!
-//! Uma janela invisível numa thread própria recebe `WM_WTSSESSION_CHANGE`
-//! (depois de `WTSRegisterSessionNotification`) e `WM_POWERBROADCAST`; cada
-//! aviso vira um [`OsEvent`] no canal do app. Só roda no app de verdade
-//! (nunca nos testes), como a bandeja.
+//! An invisible window on its own thread receives `WM_WTSSESSION_CHANGE`
+//! (after `WTSRegisterSessionNotification`) and `WM_POWERBROADCAST`; each
+//! notice becomes an [`OsEvent`] on the app's channel. Only runs in the real app
+//! (never in tests), like the tray.
 
-/// O que o Windows avisou.
+/// What Windows reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OsEvent {
-    /// A sessão do Windows foi bloqueada.
+    /// The Windows session was locked.
     SessionLocked,
-    /// O computador vai suspender ou hibernar.
+    /// The computer is about to sleep or hibernate.
     Suspending,
 }
 
-/// Escuta ativa; soltar o valor fecha a janela invisível.
+/// Active listener; dropping the value closes the invisible window.
 pub struct Watcher {
     #[cfg_attr(not(windows), allow(dead_code))]
     hwnd: isize,
@@ -27,7 +27,7 @@ impl Drop for Watcher {
     }
 }
 
-/// Começa a escutar. Cada aviso manda um [`OsEvent`] por `tx`.
+/// Starts listening. Each notice sends an [`OsEvent`] through `tx`.
 pub fn watch(tx: std::sync::mpsc::Sender<OsEvent>) -> Result<Watcher, String> {
     platform::start(tx).map(|hwnd| Watcher { hwnd })
 }
@@ -48,9 +48,9 @@ mod platform {
     use super::OsEvent;
 
     const CLASS: PCWSTR = w!("ScoutVaultWindowsEvents");
-    /// `wParam` de `WM_WTSSESSION_CHANGE`: sessão bloqueada.
+    /// `wParam` of `WM_WTSSESSION_CHANGE`: session locked.
     const WTS_SESSION_LOCK: usize = 0x7;
-    /// `wParam` de `WM_POWERBROADCAST`: vai suspender.
+    /// `wParam` of `WM_POWERBROADCAST`: about to sleep.
     const PBT_APMSUSPEND: usize = 0x4;
 
     thread_local! {
@@ -65,7 +65,7 @@ mod platform {
         });
     }
 
-    /// Traduz uma mensagem da janela num aviso (separado para testar).
+    /// Translates a window message into a notice (separate so it can be tested).
     pub fn event_for(msg: u32, wp: usize) -> Option<OsEvent> {
         match (msg, wp) {
             (WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK) => Some(OsEvent::SessionLocked),
@@ -95,7 +95,7 @@ mod platform {
             .name("scout-vault-windows-events".into())
             .spawn(move || {
                 TX.with(|t| *t.borrow_mut() = Some(tx));
-                // SAFETY: registro e laço de mensagens desta thread, como pede o Win32.
+                // SAFETY: registration and message loop of this thread, as Win32 requires.
                 unsafe {
                     let module = GetModuleHandleW(None).unwrap_or_default();
                     let class = WNDCLASSW {
@@ -105,8 +105,8 @@ mod platform {
                         ..Default::default()
                     };
                     RegisterClassW(&class);
-                    // Janela comum (invisível), não "message-only": estas só
-                    // não recebem os avisos de energia enviados a todas.
+                    // Regular (invisible) window, not "message-only": those alone
+                    // don't receive the power notices broadcast to all windows.
                     let hwnd = match CreateWindowExW(
                         Default::default(),
                         CLASS,
@@ -147,7 +147,7 @@ mod platform {
     }
 
     pub fn stop(hwnd: isize) {
-        // SAFETY: fecha a janela invisível desta escuta (a thread termina sozinha).
+        // SAFETY: closes this listener's invisible window (the thread ends on its own).
         unsafe {
             let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
@@ -164,14 +164,14 @@ mod platform {
                 event_for(WM_WTSSESSION_CHANGE, 0x7),
                 Some(OsEvent::SessionLocked)
             );
-            // Desbloquear (0x8) não bloqueia nada.
+            // Unlocking (0x8) doesn't lock anything.
             assert_eq!(event_for(WM_WTSSESSION_CHANGE, 0x8), None);
             assert_eq!(event_for(WM_POWERBROADCAST, 0x4), Some(OsEvent::Suspending));
-            // Voltou da suspensão (0x7 / 0x12): nada.
+            // Resumed from sleep (0x7 / 0x12): nothing.
             assert_eq!(event_for(WM_POWERBROADCAST, 0x12), None);
         }
 
-        /// Cria a escuta de verdade por um instante e solta. Rode com `--ignored`.
+        /// Creates the real listener for a moment and drops it. Run with `--ignored`.
         #[test]
         #[ignore]
         fn watcher_starts_and_stops() {

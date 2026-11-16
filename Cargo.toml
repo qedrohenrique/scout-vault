@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/scout-vault-core", "crates/scout-vault-app"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -14,8 +14,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
-# A KDF (Argon2/PBKDF2) e o RSA são lentíssimos sem otimização.
-# Otimiza só essas dependências, mesmo em builds de debug.
+# The KDF (Argon2/PBKDF2) and RSA are extremely slow without optimization.
+# Optimize just these dependencies, even in debug builds.
 [profile.dev.package]
 argon2.opt-level = 3
 blake2.opt-level = 3
@@ -27,5 +27,5 @@ rsa.opt-level = 3
 crypto-bigint.opt-level = 3
 
 [profile.release]
-# Binário menor na release (sem símbolos de depuração).
+# Smaller release binary (no debug symbols).
 strip = true

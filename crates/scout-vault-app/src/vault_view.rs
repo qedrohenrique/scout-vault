@@ -1,4 +1,4 @@
-//! Cofre aberto: filtros à esquerda, lista no meio, detalhe do item à direita.
+//! Open vault: filters on the left, list in the middle, item detail on the right.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -14,39 +14,43 @@ use scout_vault_core::vault::{FieldKind, Item, ItemKind, Keys};
 
 use crate::flow::{self, Session, Unlocked, WriteOp};
 use crate::item_editor::{EditorEvent, ItemEditor, NewKind, Places};
-use crate::item_list::{kind_icon, Filter, ItemList, KindFilter};
+use crate::item_list::{Filter, ItemList, KindFilter};
 use crate::{appearance, clipboard, motion, ui};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use scout_vault_core::generator::PasswordOptions;
 
 pub enum VaultEvent {
-    /// Pede para bloquear; leva a sessão (com tokens possivelmente renovados).
+    /// Asks to lock; carries the session (with possibly renewed tokens).
     Lock(Session),
     OpenSettings,
-    /// A sessão expirou no servidor: volta para o login.
+    /// The session expired on the server: back to login.
     SessionExpired,
-    /// Sincronizou: tokens e cache novos para guardar.
+    /// Synced: new tokens and cache to store.
     Synced(Session),
-    /// O "Acesso rápido" mudou: ids para guardar nas configurações.
+    /// Quick access changed: ids to store in the settings.
     PinsChanged(Vec<String>),
     OpenGenerator,
-    /// A senha mestra pedida por um item foi confirmada para uma ação do app
-    /// (ex.: digitar com `Ctrl+Alt+A`); leva o número que o app passou.
+    /// Open the "Password health" screen.
+    OpenHealth,
+    /// Some item's icon changed: all choices, to store.
+    IconsChanged(std::collections::HashMap<String, crate::item_icons::CustomIcon>),
+    /// The master password asked for by an item was confirmed for an app action
+    /// (e.g. typing with `Ctrl+Alt+A`); carries the number the app passed.
     RepromptPassed(u64),
 }
 
-/// Ação num item que pede a senha mestra, guardada até a senha ser confirmada.
+/// Action on an item that asks for the master password, kept until the password is confirmed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Guarded {
     Reveal(String),
     Copy(String),
     Edit,
-    /// Ação do app (digitar, preencher); o número volta em [`VaultEvent::RepromptPassed`].
+    /// App action (type, fill); the number comes back in [`VaultEvent::RepromptPassed`].
     External(u64),
 }
 
-/// O pedido de senha mestra aberto no detalhe do item.
+/// The master password prompt open in the item detail.
 struct RepromptPrompt {
     item_id: String,
     input: Entity<InputState>,
@@ -56,10 +60,10 @@ struct RepromptPrompt {
     checking: bool,
 }
 
-/// De quanto em quanto tempo o app pergunta ao servidor se o cofre mudou.
+/// How often the app asks the server whether the vault changed.
 pub const BACKGROUND_SYNC_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// O que os atalhos de cópia copiam.
+/// What the copy shortcuts copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyShortcut {
     Username,
@@ -78,21 +82,21 @@ impl CopyShortcut {
 
     fn missing(self) -> &'static str {
         match self {
-            Self::Username => "Este item não tem usuário.",
-            Self::Password => "Este item não tem senha.",
-            Self::TotpCode => "Este item não tem código de autenticador.",
+            Self::Username => t!("vault.no_username"),
+            Self::Password => t!("vault.no_password"),
+            Self::TotpCode => t!("vault.no_totp"),
         }
     }
 }
 
-/// Um campo exibível do item selecionado.
+/// A displayable field of the selected item.
 struct FieldRow<'a> {
     key: String,
     label: String,
     value: Cow<'a, str>,
     secret: bool,
     multiline: bool,
-    /// Texto curto ao lado do rótulo (ex.: segundos restantes do código TOTP).
+    /// Short text next to the label (e.g. seconds left on the TOTP code).
     hint: Option<String>,
 }
 
@@ -117,7 +121,7 @@ fn add<'a>(
 
 const TOTP_CODE_KEY: &str = "totp-code";
 
-/// Período atual do TOTP (muda a cada 30 s), para animar a troca do código.
+/// Current TOTP period (changes every 30 s), to animate the code change.
 fn totp_step(key: &str) -> u64 {
     if key != TOTP_CODE_KEY {
         return 0;
@@ -128,7 +132,7 @@ fn totp_step(key: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// Código TOTP atual do item, se ele tiver uma chave válida.
+/// The item's current TOTP code, if it has a valid key.
 fn live_totp(item: &Item) -> Option<totp::Code> {
     let ItemKind::Login(l) = &item.kind else {
         return None;
@@ -144,57 +148,63 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
             add(
                 &mut rows,
                 "username",
-                "Usuário",
+                t!("field.username"),
                 l.username.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "password",
-                "Senha",
+                t!("field.password"),
                 l.password.as_ref().map(|s| s.expose()),
                 true,
             );
             if let Some(code) = live_totp(item) {
                 rows.push(FieldRow {
                     key: TOTP_CODE_KEY.into(),
-                    label: "Código do autenticador".into(),
+                    label: t!("field.totp_code").into(),
                     value: Cow::Owned(totp::group(&code.code)),
                     secret: false,
                     multiline: false,
-                    hint: Some(format!("{} s", code.remaining)),
+                    hint: Some(t!("field.seconds_left", n = code.remaining)),
                 });
             }
             add(
                 &mut rows,
                 "totp",
-                "Chave do autenticador (TOTP)",
+                t!("field.totp_key"),
                 l.totp.as_ref().map(|s| s.expose()),
                 true,
             );
             for (i, uri) in l.uris.iter().enumerate() {
-                add(&mut rows, &format!("uri-{i}"), "Site", Some(uri), false);
+                add(
+                    &mut rows,
+                    &format!("uri-{i}"),
+                    t!("field.website"),
+                    Some(uri),
+                    false,
+                );
             }
         }
         ItemKind::Card(c) => {
             add(
                 &mut rows,
                 "card-holder",
-                "Titular",
+                t!("field.cardholder"),
                 c.cardholder_name.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "card-brand",
-                "Bandeira",
+                t!("field.brand"),
                 c.brand.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "card-number",
-                "Número",
+                t!("field.number"),
                 c.number.as_ref().map(|s| s.expose()),
                 true,
             );
@@ -207,7 +217,7 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
             if let Some(exp) = exp {
                 rows.push(FieldRow {
                     key: "card-exp".into(),
-                    label: "Validade".into(),
+                    label: t!("field.expiration").into(),
                     value: Cow::Owned(exp),
                     secret: false,
                     multiline: false,
@@ -217,7 +227,7 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
             add(
                 &mut rows,
                 "card-code",
-                "Código de segurança",
+                t!("field.security_code"),
                 c.code.as_ref().map(|s| s.expose()),
                 true,
             );
@@ -226,96 +236,126 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
             add(
                 &mut rows,
                 "id-title",
-                "Tratamento",
+                t!("field.title"),
                 i.title.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-first",
-                "Nome",
+                t!("field.first_name"),
                 i.first_name.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-middle",
-                "Nome do meio",
+                t!("field.middle_name"),
                 i.middle_name.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-last",
-                "Sobrenome",
+                t!("field.last_name"),
                 i.last_name.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-company",
-                "Empresa",
+                t!("field.company"),
                 i.company.as_deref(),
                 false,
             );
-            add(&mut rows, "id-email", "E-mail", i.email.as_deref(), false);
-            add(&mut rows, "id-phone", "Telefone", i.phone.as_deref(), false);
+            add(
+                &mut rows,
+                "id-email",
+                t!("login.email"),
+                i.email.as_deref(),
+                false,
+            );
+            add(
+                &mut rows,
+                "id-phone",
+                t!("field.phone"),
+                i.phone.as_deref(),
+                false,
+            );
             add(
                 &mut rows,
                 "id-username",
-                "Usuário",
+                t!("field.username"),
                 i.username.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-address1",
-                "Endereço",
+                t!("field.address"),
                 i.address1.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-address2",
-                "Complemento",
+                t!("field.address2"),
                 i.address2.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "id-address3",
-                "Complemento 2",
+                t!("field.address3"),
                 i.address3.as_deref(),
                 false,
             );
-            add(&mut rows, "id-city", "Cidade", i.city.as_deref(), false);
-            add(&mut rows, "id-state", "Estado", i.state.as_deref(), false);
+            add(
+                &mut rows,
+                "id-city",
+                t!("field.city"),
+                i.city.as_deref(),
+                false,
+            );
+            add(
+                &mut rows,
+                "id-state",
+                t!("field.state"),
+                i.state.as_deref(),
+                false,
+            );
             add(
                 &mut rows,
                 "id-postal",
-                "CEP",
+                t!("field.postal_code"),
                 i.postal_code.as_deref(),
                 false,
             );
-            add(&mut rows, "id-country", "País", i.country.as_deref(), false);
+            add(
+                &mut rows,
+                "id-country",
+                t!("field.country"),
+                i.country.as_deref(),
+                false,
+            );
             add(
                 &mut rows,
                 "id-ssn",
-                "CPF / SSN",
+                t!("field.ssn"),
                 i.ssn.as_ref().map(|s| s.expose()),
                 true,
             );
             add(
                 &mut rows,
                 "id-passport",
-                "Passaporte",
+                t!("field.passport"),
                 i.passport_number.as_ref().map(|s| s.expose()),
                 true,
             );
             add(
                 &mut rows,
                 "id-license",
-                "CNH",
+                t!("field.license"),
                 i.license_number.as_ref().map(|s| s.expose()),
                 true,
             );
@@ -324,21 +364,21 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
             add(
                 &mut rows,
                 "ssh-fingerprint",
-                "Impressão digital",
+                t!("field.fingerprint"),
                 k.fingerprint.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "ssh-public",
-                "Chave pública",
+                t!("field.public_key"),
                 k.public_key.as_deref(),
                 false,
             );
             add(
                 &mut rows,
                 "ssh-private",
-                "Chave privada",
+                t!("field.private_key"),
                 k.private_key.as_ref().map(|s| s.expose()),
                 true,
             );
@@ -347,7 +387,7 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
     }
 
     for (i, f) in item.fields.iter().enumerate() {
-        let label = f.name.clone().unwrap_or_else(|| "Campo".into());
+        let label = f.name.clone().unwrap_or_else(|| t!("field.custom").into());
         let secret = f.kind == FieldKind::Hidden;
         if let Some(v) = f
             .value
@@ -369,7 +409,7 @@ fn field_rows(item: &Item) -> Vec<FieldRow<'_>> {
     add(
         &mut rows,
         "notes",
-        "Notas",
+        t!("field.notes"),
         item.notes.as_ref().map(|s| s.expose()),
         true,
     );
@@ -384,53 +424,55 @@ pub struct VaultView {
     revealed: HashSet<String>,
     syncing: bool,
     _subscriptions: Vec<Subscription>,
-    /// Redesenha a cada segundo enquanto o item aberto tem código TOTP.
+    /// Redraws every second while the open item has a TOTP code.
     _ticker: Task<()>,
-    /// Pergunta ao servidor, de tempos em tempos, se o cofre mudou.
+    /// Asks the server, from time to time, whether the vault changed.
     _poller: Task<()>,
-    /// Sincronizar sozinho quando o cofre muda em outro aparelho.
+    /// Sync on its own when the vault changes on another device.
     background_sync: bool,
-    /// Data de revisão do cofre no último sync (ms), para comparar.
+    /// Vault revision date at the last sync (ms), for comparison.
     last_revision: Option<i64>,
-    /// Editor aberto no lugar do detalhe (novo item ou edição).
+    /// Editor open in place of the detail (new item or edit).
     editor: Option<(Entity<ItemEditor>, Subscription)>,
-    /// "Apagar de vez" pede um segundo clique.
+    /// "Delete permanently" asks for a second click.
     confirm_delete: bool,
-    /// Opções do gerador, para o botão de gerar senha no editor.
+    /// Icon picker open in the item detail.
+    icon_picker: bool,
+    /// Generator options, for the generate password button in the editor.
     password_options: PasswordOptions,
-    /// "Remover anexo" pede um segundo clique.
+    /// "Remove attachment" asks for a second click.
     confirm_remove_attachment: Option<String>,
-    /// Campo copiado há pouco: o botão mostra ✓ por um instante.
+    /// Field copied a moment ago: the button shows ✓ for an instant.
     copied: Option<(String, u32)>,
-    /// Itens fixados no "Acesso rápido", na ordem em que foram fixados.
+    /// Items pinned to quick access, in the order they were pinned.
     pinned: Vec<String>,
-    /// Campo de "nova pasta" aberto na barra lateral.
+    /// "New folder" field open in the sidebar.
     new_folder: Option<(Entity<InputState>, Subscription)>,
-    /// Pasta sendo renomeada (id + campo) no cabeçalho da lista.
+    /// Folder being renamed (id + field) in the list header.
     renaming_folder: Option<(String, Entity<InputState>, Subscription)>,
-    /// "Apagar pasta" pede um segundo clique.
+    /// "Delete folder" asks for a second click.
     confirm_delete_folder: bool,
-    /// Filtro a aplicar no próximo quadro (depois de criar/apagar uma pasta).
+    /// Filter to apply on the next frame (after creating/deleting a folder).
     pending_filter: Option<Filter>,
-    /// Resultado da última sincronização (ok?, contador), mostrado no ícone por um instante.
+    /// Result of the last sync (ok?, counter), shown on the icon for an instant.
     sync_feedback: Option<(bool, u32)>,
-    /// Quantas sincronizações já terminaram (reinicia as animações do ícone).
+    /// How many syncs have finished (restarts the icon animations).
     sync_count: u32,
-    /// Posição de cada linha da barra lateral no quadro atual (para a cascata).
+    /// Position of each sidebar row in the current frame (for the cascade).
     sidebar_order: std::cell::Cell<usize>,
-    /// Anexo sendo baixado agora.
+    /// Attachment being downloaded right now.
     downloading: Option<String>,
-    /// Cópias temporárias abertas com outro programa; apagadas ao bloquear.
+    /// Temporary copies opened with another program; deleted on lock.
     temp_files: Vec<std::path::PathBuf>,
-    /// Pedido de senha mestra de um item com "pedir a senha mestra".
+    /// Master password prompt of an item with "ask for the master password".
     reprompt: Option<RepromptPrompt>,
-    /// Itens liberados com a senha mestra (até trocar de item ou bloquear).
+    /// Items released with the master password (until switching items or locking).
     reprompt_ok: HashSet<String>,
 }
 
 impl Drop for VaultView {
     fn drop(&mut self) {
-        // Bloquear/sair solta esta tela: some com as cópias decifradas.
+        // Locking/signing out drops this screen: the decrypted copies go with it.
         for path in &self.temp_files {
             crate::attachments::remove_temp(path);
         }
@@ -457,8 +499,8 @@ impl VaultView {
             }
             ListEvent::Cancel => {}
         });
-        // Sync em segundo plano: uma pergunta barata ao servidor ("mudou?") e,
-        // se mudou, um sync completo.
+        // Background sync: a cheap question to the server ("changed?") and,
+        // if it changed, a full sync.
         let poller = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(BACKGROUND_SYNC_EVERY).await;
             let session = match this.update(cx, |this, _| this.poll_session()) {
@@ -494,6 +536,7 @@ impl VaultView {
         let mut this = Self {
             editor: None,
             confirm_delete: false,
+            icon_picker: false,
             confirm_remove_attachment: None,
             copied: None,
             sidebar_order: std::cell::Cell::new(0),
@@ -522,17 +565,17 @@ impl VaultView {
             _subscriptions: vec![sub],
         };
         if errors > 0 {
-            crate::toast::error(format!("{errors} item(ns) não puderam ser decifrados."), cx);
+            crate::toast::error(t!("vault.decrypt_errors", n = errors), cx);
         }
-        // Aberto a partir da sessão lembrada (sem access token): busca o que
-        // mudou no servidor. Sem rede, o cofre segue aberto com o cache.
+        // Opened from the remembered session (no access token): fetch what
+        // changed on the server. Without network, the vault stays open with the cache.
         if this.session.access_token.is_empty() {
             this.sync(cx);
         }
         this
     }
 
-    /// Itens que a pessoa pode alterar (fora da lixeira; org só se permitir).
+    /// Items the person can change (outside the trash; org only if allowed).
     pub fn editable_items(&self, cx: &App) -> Vec<Item> {
         self.list
             .read(cx)
@@ -545,8 +588,8 @@ impl VaultView {
             .collect()
     }
 
-    /// Salva um item que veio de fora (o navegador). Não mexe num formulário
-    /// aberto: com um aberto (ou sincronizando), recusa e explica.
+    /// Saves an item that came from outside (the browser). Doesn't touch an open
+    /// form: with one open (or while syncing), refuses and explains.
     pub fn save_external(
         &mut self,
         item: Item,
@@ -554,12 +597,10 @@ impl VaultView {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if self.editor.is_some() {
-            return Err(
-                "Há um formulário aberto no Scout Vault. Salve ou cancele e tente de novo.".into(),
-            );
+            return Err(t!("vault.form_open").into());
         }
         if self.syncing {
-            return Err("O Scout Vault está sincronizando. Tente de novo em instantes.".into());
+            return Err(t!("vault.busy_syncing").into());
         }
         self.run_write_with(WriteOp::Save(Box::new(item), Vec::new()), Some(message), cx);
         Ok(())
@@ -573,8 +614,8 @@ impl VaultView {
         self.last_revision
     }
 
-    /// Sessão para a checagem em segundo plano — ou `None` se agora não é hora
-    /// (opção desligada, já sincronizando, formulário aberto).
+    /// Session for the background check — or `None` if now isn't the time
+    /// (option off, already syncing, form open).
     fn poll_session(&self) -> Option<Session> {
         (self.background_sync && !self.syncing && self.editor.is_none())
             .then(|| self.session.clone())
@@ -585,7 +626,7 @@ impl VaultView {
         result: Result<flow::Revision, flow::SyncError>,
         cx: &mut Context<Self>,
     ) {
-        // Sem rede ou servidor fora do ar: tenta de novo na próxima vez, sem avisar.
+        // No network or server down: try again next time, without a notice.
         let Ok(flow::Revision { date, tokens }) = result else {
             return;
         };
@@ -599,7 +640,7 @@ impl VaultView {
         self.on_revision(date, cx);
     }
 
-    /// Pergunta agora (sem esperar o próximo minuto) se o cofre mudou.
+    /// Asks now (without waiting for the next minute) whether the vault changed.
     pub fn check_now(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.poll_session() else {
             return;
@@ -612,8 +653,8 @@ impl VaultView {
         .detach();
     }
 
-    /// O servidor disse que o cofre está na revisão `date`: se mudou desde o
-    /// último sync (em outro aparelho, no cofre web…), sincroniza agora.
+    /// The server said the vault is at revision `date`: if it changed since the
+    /// last sync (on another device, in the web vault…), sync now.
     pub fn on_revision(&mut self, date: i64, cx: &mut Context<Self>) {
         match self.last_revision {
             None => self.last_revision = Some(date),
@@ -621,7 +662,7 @@ impl VaultView {
                 if self.poll_session().is_some() {
                     self.run_write_with(
                         WriteOp::Nothing,
-                        Some("Cofre atualizado com mudanças de outro aparelho".into()),
+                        Some(t!("vault.updated_elsewhere").into()),
                         cx,
                     );
                 }
@@ -630,7 +671,7 @@ impl VaultView {
         }
     }
 
-    /// Chaves do cofre aberto (para ligar o Windows Hello).
+    /// Keys of the open vault (to turn on Windows Hello).
     pub fn keys(&self) -> Arc<Keys> {
         self.keys.clone()
     }
@@ -643,7 +684,7 @@ impl VaultView {
         &self.list
     }
 
-    /// Sincronizando ou gravando algo no servidor agora.
+    /// Syncing or saving something to the server right now.
     pub fn is_busy(&self) -> bool {
         self.syncing
     }
@@ -666,12 +707,13 @@ impl VaultView {
         cx.notify();
     }
 
-    /// Escolher outro item mostra ele: fecha o formulário aberto (novo item ou
-    /// edição) e os "clique de novo para confirmar". Enquanto o formulário está
-    /// salvando, ele fica — o resultado ainda vai aparecer nele.
+    /// Choosing another item shows it: closes the open form (new item or
+    /// edit) and the "click again to confirm" prompts. While the form is
+    /// saving, it stays — the result will still show up in it.
     fn leave_editor(&mut self, cx: &mut Context<Self>) {
         self.forget_reprompt();
         self.confirm_delete = false;
+        self.icon_picker = false;
         self.confirm_remove_attachment = None;
         if let Some((editor, _)) = &self.editor {
             if !editor.read(cx).is_saving() {
@@ -692,7 +734,7 @@ impl VaultView {
         cx.notify();
     }
 
-    /// Outro item (ou filtro): o item volta a pedir a senha mestra.
+    /// Another item (or filter): the item asks for the master password again.
     fn forget_reprompt(&mut self) {
         let keep = self.selected.as_ref().map(|i| i.id.clone());
         if self.reprompt.as_ref().map(|r| Some(&r.item_id)) != Some(keep.as_ref()) {
@@ -701,7 +743,7 @@ impl VaultView {
         self.reprompt_ok.retain(|id| Some(id) == keep.as_ref());
     }
 
-    /// O item aberto pede a senha mestra e ela ainda não foi confirmada?
+    /// Does the open item ask for the master password and it hasn't been confirmed yet?
     pub fn needs_reprompt(&self, item: &Item) -> bool {
         item.reprompt && !self.reprompt_ok.contains(&item.id)
     }
@@ -710,8 +752,8 @@ impl VaultView {
         self.reprompt.is_some()
     }
 
-    /// Libera `action` no item aberto, ou abre o pedido de senha mestra e
-    /// guarda a ação para depois. `true` = pode seguir agora.
+    /// Allows `action` on the open item, or opens the master password prompt and
+    /// keeps the action for later. `true` = can go ahead now.
     fn guard(&mut self, action: Guarded, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(item) = self.selected.clone() else {
             return false;
@@ -726,7 +768,7 @@ impl VaultView {
         false
     }
 
-    /// Abre (ou foca) o campo de senha mestra do item aberto.
+    /// Opens (or focuses) the master password field of the open item.
     pub fn start_reprompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = &self.selected else { return };
         let item_id = item.id.clone();
@@ -737,7 +779,7 @@ impl VaultView {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
-                .placeholder("Senha mestra")
+                .placeholder(t!("common.vault_password"))
         });
         let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
@@ -761,7 +803,7 @@ impl VaultView {
         cx.notify();
     }
 
-    /// Confere a senha digitada; certa, libera o item e faz a ação guardada.
+    /// Checks the typed password; if right, releases the item and runs the kept action.
     pub fn confirm_reprompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(prompt) = &mut self.reprompt else {
             return;
@@ -771,7 +813,7 @@ impl VaultView {
         }
         let password = zeroize::Zeroizing::new(prompt.input.read(cx).value().to_string());
         if password.is_empty() {
-            prompt.error = Some("Digite a senha mestra.".into());
+            prompt.error = Some(t!("vault.type_password").into());
             cx.notify();
             return;
         }
@@ -783,14 +825,14 @@ impl VaultView {
         cx.spawn_in(window, async move |this, cx| {
             let ok = flow::check_master_password(&session, password).await;
             this.update_in(cx, |this, window, cx| {
-                // Trocou de item enquanto conferia: não libera nada.
+                // Switched items while checking: release nothing.
                 if this.reprompt.as_ref().map(|p| &p.item_id) != Some(&item_id) {
                     return;
                 }
                 if !ok {
                     if let Some(prompt) = &mut this.reprompt {
                         prompt.checking = false;
-                        prompt.error = Some("Senha mestra incorreta.".into());
+                        prompt.error = Some(t!("vault.wrong_password").into());
                         prompt.input.update(cx, |i, cx| i.set_value("", window, cx));
                     }
                     cx.notify();
@@ -818,8 +860,8 @@ impl VaultView {
         .detach();
     }
 
-    /// Para uma ação do app (digitar, por exemplo) num item que pede a senha
-    /// mestra: abre o item e o pedido. `true` = não precisa, pode seguir.
+    /// For an app action (typing, for example) on an item that asks for the master
+    /// password: opens the item and the prompt. `true` = not needed, can go ahead.
     pub fn request_reprompt(
         &mut self,
         item_id: &str,
@@ -842,7 +884,7 @@ impl VaultView {
         cx.notify();
     }
 
-    /// Atalho de cópia (`Ctrl+U`, `Ctrl+P`, `Ctrl+T`) no item aberto.
+    /// Copy shortcut (`Ctrl+U`, `Ctrl+P`, `Ctrl+T`) on the open item.
     pub fn copy_shortcut(
         &mut self,
         what: CopyShortcut,
@@ -851,7 +893,7 @@ impl VaultView {
     ) {
         let Some(item) = &self.selected else {
             let _ = window;
-            crate::toast::info("Abra um item primeiro.", cx);
+            crate::toast::info(t!("vault.open_item_first"), cx);
             return;
         };
         let key = what.key();
@@ -862,7 +904,7 @@ impl VaultView {
         }
     }
 
-    /// Foca a busca da lista (`Ctrl+F`).
+    /// Focuses the list search (`Ctrl+F`).
     pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.list.update(cx, |list, cx| list.focus(window, cx));
     }
@@ -878,9 +920,9 @@ impl VaultView {
         self.copy_from(&item, key, cx);
     }
 
-    /// Copia um campo de qualquer item (pelo menu da bandeja), sem abri-lo.
-    /// Se o item pede a senha mestra, abre ele com o pedido e devolve `true`:
-    /// o app precisa mostrar a janela.
+    /// Copies a field of any item (from the tray menu), without opening it.
+    /// If the item asks for the master password, opens it with the prompt and returns `true`:
+    /// the app needs to show the window.
     pub fn copy_item_field(
         &mut self,
         id: &str,
@@ -898,7 +940,7 @@ impl VaultView {
             .find(|i| i.id == id && !i.deleted)
             .cloned();
         let Some(item) = item else {
-            crate::toast::error("Este item não está mais no cofre.", cx);
+            crate::toast::error(t!("vault.item_gone"), cx);
             return false;
         };
         let Some(row) = field_rows(&item).into_iter().find(|r| r.key == what.key()) else {
@@ -914,7 +956,7 @@ impl VaultView {
         false
     }
 
-    /// O que dá para copiar do item: (usuário, senha, código TOTP).
+    /// What can be copied from the item: (username, password, TOTP code).
     pub fn copyable(item: &Item) -> (bool, bool, bool) {
         let rows = field_rows(item);
         let has = |what: CopyShortcut| rows.iter().any(|r| r.key == what.key());
@@ -935,7 +977,7 @@ impl VaultView {
             row.value.clone()
         };
         clipboard::copy_and_clear_later(&value, cx);
-        // ✓ no botão por um instante (o contador reinicia a animação a cada cópia).
+        // ✓ on the button for an instant (the counter restarts the animation on each copy).
         let n = self.copied.as_ref().map_or(0, |(_, n)| n + 1);
         self.copied = Some((key.to_owned(), n));
         cx.spawn(async move |this, cx| {
@@ -953,13 +995,13 @@ impl VaultView {
         .detach();
         cx.notify();
         let message = if row.secret {
-            format!(
-                "Copiado: {} · some em {} s",
-                row.label,
-                clipboard::CLEAR_AFTER.as_secs()
+            t!(
+                "vault.copied_secret",
+                label = row.label,
+                note = clipboard::clear_note(cx)
             )
         } else {
-            format!("Copiado: {}", row.label)
+            t!("vault.copied", label = row.label)
         };
         crate::toast::success(message, cx);
     }
@@ -972,7 +1014,7 @@ impl VaultView {
         self.run_write(WriteOp::Nothing, cx);
     }
 
-    /// Sincroniza agora (botão da barra lateral ou menu da bandeja).
+    /// Syncs now (sidebar button or tray menu).
     pub fn sync_now(&mut self, cx: &mut Context<Self>) {
         self.sync(cx);
     }
@@ -985,7 +1027,7 @@ impl VaultView {
         self.editor.as_ref().map(|(e, _)| e)
     }
 
-    /// Pastas, organizações e coleções, para o editor.
+    /// Folders, organizations and collections, for the editor.
     fn places(&self, cx: &App) -> Places {
         let vault = self.list.read(cx).delegate().vault();
         Places {
@@ -1003,7 +1045,7 @@ impl VaultView {
         }
     }
 
-    /// O servidor deixa editar este item? (itens de organização podem ser só leitura)
+    /// Does the server allow editing this item? (organization items may be read-only)
     pub fn can_edit(&self, item: &Item) -> bool {
         !matches!(item.kind, ItemKind::Unknown(_))
             && self
@@ -1039,7 +1081,7 @@ impl VaultView {
         cx.notify();
     }
 
-    /// Quantos itens cabem no acesso rápido.
+    /// How many items fit in quick access.
     pub const MAX_PINNED: usize = 10;
 
     pub fn set_pinned(&mut self, ids: Vec<String>) {
@@ -1050,31 +1092,25 @@ impl VaultView {
         &self.pinned
     }
 
-    /// Fixa ou desafixa o item aberto no "Acesso rápido".
+    /// Pins or unpins the open item in quick access.
     pub fn toggle_pin(&mut self, cx: &mut Context<Self>) {
         let Some(item) = &self.selected else { return };
         let id = item.id.clone();
         if let Some(pos) = self.pinned.iter().position(|p| *p == id) {
             self.pinned.remove(pos);
-            crate::toast::info("Removido do acesso rápido", cx);
+            crate::toast::info(t!("vault.unpinned"), cx);
         } else if self.pinned.len() >= Self::MAX_PINNED {
-            crate::toast::error(
-                format!(
-                    "O acesso rápido já tem {} itens; tire um antes.",
-                    Self::MAX_PINNED
-                ),
-                cx,
-            );
+            crate::toast::error(t!("vault.pins_full", n = Self::MAX_PINNED), cx);
             return;
         } else {
             self.pinned.push(id);
-            crate::toast::success("Fixado no acesso rápido", cx);
+            crate::toast::success(t!("vault.pinned"), cx);
         }
         cx.emit(VaultEvent::PinsChanged(self.pinned.clone()));
         cx.notify();
     }
 
-    /// Abre um item do acesso rápido (mostrando "Todos" se o filtro atual o esconde).
+    /// Opens a quick access item (showing "All" if the current filter hides it).
     pub fn open_pinned(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let visible = self
             .list
@@ -1088,7 +1124,7 @@ impl VaultView {
         self.select_item(id, window, cx);
     }
 
-    /// Itens fixados que ainda existem (fora da lixeira), na ordem de fixação.
+    /// Pinned items that still exist (outside the trash), in pinning order.
     pub fn pinned_items(&self, cx: &App) -> Vec<Item> {
         let vault = self.list.read(cx).delegate().vault();
         self.pinned
@@ -1124,7 +1160,7 @@ impl VaultView {
             .rounded(theme.radius)
             .text_sm()
             .cursor_pointer()
-            .when(selected, |el| el.text_color(accent).font_medium())
+            .when(selected, |el| el.text_color(accent).font_semibold())
             .when(!selected, |el| el.text_color(fg).hover(|el| el.bg(hover)))
             .active(|el| el.opacity(0.7))
             .when(selected, |el| {
@@ -1134,9 +1170,11 @@ impl VaultView {
                 ))
             })
             .child(
-                Icon::new(kind_icon(&item.kind))
+                Icon::new(crate::item_icons::icon_for(item, cx))
                     .small()
-                    .when(!selected, |i| i.text_color(muted)),
+                    .when(!selected, |i| {
+                        i.text_color(crate::item_icons::color_for(item, cx).unwrap_or(muted))
+                    }),
             )
             .child(div().flex_1().min_w_0().truncate().child(item.name.clone()))
             .on_click(cx.listener(move |this, _, window, cx| this.open_pinned(&id, window, cx)))
@@ -1158,12 +1196,12 @@ impl VaultView {
         )
     }
 
-    /// Abre o campo de nova pasta na barra lateral.
+    /// Opens the new folder field in the sidebar.
     pub fn start_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.new_folder.is_some() {
             return;
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Nome da pasta"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("vault.folder_name")));
         let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.save_new_folder(cx);
@@ -1180,7 +1218,7 @@ impl VaultView {
         };
         let name = input.read(cx).value().trim().to_owned();
         if name.is_empty() {
-            crate::toast::error("Dê um nome à pasta.", cx);
+            crate::toast::error(t!("vault.folder_name_required"), cx);
             return;
         }
         self.run_write(WriteOp::CreateFolder(name), cx);
@@ -1193,7 +1231,7 @@ impl VaultView {
         cx.notify();
     }
 
-    /// Renomear a pasta aberta: o título da lista vira um campo.
+    /// Rename the open folder: the list title becomes a field.
     pub fn start_rename_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Filter::Folder(Some(id)) = self.list.read(cx).delegate().filter().clone() else {
             return;
@@ -1217,14 +1255,14 @@ impl VaultView {
         };
         let name = input.read(cx).value().trim().to_owned();
         if name.is_empty() {
-            crate::toast::error("Dê um nome à pasta.", cx);
+            crate::toast::error(t!("vault.folder_name_required"), cx);
             return;
         }
         let id = id.clone();
         self.run_write(WriteOp::RenameFolder { id, name }, cx);
     }
 
-    /// Apagar a pasta aberta (segundo clique confirma).
+    /// Delete the open folder (a second click confirms).
     pub fn delete_folder(&mut self, cx: &mut Context<Self>) {
         let Filter::Folder(Some(id)) = self.list.read(cx).delegate().filter().clone() else {
             return;
@@ -1238,7 +1276,245 @@ impl VaultView {
         self.run_write(WriteOp::DeleteFolder(id), cx);
     }
 
-    /// Leva um item (arrastado da lista) para a pasta `folder` (`None` = sem pasta).
+    pub fn toggle_icon_picker(&mut self, cx: &mut Context<Self>) {
+        self.icon_picker = !self.icon_picker;
+        cx.notify();
+    }
+
+    pub fn icon_picker_open(&self) -> bool {
+        self.icon_picker
+    }
+
+    /// Chooses the icon (`Some(name)`), the color (`color`) or goes back to the default
+    /// (`reset`) for the open item. Applies right away on every screen.
+    fn apply_icon(
+        &mut self,
+        choice: Option<crate::item_icons::CustomIcon>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = &self.selected else { return };
+        let all = crate::item_icons::set(&item.id, choice, cx);
+        cx.emit(VaultEvent::IconsChanged(all));
+        // The list draws the icons: redraw with the new choice.
+        self.list.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    pub fn choose_icon(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(item) = &self.selected else { return };
+        let color = crate::item_icons::choice(&item.id, cx).and_then(|c| c.color);
+        let choice = crate::item_icons::CustomIcon {
+            icon: name.to_owned(),
+            color,
+        };
+        self.apply_icon(Some(choice), cx);
+    }
+
+    /// `None` = theme color.
+    pub fn choose_icon_color(&mut self, color: Option<String>, cx: &mut Context<Self>) {
+        let Some(item) = &self.selected else { return };
+        let icon = crate::item_icons::choice(&item.id, cx)
+            .map(|c| c.icon)
+            .unwrap_or_default();
+        let choice = (!icon.is_empty() || color.is_some())
+            .then_some(crate::item_icons::CustomIcon { icon, color });
+        self.apply_icon(choice, cx);
+    }
+
+    pub fn reset_icon(&mut self, cx: &mut Context<Self>) {
+        self.apply_icon(None, cx);
+    }
+
+    /// Grid of icons and colors for the open item.
+    fn render_icon_picker(&self, item: &Item, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let accent = appearance::accent(cx);
+        let (border, popover, muted, hover) = (
+            theme.border,
+            theme.popover,
+            theme.muted_foreground,
+            theme.secondary_hover,
+        );
+        let current = crate::item_icons::choice(&item.id, cx);
+        let current_icon = crate::item_icons::icon_for(item, cx);
+        let current_color = current.as_ref().and_then(|c| c.color.clone());
+        let tint = crate::item_icons::color_for(item, cx).unwrap_or(accent);
+
+        // (stored name, element id, icon, label)
+        let lucide: Vec<(String, String, crate::item_icons::ItemIcon, String)> =
+            crate::item_icons::CHOICES
+                .iter()
+                .map(|(name, icon)| {
+                    (
+                        (*name).to_owned(),
+                        format!("icon-choice-{name}"),
+                        (*icon).into(),
+                        (*name).to_owned(),
+                    )
+                })
+                .collect();
+        let brands: Vec<(String, String, crate::item_icons::ItemIcon, String)> =
+            crate::item_icons::BRANDS
+                .iter()
+                .map(|b| {
+                    (
+                        crate::item_icons::brand_choice_name(b.slug),
+                        format!("icon-choice-brand-{}", b.slug),
+                        crate::item_icons::ItemIcon::Brand(b.slug),
+                        b.name.to_owned(),
+                    )
+                })
+                .collect();
+        let mut grids = Vec::new();
+        for entries in [lucide, brands] {
+            let mut grid = h_flex().flex_wrap().gap_1p5();
+            for (order, (name, id, icon, label)) in entries.into_iter().enumerate() {
+                let selected = icon == current_icon;
+                let key = id.clone();
+                let button = div()
+                    .id(SharedString::from(id))
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(label.clone()))
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)
+                    })
+                    .size(px(36.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(if selected { tint } else { border.opacity(0.) })
+                    .bg(if selected {
+                        tint.opacity(0.16)
+                    } else {
+                        popover
+                    })
+                    .text_color(if selected { tint } else { muted })
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover).text_color(tint))
+                    .active(|s| s.opacity(0.7))
+                    .child(Icon::new(icon).small())
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_icon(&name, cx)));
+                grid = grid.child(motion::cascade(
+                    div().child(button),
+                    motion::key("icone-opcao", &key),
+                    order / 4,
+                ));
+            }
+            grids.push(grid);
+        }
+        let brands_grid = grids.pop().unwrap();
+        let grid = grids.pop().unwrap();
+
+        let swatch = |id: SharedString, color: Hsla, selected: bool, label: SharedString| {
+            div()
+                .id(id)
+                .test_support()
+                .role(Role::Button)
+                .aria_label(label)
+                .size(px(24.))
+                .rounded_full()
+                .bg(color)
+                .cursor_pointer()
+                .border_2()
+                .border_color(if selected { theme.foreground } else { color })
+                .hover(|s| s.opacity(0.8))
+        };
+        let mut colors = h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .w(px(36.))
+                    .child(t!("icons.color")),
+            )
+            .child(
+                swatch(
+                    "icon-color-theme".into(),
+                    accent,
+                    current_color.is_none(),
+                    t!("icons.theme_color").into(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.choose_icon_color(None, cx))),
+            );
+        for (id, label, _) in crate::item_icons::COLORS {
+            let color = crate::item_icons::color_by_id(id, cx).unwrap_or(accent);
+            let selected = current_color.as_deref() == Some(*id);
+            let id = *id;
+            colors = colors.child(
+                swatch(
+                    format!("icon-color-{id}").into(),
+                    color,
+                    selected,
+                    (*label).into(),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.choose_icon_color(Some(id.to_owned()), cx)
+                })),
+            );
+        }
+
+        let panel = v_flex()
+            .gap_3()
+            .p_4()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(border)
+            .bg(popover)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(
+                        v_flex()
+                            .child(div().text_sm().font_semibold().child(t!("icons.title")))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t!("icons.local_only")),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("icon-reset")
+                                    .ghost()
+                                    .small()
+                                    .label(t!("icons.reset"))
+                                    .disabled(current.is_none())
+                                    .on_click(cx.listener(|this, _, _, cx| this.reset_icon(cx))),
+                            )
+                            .child(
+                                Button::new("icon-picker-close")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Close)
+                                    .tooltip(t!("common.close"))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_icon_picker(cx)),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(grid)
+            .child(
+                div()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(muted)
+                    .child(t!("icons.brands")),
+            )
+            .child(brands_grid)
+            .child(colors);
+        motion::rise(panel, motion::key("icone-painel", &item.id), 6.)
+    }
+
+    /// Moves an item (dragged from the list) to the `folder` folder (`None` = no folder).
     pub fn move_item_to_folder(
         &mut self,
         item_id: &str,
@@ -1246,11 +1522,11 @@ impl VaultView {
         cx: &mut Context<Self>,
     ) {
         if self.syncing {
-            crate::toast::info("Espere a sincronização terminar.", cx);
+            crate::toast::info(t!("vault.wait_sync"), cx);
             return;
         }
         if self.editor.is_some() {
-            crate::toast::info("Salve ou cancele o formulário antes de mover itens.", cx);
+            crate::toast::info(t!("vault.save_before_move"), cx);
             return;
         }
         let vault = self.list.read(cx).delegate().vault();
@@ -1268,9 +1544,9 @@ impl VaultView {
                     .find(|f| &f.id == id)
                     .map(|f| f.name.rsplit('/').next().unwrap_or(&f.name).to_owned())
                     .unwrap_or_default();
-                format!("{} → {name}", item.name)
+                t!("vault.moved_to", item = item.name, folder = name)
             }
-            None => format!("{} → Sem pasta", item.name),
+            None => t!("vault.moved_to_no_folder", item = item.name),
         };
         let op = WriteOp::MoveItem {
             item_id: item_id.to_owned(),
@@ -1279,7 +1555,7 @@ impl VaultView {
         self.run_write_with(op, Some(message), cx);
     }
 
-    /// Põe a pasta `folder_id` (com as subpastas) dentro de `target` (`None` = no topo).
+    /// Puts the `folder_id` folder (with its subfolders) inside `target` (`None` = top level).
     pub fn move_folder_into(
         &mut self,
         folder_id: &str,
@@ -1287,7 +1563,7 @@ impl VaultView {
         cx: &mut Context<Self>,
     ) {
         if self.syncing {
-            crate::toast::info("Espere a sincronização terminar.", cx);
+            crate::toast::info(t!("vault.wait_sync"), cx);
             return;
         }
         let folders = &self.list.read(cx).delegate().vault().folders;
@@ -1295,8 +1571,8 @@ impl VaultView {
             Ok(plan) if plan.is_empty() => {}
             Ok(plan) => {
                 let message = match plan[0].1.rsplit_once('/') {
-                    Some((parent, _)) => format!("Pasta movida para {parent}"),
-                    None => "Pasta movida para o topo".to_owned(),
+                    Some((parent, _)) => t!("vault.folder_moved_to", parent = parent),
+                    None => t!("vault.folder_moved_top").to_owned(),
                 };
                 self.renaming_folder = None;
                 self.confirm_delete_folder = false;
@@ -1306,9 +1582,9 @@ impl VaultView {
         }
     }
 
-    /// Novo item (`Ctrl+N`). Começa na pasta do filtro atual, se houver.
+    /// New item (`Ctrl+N`). Starts in the current filter's folder, if any.
     pub fn new_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Não descarta um formulário já aberto.
+        // Doesn't discard a form that is already open.
         if self.syncing || self.editor.is_some() {
             return;
         }
@@ -1322,7 +1598,7 @@ impl VaultView {
             Filter::Kind(KindFilter::Identity) => NewKind::Identity,
             _ => NewKind::Login,
         };
-        // Filtro numa organização/coleção: o item novo já nasce lá.
+        // Filter on an organization/collection: the new item is born there.
         let owner = match self.list.read(cx).delegate().filter() {
             Filter::Organization(id) => Some((id.clone(), None)),
             Filter::Collection(id) => self
@@ -1343,7 +1619,7 @@ impl VaultView {
         self.open_editor(editor, window, cx);
     }
 
-    /// Edita o item aberto (`Ctrl+E`).
+    /// Edits the open item (`Ctrl+E`).
     pub fn edit_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.selected.clone() else {
             return;
@@ -1384,13 +1660,13 @@ impl VaultView {
         }
     }
 
-    /// Escolhe um arquivo no Windows e anexa ao item aberto.
+    /// Picks a file in Windows and attaches it to the open item.
     fn pick_attachment(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Anexar".into()),
+            prompt: Some(t!("vault.attach_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = paths.await {
@@ -1401,12 +1677,12 @@ impl VaultView {
         .detach();
     }
 
-    /// Anexa o arquivo em `path` ao item aberto.
+    /// Attaches the file at `path` to the open item.
     pub fn attach_file_from_path(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         self.attach_paths(&[path.to_path_buf()], cx);
     }
 
-    /// Anexa vários arquivos ao item aberto (escolhidos ou arrastados).
+    /// Attaches several files to the open item (chosen or dragged).
     pub fn attach_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
         let Some(item) = &self.selected else { return };
         let item_id = item.id.clone();
@@ -1440,7 +1716,7 @@ impl VaultView {
         }
     }
 
-    /// Baixa e decifra; depois `then` decide o que fazer com o conteúdo.
+    /// Downloads and decrypts; then `then` decides what to do with the contents.
     fn fetch_attachment(
         &mut self,
         attachment_id: String,
@@ -1483,7 +1759,7 @@ impl VaultView {
         .detach();
     }
 
-    /// Abre o anexo com o programa padrão (cópia temporária, apagada ao bloquear).
+    /// Opens the attachment with the default program (temporary copy, deleted on lock).
     pub fn open_attachment(&mut self, attachment_id: String, cx: &mut Context<Self>) {
         self.fetch_attachment(
             attachment_id,
@@ -1493,15 +1769,15 @@ impl VaultView {
                         cx.open_with_system(&path);
                     }
                     this.temp_files.push(path);
-                    crate::toast::success(format!("{name} aberto."), cx);
+                    crate::toast::success(t!("vault.file_opened", name = name), cx);
                 }
-                Err(e) => crate::toast::error(format!("Não foi possível abrir: {e}"), cx),
+                Err(e) => crate::toast::error(t!("vault.open_failed", e = e), cx),
             },
             cx,
         );
     }
 
-    /// Salva o anexo decifrado onde a pessoa escolher.
+    /// Saves the decrypted attachment wherever the person chooses.
     fn save_attachment(&mut self, attachment_id: String, cx: &mut Context<Self>) {
         self.fetch_attachment(
             attachment_id,
@@ -1516,9 +1792,9 @@ impl VaultView {
                     let result = std::fs::write(&path, &bytes[..]);
                     this.update(cx, |_, cx| match result {
                         Ok(()) => {
-                            crate::toast::success(format!("Salvo em {}.", path.display()), cx)
+                            crate::toast::success(t!("vault.saved_to", path = path.display()), cx)
                         }
-                        Err(e) => crate::toast::error(format!("Não foi possível salvar: {e}"), cx),
+                        Err(e) => crate::toast::error(t!("vault.save_failed", e = e), cx),
                     })
                     .ok();
                 })
@@ -1575,7 +1851,7 @@ impl VaultView {
                         .ghost()
                         .small()
                         .icon(IconName::ExternalLink)
-                        .tooltip("Abrir")
+                        .tooltip(t!("common.open"))
                         .disabled(busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_attachment(open_id.clone(), cx)
@@ -1586,7 +1862,7 @@ impl VaultView {
                         .ghost()
                         .small()
                         .icon(IconName::Download)
-                        .tooltip("Salvar como…")
+                        .tooltip(t!("vault.save_as"))
                         .disabled(busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.save_attachment(save_id.clone(), cx)
@@ -1595,9 +1871,11 @@ impl VaultView {
                 .when(can_add, |row| {
                     row.child(
                         Button::new(SharedString::from(format!("attach-remove-{}", a.id)))
-                            .when(confirming, |b| b.danger().label("Remover?"))
+                            .when(confirming, |b| b.danger().label(t!("vault.remove_confirm")))
                             .when(!confirming, |b| {
-                                b.ghost().icon(IconName::Trash).tooltip("Remover anexo")
+                                b.ghost()
+                                    .icon(IconName::Trash)
+                                    .tooltip(t!("vault.remove_attachment"))
                             })
                             .small()
                             .disabled(busy)
@@ -1610,7 +1888,7 @@ impl VaultView {
         Some(
             v_flex()
                 .gap_2()
-                .child(ui::section_label("ANEXOS", cx).px_0())
+                .child(ui::section_label(t!("vault.attachments"), cx).px_0())
                 .when(count > 0, |v| {
                     v.child(
                         v_flex()
@@ -1621,7 +1899,7 @@ impl VaultView {
                             .children(rows),
                     )
                 })
-                // Sempre visível em itens editáveis: clicar ou arrastar arquivos.
+                // Always visible on editable items: click or drag files.
                 .when(can_add, |v| {
                     v.child(ui::drop_zone(
                         "attach-add",
@@ -1641,39 +1919,40 @@ impl VaultView {
         )
     }
 
-    /// Manda uma alteração (ou só sincroniza) e atualiza a tela com o resultado.
+    /// Sends a change (or just syncs) and updates the screen with the result.
     fn run_write(&mut self, op: WriteOp, cx: &mut Context<Self>) {
         self.run_write_with(op, None, cx);
     }
 
-    /// Como [`Self::run_write`], com a mensagem de sucesso escolhida por quem chama.
+    /// Like [`Self::run_write`], with the success message chosen by the caller.
     fn run_write_with(&mut self, op: WriteOp, message: Option<String>, cx: &mut Context<Self>) {
         if self.syncing {
             return;
         }
+        let attach_only = message.is_none() && matches!(op, WriteOp::AddAttachments { .. });
         let done_message: Option<String> = message.or_else(|| {
             match &op {
                 WriteOp::Nothing => None,
-                WriteOp::Save(item, _) if item.id.is_empty() => Some("Item criado."),
-                WriteOp::Save(..) => Some("Alterações salvas."),
-                WriteOp::Trash(_) => Some("Item movido para a lixeira."),
-                WriteOp::Restore(_) => Some("Item restaurado."),
-                WriteOp::Delete(_) => Some("Item apagado de vez."),
+                WriteOp::Save(item, _) if item.id.is_empty() => Some(t!("vault.item_created")),
+                WriteOp::Save(..) => Some(t!("vault.changes_saved")),
+                WriteOp::Trash(_) => Some(t!("vault.item_trashed")),
+                WriteOp::Restore(_) => Some(t!("vault.item_restored")),
+                WriteOp::Delete(_) => Some(t!("vault.item_deleted")),
                 WriteOp::AddAttachments { files, .. } if files.len() > 1 => {
-                    Some("Arquivos anexados.")
+                    Some(t!("vault.files_attached"))
                 }
-                WriteOp::AddAttachments { .. } => Some("Arquivo anexado."),
-                WriteOp::RemoveAttachment { .. } => Some("Anexo removido."),
-                WriteOp::CreateFolder(_) => Some("Pasta criada."),
-                WriteOp::RenameFolder { .. } => Some("Pasta renomeada."),
-                WriteOp::DeleteFolder(_) => Some("Pasta apagada; os itens foram para Sem pasta."),
-                WriteOp::MoveItem { .. } => Some("Item movido."),
-                WriteOp::RenameFolders(_) => Some("Pasta movida."),
+                WriteOp::AddAttachments { .. } => Some(t!("vault.file_attached")),
+                WriteOp::RemoveAttachment { .. } => Some(t!("vault.attachment_removed")),
+                WriteOp::CreateFolder(_) => Some(t!("vault.folder_created")),
+                WriteOp::RenameFolder { .. } => Some(t!("vault.folder_renamed")),
+                WriteOp::DeleteFolder(_) => Some(t!("vault.folder_deleted")),
+                WriteOp::MoveItem { .. } => Some(t!("vault.item_moved")),
+                WriteOp::RenameFolders(_) => Some(t!("vault.folder_moved")),
             }
             .map(String::from)
         });
         let closes_detail = matches!(op, WriteOp::Delete(_));
-        // Pastas: depois de salvar, abre a pasta; depois de apagar, volta para todos.
+        // Folders: after saving, opens the folder; after deleting, goes back to all.
         let folder_saved = matches!(op, WriteOp::CreateFolder(_) | WriteOp::RenameFolder { .. });
         let folder_deleted = matches!(op, WriteOp::DeleteFolder(_));
         let folder_moved = matches!(op, WriteOp::RenameFolders(_));
@@ -1715,7 +1994,7 @@ impl VaultView {
                             this.last_revision = revision;
                         }
                         for w in &warnings {
-                            crate::toast::error(format!("Anexo não enviado — {w}"), cx);
+                            crate::toast::error(t!("vault.attachment_not_sent", w = w), cx);
                         }
                         if folder_saved || folder_deleted {
                             this.new_folder = None;
@@ -1748,7 +2027,7 @@ impl VaultView {
                             list.delegate_mut().set_vault(vault);
                             cx.notify();
                         });
-                        // Mantém o item aberto, agora com os dados novos.
+                        // Keeps the item open, now with the new data.
                         this.selected = selected_id.and_then(|id| {
                             this.list
                                 .read(cx)
@@ -1759,25 +2038,19 @@ impl VaultView {
                                 .find(|i| i.id == id)
                                 .cloned()
                         });
-                        // Sincronizar sozinho já mostra o ✓ no ícone; o resto vira toast.
-                        let attach_only = done_message
-                            .as_deref()
-                            .is_some_and(|m| m.starts_with("Arquivo") || m.starts_with("Arquivos"));
+                        // Syncing on its own already shows ✓ on the icon; the rest becomes a toast.
                         if let Some(m) =
                             done_message.filter(|_| !(attach_only && !warnings.is_empty()))
                         {
                             crate::toast::success(m.trim_end_matches('.').to_owned(), cx);
                         }
                         if errors > 0 {
-                            crate::toast::error(
-                                format!("{errors} item(ns) não puderam ser decifrados."),
-                                cx,
-                            );
+                            crate::toast::error(t!("vault.decrypt_errors", n = errors), cx);
                         }
                     }
                     Err(flow::SyncError::Expired) => cx.emit(VaultEvent::SessionExpired),
                     Err(flow::SyncError::Other(e)) => {
-                        // Com o editor aberto, o erro aparece nele e nada se perde.
+                        // With the editor open, the error shows up in it and nothing is lost.
                         if let Some((editor, _)) = &this.editor {
                             let msg = e.clone();
                             editor.update(cx, |ed, cx| ed.set_saving(false, Some(msg), cx));
@@ -1796,8 +2069,8 @@ impl VaultView {
     fn filter_title(&self, filter: &Filter, cx: &App) -> String {
         let vault = self.list.read(cx).delegate().vault();
         match filter {
-            Filter::All => "Todos os itens".into(),
-            Filter::Favorites => "Favoritos".into(),
+            Filter::All => t!("vault.all_items").into(),
+            Filter::Favorites => t!("vault.favorites").into(),
             Filter::Kind(k) => k.label().into(),
             Filter::Organization(id) => vault
                 .organizations
@@ -1811,18 +2084,18 @@ impl VaultView {
                 .find(|f| &f.id == id)
                 .map(|f| f.name.clone())
                 .unwrap_or_default(),
-            Filter::Folder(None) => "Sem pasta".into(),
+            Filter::Folder(None) => t!("vault.no_folder").into(),
             Filter::Collection(id) => vault
                 .collections
                 .iter()
                 .find(|c| &c.id == id)
                 .map(|c| c.name.clone())
                 .unwrap_or_default(),
-            Filter::Trash => "Lixeira".into(),
+            Filter::Trash => t!("vault.trash").into(),
         }
     }
 
-    /// Destaque de um lugar onde dá para soltar o que está sendo arrastado.
+    /// Highlight of a place where what is being dragged can be dropped.
     fn drop_style<T: 'static>(
         cx: &App,
     ) -> impl Fn(StyleRefinement, &T, &mut Window, &mut App) -> StyleRefinement + 'static {
@@ -1830,8 +2103,8 @@ impl VaultView {
         move |style, _, _, _| style.bg(accent.opacity(0.18))
     }
 
-    /// Pasta na barra lateral: recuada pela hierarquia, arrastável e alvo de
-    /// itens e de outras pastas.
+    /// Folder in the sidebar: indented by hierarchy, draggable and a target for
+    /// items and other folders.
     fn folder_row(&self, row: crate::dnd::FolderRow, cx: &mut Context<Self>) -> impl IntoElement {
         let dragged = crate::dnd::DraggedFolder {
             id: row.id.clone(),
@@ -1902,7 +2175,7 @@ impl VaultView {
             .rounded(theme.radius)
             .text_sm()
             .cursor_pointer()
-            .when(selected, |el| el.text_color(accent).font_medium())
+            .when(selected, |el| el.text_color(accent).font_semibold())
             .when(!selected, |el| el.text_color(fg).hover(|el| el.bg(hover)))
             .active(|el| el.opacity(0.7))
             .when(selected, |el| {
@@ -1939,7 +2212,7 @@ impl VaultView {
             .on_click(
                 cx.listener(move |this, _, window, cx| this.set_filter(filter.clone(), window, cx)),
             )
-            // O destaque do filtro escolhido acende suave.
+            // The chosen filter's highlight lights up softly.
             .with_animation(
                 motion::key("filtro", format!("{id_text}:{selected}")),
                 Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
@@ -1951,7 +2224,7 @@ impl VaultView {
                     }
                 },
             );
-        // Ao abrir o cofre, as linhas entram em cascata (uma vez por tela).
+        // When the vault opens, the rows cascade in (once per screen).
         motion::cascade(
             div().w_full().child(row),
             motion::key("filtro-entra", &id_text),
@@ -1959,8 +2232,8 @@ impl VaultView {
         )
     }
 
-    /// Botão de sincronizar: gira enquanto trabalha; ao terminar vira ✓ (ou ✗)
-    /// por um instante, com transição, e volta às setas.
+    /// Sync button: spins while working; when done turns into ✓ (or ✗)
+    /// for an instant, with a transition, and goes back to the arrows.
     fn render_sync_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use std::f32::consts::TAU;
         let accent = appearance::accent(cx);
@@ -1978,16 +2251,16 @@ impl VaultView {
                         |icon, t| icon.rotate(radians(t * TAU)),
                     )
                     .into_any_element(),
-                "Sincronizando…",
+                t!("vault.syncing"),
             )
         } else if let Some((ok, m)) = self.sync_feedback {
             let (name, color, label) = if ok {
-                (IconName::Check, accent, "Sincronizado")
+                (IconName::Check, accent, t!("vault.synced"))
             } else {
-                (IconName::Close, danger, "Não foi possível sincronizar")
+                (IconName::Close, danger, t!("vault.sync_failed"))
             };
             (
-                // Entra girando um quarto de volta enquanto aparece.
+                // Enters spinning a quarter turn while fading in.
                 Icon::new(name)
                     .small()
                     .with_animation(
@@ -2004,7 +2277,7 @@ impl VaultView {
             )
         } else {
             (
-                // Volta às setas com meio giro suave (não anima na primeira vez).
+                // Back to the arrows with a soft half turn (doesn't animate the first time).
                 Icon::new(IconName::RefreshCw)
                     .small()
                     .text_color(muted)
@@ -2025,7 +2298,7 @@ impl VaultView {
                         },
                     )
                     .into_any_element(),
-                "Sincronizar",
+                t!("vault.sync"),
             )
         };
         let busy = self.syncing;
@@ -2078,25 +2351,25 @@ impl VaultView {
                 "filter-all".into(),
                 Filter::All,
                 IconName::LayoutGrid,
-                "Todos os itens".into(),
+                t!("vault.all_items").into(),
                 cx,
             ))
             .child(self.filter_row(
                 "filter-favorites".into(),
                 Filter::Favorites,
                 IconName::Star,
-                "Favoritos".into(),
+                t!("vault.favorites").into(),
                 cx,
             ));
-        // Acesso rápido: itens fixados pela pessoa, logo no topo.
+        // Quick access: items pinned by the person, right at the top.
         let pinned = self.pinned_items(cx);
         if !pinned.is_empty() {
-            nav = nav.child(ui::section_label("Acesso rápido", cx));
+            nav = nav.child(ui::section_label(t!("vault.quick_access"), cx));
             for item in &pinned {
                 nav = nav.child(self.pinned_row(item, cx));
             }
         }
-        nav = nav.child(ui::section_label("Tipos", cx));
+        nav = nav.child(ui::section_label(t!("vault.types"), cx));
         for k in KindFilter::ALL {
             let icon = match k {
                 KindFilter::Login => IconName::Globe,
@@ -2114,7 +2387,7 @@ impl VaultView {
             ));
         }
         if !orgs.is_empty() {
-            nav = nav.child(ui::section_label("Organizações", cx));
+            nav = nav.child(ui::section_label(t!("vault.organizations"), cx));
             for (id, name) in orgs {
                 nav = nav.child(self.filter_row(
                     format!("filter-org-{id}").into(),
@@ -2123,7 +2396,7 @@ impl VaultView {
                     name,
                     cx,
                 ));
-                // Coleções da organização, recuadas embaixo dela.
+                // The organization's collections, indented below it.
                 for (cid, _, cname) in collections.iter().filter(|(_, org, _)| *org == id) {
                     nav = nav.child(div().pl_4().child(self.filter_row(
                         format!("filter-col-{cid}").into(),
@@ -2141,18 +2414,18 @@ impl VaultView {
                 .justify_between()
                 .pr_1()
                 .rounded(cx.theme().radius)
-                // Soltar uma pasta no título "Pastas" a leva para o topo.
+                // Dropping a folder on the "Folders" heading moves it to the top level.
                 .drag_over::<crate::dnd::DraggedFolder>(Self::drop_style(cx))
                 .on_drop(cx.listener(|this, f: &crate::dnd::DraggedFolder, _, cx| {
                     this.move_folder_into(&f.id, None, cx)
                 }))
-                .child(ui::section_label("Pastas", cx))
+                .child(ui::section_label(t!("vault.folders"), cx))
                 .child(
                     Button::new("folder-new")
                         .ghost()
                         .xsmall()
                         .icon(IconName::Plus)
-                        .tooltip("Nova pasta")
+                        .tooltip(t!("vault.new_folder"))
                         .disabled(self.syncing)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.start_new_folder(window, cx)),
@@ -2177,7 +2450,7 @@ impl VaultView {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Check)
-                            .tooltip("Criar (Enter)")
+                            .tooltip(t!("vault.create_enter"))
                             .disabled(self.syncing)
                             .on_click(cx.listener(|this, _, _, cx| this.save_new_folder(cx))),
                     )
@@ -2186,7 +2459,7 @@ impl VaultView {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
-                            .tooltip("Cancelar")
+                            .tooltip(t!("common.cancel"))
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_folder_edit(cx))),
                     ),
                 motion::key("pasta-nova", "campo"),
@@ -2210,7 +2483,7 @@ impl VaultView {
                         "filter-no-folder".into(),
                         Filter::Folder(None),
                         IconName::FolderOpen,
-                        "Sem pasta".into(),
+                        t!("vault.no_folder").into(),
                         cx,
                     )),
             )
@@ -2219,7 +2492,7 @@ impl VaultView {
                 "filter-trash".into(),
                 Filter::Trash,
                 IconName::Trash,
-                "Lixeira".into(),
+                t!("vault.trash").into(),
                 cx,
             ))
             .child(div().h_3());
@@ -2234,7 +2507,7 @@ impl VaultView {
                 h_flex()
                     .gap_1()
                     .child({
-                        // E-mail cortado na barra; inteiro ao passar o mouse.
+                        // Email truncated in the bar; full on hover.
                         let email = SharedString::from(self.session.email.clone());
                         div()
                             .id("vault-email")
@@ -2253,11 +2526,19 @@ impl VaultView {
                     })
                     .child(self.render_sync_button(cx))
                     .child(
+                        Button::new("vault-health")
+                            .ghost()
+                            .small()
+                            .icon(IconName::ShieldCheck)
+                            .tooltip(t!("vault.health_tooltip"))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenHealth))),
+                    )
+                    .child(
                         Button::new("vault-generator")
                             .ghost()
                             .small()
                             .icon(IconName::Dices)
-                            .tooltip("Gerador de senhas (Ctrl+G)")
+                            .tooltip(t!("vault.generator_tooltip"))
                             .on_click(
                                 cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenGenerator)),
                             ),
@@ -2267,7 +2548,7 @@ impl VaultView {
                             .ghost()
                             .small()
                             .icon(IconName::Settings)
-                            .tooltip("Configurações (Ctrl+,)")
+                            .tooltip(t!("vault.settings_tooltip"))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings))),
                     )
                     .child(
@@ -2275,7 +2556,7 @@ impl VaultView {
                             .ghost()
                             .small()
                             .icon(IconName::Lock)
-                            .tooltip("Bloquear (Ctrl+L)")
+                            .tooltip(t!("vault.lock_tooltip"))
                             .on_click(cx.listener(|this, _, _, cx| this.request_lock(cx))),
                     ),
             );
@@ -2326,7 +2607,7 @@ impl VaultView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Check)
-                                    .tooltip("Salvar (Enter)")
+                                    .tooltip(t!("vault.save_enter"))
                                     .disabled(self.syncing)
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.save_rename_folder(cx)),
@@ -2337,7 +2618,7 @@ impl VaultView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Close)
-                                    .tooltip("Cancelar")
+                                    .tooltip(t!("common.cancel"))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.cancel_folder_edit(cx)),
                                     ),
@@ -2361,7 +2642,7 @@ impl VaultView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Pencil)
-                                    .tooltip("Renomear pasta")
+                                    .tooltip(t!("vault.rename_folder"))
                                     .disabled(self.syncing)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.start_rename_folder(window, cx)
@@ -2369,9 +2650,13 @@ impl VaultView {
                             )
                             .child(
                                 Button::new("folder-delete")
-                                    .when(confirming, |b| b.danger().label("Apagar?"))
+                                    .when(confirming, |b| {
+                                        b.danger().label(t!("vault.delete_confirm"))
+                                    })
                                     .when(!confirming, |b| {
-                                        b.ghost().icon(IconName::Trash).tooltip("Apagar pasta")
+                                        b.ghost()
+                                            .icon(IconName::Trash)
+                                            .tooltip(t!("vault.delete_folder"))
                                     })
                                     .xsmall()
                                     .disabled(self.syncing)
@@ -2384,9 +2669,9 @@ impl VaultView {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(if count == 1 {
-                                "1 item".to_owned()
+                                t!("vault.item_count_one").to_owned()
                             } else {
-                                format!("{count} itens")
+                                t!("vault.item_count", n = count)
                             }),
                     )
                     .child(
@@ -2394,7 +2679,7 @@ impl VaultView {
                             .ghost()
                             .small()
                             .icon(IconName::Plus)
-                            .tooltip("Novo item (Ctrl+N)")
+                            .tooltip(t!("vault.new_item_tooltip"))
                             .disabled(self.syncing)
                             .on_click(cx.listener(|this, _, window, cx| this.new_item(window, cx))),
                     ),
@@ -2410,7 +2695,7 @@ impl VaultView {
             ))
     }
 
-    /// Cartão "este item pede a senha mestra", no topo do detalhe.
+    /// "This item asks for the master password" card, at the top of the detail.
     fn render_reprompt(&self, item: &Item, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !item.reprompt {
             return None;
@@ -2426,7 +2711,7 @@ impl VaultView {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(Icon::new(IconName::LockOpen).xsmall())
-                    .child("Liberado com a senha mestra até você trocar de item.")
+                    .child(t!("vault.reprompt_unlocked"))
                     .into_any_element(),
             );
         }
@@ -2444,13 +2729,16 @@ impl VaultView {
                 h_flex()
                     .gap_2()
                     .text_sm()
-                    .font_medium()
+                    .font_semibold()
                     .child(Icon::new(IconName::LockKeyhole).small().text_color(accent))
-                    .child("Este item pede a senha mestra"),
+                    .child(t!("vault.reprompt_title")),
             )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                "Para mostrar, copiar, editar ou preencher os dados secretos, confirme que é você.",
-            ));
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("vault.reprompt_body")),
+            );
         let card = match prompt {
             None => card.child(
                 h_flex().child(
@@ -2458,7 +2746,7 @@ impl VaultView {
                         .outline()
                         .small()
                         .icon(IconName::KeyRound)
-                        .label("Digitar a senha mestra")
+                        .label(t!("vault.reprompt_start"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.start_reprompt(window, cx)),
                         ),
@@ -2481,9 +2769,9 @@ impl VaultView {
                                 .primary()
                                 .small()
                                 .label(if prompt.checking {
-                                    "Conferindo…"
+                                    t!("vault.checking")
                                 } else {
-                                    "Confirmar"
+                                    t!("common.confirm")
                                 })
                                 .loading(prompt.checking)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -2494,7 +2782,7 @@ impl VaultView {
                             Button::new("reprompt-cancel")
                                 .ghost()
                                 .small()
-                                .label("Cancelar")
+                                .label(t!("common.cancel"))
                                 .on_click(cx.listener(|this, _, _, cx| this.cancel_reprompt(cx))),
                         ),
                 )
@@ -2536,16 +2824,12 @@ impl VaultView {
                 .gap_3()
                 .text_color(cx.theme().muted_foreground)
                 .child(ui::icon_chip(IconName::LockKeyhole, px(48.), false, cx))
-                .child(
-                    div()
-                        .text_sm()
-                        .child("Selecione um item para ver os detalhes."),
-                )
+                .child(div().text_sm().child(t!("vault.select_item")))
                 .child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground.opacity(0.75))
-                        .child("Use as setas na lista; Enter abre o item."),
+                        .child(t!("vault.select_item_hint")),
                 )
                 .with_animation("detalhe-vazio", Animation::new(motion::NORMAL), |el, t| {
                     el.opacity(t)
@@ -2556,7 +2840,7 @@ impl VaultView {
         let vault = self.list.read(cx).delegate().vault();
         let place = match (&item.organization_id, &item.folder_id) {
             (Some(org), _) => vault.organizations.iter().find(|o| &o.id == org).map(|o| {
-                // "Empresa · Financeiro, TI"
+                // "Company · Finance, IT"
                 let cols: Vec<&str> = vault
                     .collections
                     .iter()
@@ -2587,7 +2871,7 @@ impl VaultView {
                         .outline()
                         .small()
                         .icon(IconName::Undo2)
-                        .label("Restaurar")
+                        .label(t!("vault.restore"))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| this.restore_selected(cx))),
                 )
@@ -2598,9 +2882,9 @@ impl VaultView {
                         .small()
                         .icon(IconName::Trash)
                         .label(if self.confirm_delete {
-                            "Confirmar: apagar de vez"
+                            t!("vault.delete_forever_confirm")
                         } else {
-                            "Apagar de vez"
+                            t!("vault.delete_forever")
                         })
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
@@ -2618,9 +2902,9 @@ impl VaultView {
                             IconName::Pin
                         })
                         .tooltip(if pinned {
-                            "Tirar do acesso rápido"
+                            t!("vault.unpin")
                         } else {
-                            "Fixar no acesso rápido"
+                            t!("vault.pin")
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_pin(cx))),
                 )
@@ -2629,8 +2913,8 @@ impl VaultView {
                         .outline()
                         .small()
                         .icon(IconName::Pencil)
-                        .label("Editar")
-                        .tooltip("Editar (Ctrl+E)")
+                        .label(t!("common.edit"))
+                        .tooltip(t!("vault.edit_tooltip"))
                         .disabled(busy)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.edit_selected(window, cx)),
@@ -2641,15 +2925,57 @@ impl VaultView {
                         .ghost()
                         .small()
                         .icon(IconName::Trash)
-                        .tooltip("Mover para a lixeira")
+                        .tooltip(t!("vault.move_to_trash"))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| this.trash_selected(cx))),
                 );
         }
 
+        let picker_open = self.icon_picker;
         let header = h_flex()
             .gap_4()
-            .child(ui::icon_chip(kind_icon(&item.kind), px(48.), true, cx))
+            .child(
+                // Clicking the icon opens the icon and color picker.
+                div()
+                    .id("item-icon")
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(t!("icons.choose")))
+                    .relative()
+                    .cursor_pointer()
+                    .rounded(cx.theme().radius)
+                    .hover(|s| s.opacity(0.85))
+                    .active(|s| s.opacity(0.7))
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(t!("icons.choose"))
+                            .build(window, cx)
+                    })
+                    .child(crate::item_icons::chip(item, px(48.), true, cx))
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(-4.))
+                            .bottom(px(-4.))
+                            .size(px(18.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(cx.theme().background)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                Icon::new(if picker_open {
+                                    IconName::Close
+                                } else {
+                                    IconName::Pencil
+                                })
+                                .xsmall(),
+                            ),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_icon_picker(cx))),
+            )
             .child(
                 v_flex()
                     .min_w_0()
@@ -2690,13 +3016,13 @@ impl VaultView {
         let has_badges = item.deleted || matches!(item.kind, ItemKind::Unknown(_));
         let mut badges = h_flex().gap_2();
         if item.deleted {
-            badges = badges.child(Tag::danger().small().child("Na lixeira"));
+            badges = badges.child(Tag::danger().small().child(t!("vault.in_trash")));
         }
         if let ItemKind::Unknown(code) = item.kind {
             badges = badges.child(
                 Tag::secondary()
                     .small()
-                    .child(format!("Tipo {code} ainda não suportado")),
+                    .child(t!("vault.unsupported_type", code = code)),
             );
         }
 
@@ -2752,8 +3078,8 @@ impl VaultView {
                                 .when(row.multiline && revealed, |d| d.whitespace_normal())
                                 .child(motion::fade(
                                     div().child(shown.clone()),
-                                    // Nunca o valor na chave (pode ser uma senha):
-                                    // só o campo, se está revelado e, no TOTP, o período.
+                                    // Never the value in the key (it may be a password):
+                                    // only the field, whether it is revealed and, for TOTP, the period.
                                     motion::key(
                                         "valor",
                                         format!("{}:{revealed}:{}", row.key, totp_step(&row.key)),
@@ -2771,7 +3097,11 @@ impl VaultView {
                             } else {
                                 IconName::Eye
                             })
-                            .tooltip(if revealed { "Ocultar" } else { "Mostrar" })
+                            .tooltip(if revealed {
+                                t!("vault.hide")
+                            } else {
+                                t!("vault.show")
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.toggle_reveal(&reveal_key, window, cx)
                             })),
@@ -2791,7 +3121,7 @@ impl VaultView {
                         } else {
                             IconName::Copy
                         })
-                        .tooltip("Copiar")
+                        .tooltip(t!("common.copy"))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.copy_field(&copy_key, window, cx)
                         }));
@@ -2827,12 +3157,22 @@ impl VaultView {
                     .py_8()
                     .gap_6()
                     .child(header)
+                    .when(picker_open, |el| {
+                        el.child(self.render_icon_picker(item, cx))
+                    })
                     .when(has_badges, |el| el.child(badges))
                     .children(self.render_reprompt(item, cx))
                     .when(total > 0, |el| el.child(fields))
                     .children(attachments),
             );
         motion::slide(detail, motion::key("detalhe", &item.id), 12.).into_any_element()
+    }
+}
+
+impl VaultView {
+    /// The language changed: the texts come with the next draw (transient fields stay as they are).
+    pub fn relabel(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
     }
 }
 

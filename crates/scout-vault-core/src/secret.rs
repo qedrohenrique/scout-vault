@@ -1,6 +1,6 @@
-//! Texto sensível decifrado (senhas, notas, números de cartão...).
+//! Sensitive decrypted text (passwords, notes, card numbers...).
 //!
-//! Zera a memória ao ser descartado e nunca aparece em `Debug`.
+//! Zeroes its memory when dropped and never shows up in `Debug`.
 
 use std::fmt;
 
@@ -14,7 +14,7 @@ impl Secret {
         Self(Zeroizing::new(value))
     }
 
-    /// Acesso explícito ao valor — torna fácil auditar onde segredos são lidos.
+    /// Explicit access to the value — makes it easy to audit where secrets are read.
     pub fn expose(&self) -> &str {
         &self.0
     }

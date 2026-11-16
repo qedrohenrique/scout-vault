@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Scout Vault",
-  "short_name": "Scout Vault",
-  "description": "Preenche e salva logins do app Scout Vault (compatível com Bitwarden) nos sites.",
-  "version": "0.3.0",
+  "name": "__MSG_extName__",
+  "short_name": "__MSG_extName__",
+  "description": "__MSG_extDescription__",
+  "default_locale": "pt_BR",
+  "version": "0.4.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs3jjsCgWmVEJr1XURAtdHZH3toyiT8t6xkkm82byyr1NNBuj/xAMCNgJR+K7esOr0ylTaI0lHBfPCsZStYhYMpbNlKJgDMGGxA1n1KKwYWP4fSYSQr/XkDdrWVTsO+xAgfoBPseOQ9xhRFb9LklbSshCevnBb7kDPGjv8mzjNADNHSWxystK+g/TALJWPfXZdtnT0CJz7AoDmzKSlqvgWCwdwuYKD8m9fhE+VnZyUj5yZTf+XZAX9QbIEjgX7r00yx6j6w63ylPvvWo+vGMYO7xDzPl6SRq+SNBBcjGm/1BJvIz9oR2aF0K+huP611lhWrgSWowrgXmS4x2+47qiwQIDAQAB",
   "permissions": [
     "nativeMessaging",
@@ -21,6 +22,8 @@
         "https://*/*"
       ],
       "js": [
+        "fill.js",
+        "inline.js",
         "capture.js"
       ],
       "run_at": "document_idle"
@@ -45,7 +48,13 @@
       "suggested_key": {
         "default": "Ctrl+Shift+L"
       },
-      "description": "Abrir o Scout Vault"
+      "description": "__MSG_cmdOpen__"
+    },
+    "inline-menu": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "__MSG_cmdInline__"
     }
   }
 }

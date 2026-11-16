@@ -1,27 +1,27 @@
-//! Segundo fator por chave de segurança (FIDO2/WebAuthn) ou Windows Hello,
-//! usando a API nativa do Windows (`webauthn.dll`) — a mesma que os navegadores usam.
+//! Second factor with a security key (FIDO2/WebAuthn) or Windows Hello,
+//! using the native Windows API (`webauthn.dll`) — the same one browsers use.
 //!
-//! O servidor manda as opções da asserção em `TwoFactorProviders2["7"]`
-//! (`challenge`, `allowCredentials`, `rpId`, `extensions.appid`…). Montamos o
-//! `clientDataJSON` com a **origem do cofre web** (é a origem que o servidor
-//! aceita), pedimos a assinatura ao Windows e devolvemos o JSON que o servidor
-//! espera em `twoFactorToken`: `id`, `rawId`, `type`, `extensions` e
-//! `response.{authenticatorData, clientDataJson, signature}` em base64url sem padding.
+//! The server sends the assertion options in `TwoFactorProviders2["7"]`
+//! (`challenge`, `allowCredentials`, `rpId`, `extensions.appid`…). We build the
+//! `clientDataJSON` with the **web vault origin** (that is the origin the server
+//! accepts), ask Windows for the signature and return the JSON the server
+//! expects in `twoFactorToken`: `id`, `rawId`, `type`, `extensions` and
+//! `response.{authenticatorData, clientDataJson, signature}` in unpadded base64url.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-/// O que a API do Windows devolve de uma asserção.
+/// What the Windows API returns from an assertion.
 pub struct Assertion {
     pub credential_id: Vec<u8>,
     pub authenticator_data: Vec<u8>,
     pub signature: Vec<u8>,
-    /// A chave usou o AppID legado (U2F) em vez do `rpId`.
+    /// The key used the legacy AppID (U2F) instead of the `rpId`.
     pub used_app_id: bool,
 }
 
-/// Opções relevantes da asserção, lidas do JSON do servidor.
+/// Relevant assertion options, read from the server's JSON.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     pub challenge: String,
@@ -42,7 +42,7 @@ pub fn parse_options(v: &Value) -> Result<Options, String> {
     let challenge = v
         .get("challenge")
         .and_then(Value::as_str)
-        .ok_or("O servidor não mandou o desafio da chave de segurança.")?
+        .ok_or(t!("webauthn.no_challenge"))?
         .to_owned();
     let credential_ids = v
         .get("allowCredentials")
@@ -70,7 +70,7 @@ pub fn parse_options(v: &Value) -> Result<Options, String> {
     })
 }
 
-/// `clientDataJSON` de uma asserção (`webauthn.get`) para a origem dada.
+/// `clientDataJSON` of an assertion (`webauthn.get`) for the given origin.
 pub fn client_data_json(challenge: &str, origin: &str) -> String {
     json!({
         "type": "webauthn.get",
@@ -81,7 +81,7 @@ pub fn client_data_json(challenge: &str, origin: &str) -> String {
     .to_string()
 }
 
-/// O `twoFactorToken` no formato do cofre web.
+/// The `twoFactorToken` in the web vault's format.
 pub fn token_json(a: &Assertion, client_data: &str) -> String {
     let id = URL_SAFE_NO_PAD.encode(&a.credential_id);
     let extensions = if a.used_app_id {
@@ -103,7 +103,7 @@ pub fn token_json(a: &Assertion, client_data: &str) -> String {
     .to_string()
 }
 
-/// Host de uma URL (`https://vault.bitwarden.com/` → `vault.bitwarden.com`).
+/// Host of a URL (`https://vault.bitwarden.com/` → `vault.bitwarden.com`).
 pub fn host_of(url: &str) -> String {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
@@ -114,8 +114,8 @@ pub fn host_of(url: &str) -> String {
         .to_owned()
 }
 
-/// Pede a assinatura (toque na chave / Windows Hello) e devolve o token pronto.
-/// Bloqueia até a pessoa responder — chame fora da thread de UI.
+/// Asks for the signature (touch the key / Windows Hello) and returns the ready token.
+/// Blocks until the person responds — call it off the UI thread.
 pub fn sign(options: &Value, vault_origin: &str) -> Result<String, String> {
     let opts = parse_options(options)?;
     let rp_id = opts.rp_id.clone().unwrap_or_else(|| host_of(vault_origin));
@@ -159,7 +159,7 @@ mod platform {
         let app_id = opts.app_id.as_deref().map(HSTRING::from);
         let mut used_app_id = BOOL(0);
         let options = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS {
-            // Versão 2: a primeira com o AppID legado (U2F); funciona desde o Windows 10 1903.
+            // Version 2: the first with the legacy AppID (U2F); works since Windows 10 1903.
             dwVersion: WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_2,
             dwTimeoutMilliseconds: opts.timeout_ms,
             CredentialList: WEBAUTHN_CREDENTIALS {
@@ -181,16 +181,16 @@ mod platform {
         };
 
         let rp = HSTRING::from(rp_id);
-        // SAFETY: todos os ponteiros apontam para buffers vivos até o fim desta função;
-        // a asserção devolvida é copiada e liberada com WebAuthNFreeAssertion.
+        // SAFETY: every pointer points to buffers that live until the end of this function;
+        // the returned assertion is copied and freed with WebAuthNFreeAssertion.
         unsafe {
             let hwnd = GetForegroundWindow();
             let ptr = WebAuthNAuthenticatorGetAssertion(hwnd, &rp, &client, Some(&options))
                 .map_err(|e| {
                     if e.code().0 as u32 == 0x800704C7 {
-                        "A verificação da chave de segurança foi cancelada.".to_owned()
+                        t!("webauthn.canceled").to_owned()
                     } else {
-                        format!("A chave de segurança não respondeu: {}", e.message())
+                        t!("webauthn.no_answer", e = e.message())
                     }
                 })?;
             let a = &*ptr;
@@ -212,7 +212,7 @@ mod platform {
     use super::{Assertion, Options};
 
     pub fn get_assertion(_: &str, _: &str, _: &Options) -> Result<Assertion, String> {
-        Err("Chave de segurança só é suportada no Windows por enquanto.".into())
+        Err(t!("webauthn.windows_only").into())
     }
 }
 

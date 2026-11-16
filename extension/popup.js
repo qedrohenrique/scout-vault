@@ -1,8 +1,13 @@
-// Popup da extensão: pede ao app Scout Vault os logins do site aberto e preenche
-// o escolhido. Senhas só saem do app quando a pessoa clica num login.
+// Extension popup: asks the Scout Vault app for the open site's logins and fills
+// the chosen one. Passwords only leave the app when the person clicks a login.
 const HOST = "com.scoutvault.desktop";
 
 const $ = (s) => document.querySelector(s);
+const tr = (key, ...subs) => chrome.i18n.getMessage(key, subs) || key;
+
+// Fixed HTML texts: data-i18n attribute with the message key.
+document.documentElement.lang = chrome.i18n.getUILanguage();
+for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = tr(el.dataset.i18n);
 
 function show(text) {
   $("#message").textContent = text;
@@ -23,15 +28,15 @@ function ask(message) {
 
 function explain(response) {
   if (response.error === "app") {
-    return 'O Scout Vault não respondeu. Abra o app e ative "Preencher no navegador" nas configurações.';
+    return tr("errAppSetup");
   }
   if (response.error === "closed") {
-    return "O Scout Vault está fechado. Abra o app e tente de novo.";
+    return tr("errClosed");
   }
   if (response.locked) {
-    return "O Scout Vault está bloqueado. Desbloqueie no app e tente de novo.";
+    return tr("errLocked");
   }
-  return response.error || "Algo deu errado.";
+  return response.error || tr("errGeneric");
 }
 
 async function fill(tab, url, id) {
@@ -49,7 +54,7 @@ async function fill(tab, url, id) {
   if (filled && (filled.username || filled.password)) {
     window.close();
   } else {
-    show("Não encontrei o formulário de login nesta página.");
+    show(tr("popupNoForm"));
   }
 }
 
@@ -57,7 +62,7 @@ async function main() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = (tab && tab.url) || "";
   if (!/^https?:\/\//.test(url)) {
-    show("Abra um site para preencher.");
+    show(tr("popupOpenSite"));
     return;
   }
   $("#site").textContent = new URL(url).hostname;
@@ -67,7 +72,7 @@ async function main() {
     return;
   }
   if (!response.items.length) {
-    show("Nenhum login salvo para este site.");
+    show(tr("popupNoLogins"));
     return;
   }
   $("#message").textContent = "";
@@ -92,4 +97,27 @@ async function main() {
   list.querySelector("button").focus();
 }
 
+// Inline menu switch (inline.js): on by default.
+async function setupToggle() {
+  const box = $("#inline-menu");
+  const { inlineMenu } = await chrome.storage.local.get({ inlineMenu: true });
+  box.checked = inlineMenu !== false;
+  box.addEventListener("change", () => chrome.storage.local.set({ inlineMenu: box.checked }));
+
+  // Site hidden by the menu's "Don't show on this site": can be undone here.
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !/^https?:\/\//.test(tab.url || "")) return;
+  const host = new URL(tab.url).hostname;
+  const { inlineOff } = await chrome.storage.local.get({ inlineOff: [] });
+  if (!inlineOff.includes(host)) return;
+  const again = $("#inline-site");
+  again.hidden = false;
+  again.addEventListener("click", async () => {
+    const now = (await chrome.storage.local.get({ inlineOff: [] })).inlineOff;
+    await chrome.storage.local.set({ inlineOff: now.filter((h) => h !== host) });
+    again.hidden = true;
+  });
+}
+
+setupToggle();
 main();

@@ -1,11 +1,11 @@
-"""Notas de uma release a partir do CHANGELOG.md.
+"""Release notes from CHANGELOG.md.
 
-Uso: python tools/release_notes.py 0.3.0 [--out notas.md]
+Usage: python tools/release_notes.py 0.3.0 [--out notes.md]
 
-Confere que a versão bate com o `Cargo.toml` e que o CHANGELOG tem a seção
-`## [0.3.0] - AAAA-MM-DD`; imprime essa seção com o aviso de versão de teste e
-as instruções de uso. Sai com erro (e explica) se algo não bater — assim a
-release não sai com notas erradas.
+Checks that the version matches `Cargo.toml` and that the CHANGELOG has the section
+`## [0.3.0] - YYYY-MM-DD`; prints that section with the test-version notice and
+the usage instructions. Exits with an error (and explains) if something doesn't
+match — so the release never ships with wrong notes.
 """
 
 from __future__ import annotations
@@ -17,21 +17,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-HEADER = """> ⚠️ **Versão de teste.** A criptografia passa nos vetores oficiais, mas o app ainda não teve \
-revisão de segurança externa. Mantenha o app oficial ou o cofre web como reserva. Projeto não \
-oficial, sem afiliação com a Bitwarden Inc.
+HEADER = """> ⚠️ **Test version.** The cryptography passes the official test vectors, but the app has not \
+had an external security review yet. Keep the official app or the web vault as a backup. \
+Unofficial project, not affiliated with Bitwarden Inc.
 """
 
-FOOTER = """## Como usar
-1. Baixe `scout-vault-{version}-windows-x64.zip`, extraia numa pasta e abra `scout-vault.exe` \
-(se uma versão anterior estiver aberta, saia dela pela bandeja antes).
-2. O executável não é assinado: se o Windows mostrar "O Windows protegeu o computador", clique em \
-**Mais informações → Executar assim mesmo**.
-3. Precisa do Windows 10/11 64 bits. Se aparecer "VCRUNTIME140.dll não encontrado", instale o \
+FOOTER = """## How to use
+1. Download `scout-vault-{version}-windows-x64.zip`, extract it to a folder and open `scout-vault.exe` \
+(if an earlier version is running, quit it from the tray first).
+2. The executable is not signed: if Windows shows "Windows protected your PC", click \
+**More info → Run anyway**.
+3. Requires 64-bit Windows 10/11. If you see "VCRUNTIME140.dll was not found", install the \
 Microsoft Visual C++ Redistributable (x64).
 
-A extensão do navegador fica na pasta `extension` do zip (Configurações → Navegador explica como \
-carregar). Confira o arquivo com o `.sha256` publicado junto.
+The browser extension is in the zip's `extension` folder (Settings → Browser explains how to \
+load it). Verify the file against the `.sha256` published alongside it.
 """
 
 
@@ -40,7 +40,7 @@ def cargo_version() -> str:
     section = text.split("[workspace.package]", 1)[1]
     match = re.search(r'^version\s*=\s*"([^"]+)"', section, re.M)
     if not match:
-        sys.exit("Cargo.toml: não achei a versão em [workspace.package].")
+        sys.exit("Cargo.toml: could not find the version in [workspace.package].")
     return match.group(1)
 
 
@@ -50,30 +50,30 @@ def changelog_section(version: str) -> str:
     match = heading.search(text)
     if not match:
         sys.exit(
-            f"CHANGELOG.md: falta a seção '## [{version}] - AAAA-MM-DD'. "
-            "Renomeie '## [Ainda não lançado]' para a versão e a data antes da tag."
+            f"CHANGELOG.md: missing section '## [{version}] - YYYY-MM-DD'. "
+            "Rename '## [Unreleased]' to the version and date before tagging."
         )
     rest = text[match.end():]
     end = re.search(r"^## \[|^\[[^\]]+\]: ", rest, re.M)
     body = (rest[: end.start()] if end else rest).strip()
     if not body:
-        sys.exit(f"CHANGELOG.md: a seção {version} está vazia.")
-    # Títulos "### Adicionado" viram "## Adicionado" na página da release.
+        sys.exit(f"CHANGELOG.md: section {version} is empty.")
+    # "### Added" headings become "## Added" on the release page.
     return re.sub(r"^### ", "## ", body, flags=re.M)
 
 
 def notes(version: str) -> str:
     cargo = cargo_version()
     if cargo != version:
-        sys.exit(f"A tag é {version}, mas o Cargo.toml está em {cargo}. Ajuste um dos dois.")
+        sys.exit(f"The tag is {version}, but Cargo.toml is at {cargo}. Fix one of them.")
     return "\n".join([HEADER, changelog_section(version), "", FOOTER.format(version=version)])
 
 
 def main() -> None:
     sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("version", help="versão sem o 'v' (ex.: 0.3.0); aceita 'v0.3.0'")
-    parser.add_argument("--out", type=Path, help="grava num arquivo em vez de imprimir")
+    parser.add_argument("version", help="version without the 'v' (e.g. 0.3.0); 'v0.3.0' is accepted")
+    parser.add_argument("--out", type=Path, help="write to a file instead of printing")
     args = parser.parse_args()
     text = notes(args.version.removeprefix("v"))
     if args.out:

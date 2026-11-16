@@ -1,25 +1,24 @@
-//! Ícone na bandeja do Windows (área de notificação, perto do relógio).
+//! Windows tray icon (notification area, near the clock).
 //!
-//! Fechar a janela só a esconde: o app segue rodando — o atalho `Ctrl+Alt+A`
-//! e o preenchimento no navegador continuam funcionando. Pelo ícone:
-//! clique abre a janela; o botão direito abre o menu do app
-//! ([`crate::tray_menu`]), com o tema e a cor de destaque: **acesso rápido**
-//! (copiar usuário, senha ou código dos itens fixados, sem abrir a janela),
-//! **Abrir**, **Gerar e copiar senha**, **Sincronizar agora**,
-//! **Bloquear**/**Desbloquear…** e **Sair**.
+//! Closing the window only hides it: the app keeps running — the `Ctrl+Alt+A`
+//! shortcut and browser autofill keep working. From the icon:
+//! a click opens the window; right-click opens the app's menu
+//! ([`crate::tray_menu`]), with the theme and the accent color: **quick access**
+//! (copy username, password or code of pinned items, without opening the window),
+//! **Open**, **Generate and copy password**, **Sync now**,
+//! **Lock**/**Unlock…** and **Quit**.
 //!
-//! O ícone vive numa thread própria com uma janela invisível do Win32 (como o
-//! atalho global), e os comandos chegam ao app por um canal.
-//! Abrir o executável de novo com o app já rodando só mostra a janela existente.
+//! The icon lives on its own thread with an invisible Win32 window (like the
+//! global shortcut), and the commands reach the app through a channel.
+//! Opening the executable again with the app already running just shows the existing window.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui_kit::assets::IconName;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::vault_view::CopyShortcut;
 
-/// O que a bandeja pede ao app.
+/// What the tray asks of the app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Show,
@@ -31,22 +30,22 @@ pub enum Command {
         item_id: String,
         what: CopyShortcut,
     },
-    /// Busca rápida: digitar este item no app que estava em foco.
+    /// Quick search: type this item into the app that had focus.
     Fill {
         item_id: String,
     },
-    /// Busca rápida: mostrar este item no Scout Vault.
+    /// Quick search: show this item in Scout Vault.
     OpenItem {
         item_id: String,
     },
-    /// Botão direito no ícone: abrir o menu com o canto no cursor (pixels de tela).
+    /// Right-click on the icon: open the menu with its corner at the cursor (screen pixels).
     OpenMenu {
         x: i32,
         y: i32,
     },
 }
 
-/// Um item fixado no acesso rápido, como o menu precisa dele.
+/// An item pinned to quick access, as the menu needs it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PinnedEntry {
     pub id: String,
@@ -54,21 +53,21 @@ pub struct PinnedEntry {
     pub has_username: bool,
     pub has_password: bool,
     pub has_totp: bool,
-    /// Ícone do tipo do item.
-    pub icon: Option<IconName>,
+    /// The item's icon (the chosen one, the site's brand or the type's).
+    pub icon: Option<crate::item_icons::ItemIcon>,
 }
 
-/// O que o menu mostra: depende de o cofre estar aberto e do acesso rápido.
+/// What the menu shows: depends on whether the vault is open and on quick access.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MenuState {
     pub unlocked: bool,
     pub pinned: Vec<PinnedEntry>,
 }
 
-/// Onde pôr o menu (canto de cima à esquerda, em pixels físicos) para que ele
-/// abra junto do cursor e caiba na área de trabalho. Na bandeja de baixo ele
-/// sobe a partir do cursor; com a barra de tarefas em cima ou à esquerda, desce
-/// ou vai para a direita.
+/// Where to put the menu (top-left corner, in physical pixels) so that it
+/// opens next to the cursor and fits in the work area. With the tray at the bottom it
+/// goes up from the cursor; with the taskbar at the top or on the left, it goes down
+/// or to the right.
 pub fn place_menu(cursor: (i32, i32), size: (i32, i32), work: (i32, i32, i32, i32)) -> (i32, i32) {
     let (left, top, right, bottom) = work;
     let (w, h) = size;
@@ -86,14 +85,14 @@ pub fn place_menu(cursor: (i32, i32), size: (i32, i32), work: (i32, i32, i32, i3
     )
 }
 
-/// Área de trabalho (sem a barra de tarefas) e escala do monitor principal.
+/// Work area (without the taskbar) and scale of the primary monitor.
 pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
     platform::work_area_and_scale()
 }
 
 static SYSTEM: AtomicBool = AtomicBool::new(false);
 
-/// Permite criar o ícone e esconder janelas (só o app real; nunca nos testes).
+/// Allows creating the icon and hiding windows (real app only; never in tests).
 pub fn enable_system() {
     SYSTEM.store(true, Ordering::Relaxed);
 }
@@ -102,7 +101,7 @@ pub fn system_enabled() -> bool {
     SYSTEM.load(Ordering::Relaxed)
 }
 
-/// Ícone ativo; soltar o valor o remove da bandeja.
+/// Active icon; dropping the value removes it from the tray.
 pub struct Tray {
     #[cfg_attr(not(windows), allow(dead_code))]
     hwnd: isize,
@@ -115,35 +114,49 @@ impl Drop for Tray {
 }
 
 impl Tray {
-    /// Balão do Windows (uma frase), ex.: "continua rodando na bandeja".
+    /// Windows balloon (one sentence), e.g. "still running in the tray".
     pub fn notify(&self, title: &str, text: &str) {
         platform::balloon(self.hwnd, title, text);
     }
 }
 
-/// Cria o ícone. Cada clique/menu manda um [`Command`] por `tx`.
+/// Creates the icon. Each click/menu sends a [`Command`] through `tx`.
 pub fn start(tx: UnboundedSender<Command>) -> Result<Tray, String> {
     platform::start(tx).map(|hwnd| Tray { hwnd })
 }
 
-/// Se o app já está rodando (na bandeja), pede para ele aparecer e devolve `true`.
+/// If the app is already running (in the tray), asks it to show up and returns `true`.
 pub fn wake_existing_instance() -> bool {
     platform::wake_existing()
 }
 
-/// Esconde a janela do app (some da barra de tarefas; o ícone da bandeja fica).
+/// Hides the app window (gone from the taskbar; the tray icon stays).
 pub fn hide_window(window: &gpui_kit::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         platform::show(hwnd, false);
     }
 }
 
-/// Mostra de novo e traz para a frente.
+/// Shows it again and brings it to the front.
 pub fn show_window(window: &gpui_kit::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         platform::show(hwnd, true);
     }
     window.activate_window();
+}
+
+/// Is the window minimized? (outside the real app, always `false`)
+pub fn is_minimized(window: &gpui_kit::Window) -> bool {
+    system_enabled() && hwnd_of(window).is_some_and(platform::is_iconic)
+}
+
+/// Floating window without the Windows 11 frame: no 1 px border and no
+/// rounded corners that the system puts around the transparent area — the app itself
+/// draws the card (with corners and shadow).
+pub fn frameless(window: &gpui_kit::Window) {
+    if let Some(hwnd) = hwnd_of(window) {
+        platform::frameless(hwnd);
+    }
 }
 
 fn hwnd_of(window: &gpui_kit::Window) -> Option<isize> {
@@ -174,9 +187,9 @@ mod platform {
     use super::Command;
 
     const CLASS: PCWSTR = w!("ScoutVaultTray");
-    /// Mensagem do ícone (cliques).
+    /// Icon message (clicks).
     const WM_TRAY: u32 = WM_APP + 1;
-    /// Mensagem de outra instância: "apareça".
+    /// Message from another instance: "show up".
     const WM_WAKE: u32 = WM_APP + 2;
     const ID: u32 = 1;
 
@@ -214,7 +227,7 @@ mod platform {
         let mut nid = data(hwnd);
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAY;
-        // Ícone do executável (recurso 1, o mesmo da barra de tarefas).
+        // Executable icon (resource 1, the same as the taskbar).
         let module = GetModuleHandleW(None).unwrap_or_default();
         nid.hIcon = LoadIconW(Some(module.into()), PCWSTR(1 as _))
             .or_else(|_| LoadIconW(None, IDI_APPLICATION))
@@ -223,8 +236,8 @@ mod platform {
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }
 
-    /// Pede ao app para abrir o menu no cursor. Trazer a janela invisível para
-    /// a frente dá ao app o direito de focar o menu (regra do Windows).
+    /// Asks the app to open the menu at the cursor. Bringing the invisible window to
+    /// the front gives the app the right to focus the menu (a Windows rule).
     unsafe fn request_menu(hwnd: HWND) {
         let mut pt = Default::default();
         let _ = GetCursorPos(&mut pt);
@@ -250,7 +263,7 @@ mod platform {
                 PostQuitMessage(0);
                 LRESULT(0)
             }
-            // O Explorer reiniciou: o ícone some e precisa ser posto de novo.
+            // Explorer restarted: the icon disappears and has to be added again.
             m if m != 0 && m == TASKBAR_CREATED.with(|t| *t.borrow()) => {
                 add_icon(hwnd);
                 LRESULT(0)
@@ -265,7 +278,7 @@ mod platform {
             .name("scout-vault-tray".into())
             .spawn(move || {
                 TX.with(|t| *t.borrow_mut() = Some(tx));
-                // SAFETY: registro e laço de mensagens desta thread, como pede o Win32.
+                // SAFETY: registration and message loop of this thread, as Win32 requires.
                 unsafe {
                     let module = GetModuleHandleW(None).unwrap_or_default();
                     let class = WNDCLASSW {
@@ -315,7 +328,7 @@ mod platform {
 
     pub fn remove(hwnd: isize) {
         let hwnd = HWND(hwnd as *mut _);
-        // SAFETY: tira o ícone e fecha a janela invisível (a thread termina sozinha).
+        // SAFETY: removes the icon and closes the invisible window (the thread ends on its own).
         unsafe {
             let _ = Shell_NotifyIconW(NIM_DELETE, &data(hwnd));
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -328,14 +341,14 @@ mod platform {
         nid.szInfoTitle = wide(title);
         nid.szInfo = wide(text);
         nid.dwInfoFlags = NIIF_INFO;
-        // SAFETY: estrutura preenchida acima.
+        // SAFETY: structure filled in above.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
     }
 
     pub fn wake_existing() -> bool {
-        // SAFETY: só procura a janela invisível de outra instância e posta uma mensagem.
+        // SAFETY: only looks up another instance's invisible window and posts a message.
         unsafe {
             match FindWindowW(CLASS, None) {
                 Ok(hwnd) if !hwnd.is_invalid() => {
@@ -346,9 +359,40 @@ mod platform {
         }
     }
 
+    pub fn is_iconic(hwnd: isize) -> bool {
+        // SAFETY: only queries the state of the app's own window.
+        unsafe { IsIconic(HWND(hwnd as *mut _)).as_bool() }
+    }
+
+    pub fn frameless(hwnd: isize) {
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+            DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        };
+        let hwnd = HWND(hwnd as *mut _);
+        // SAFETY: visual attributes of our own window; 4-byte values.
+        // On Windows 10 these attributes don't exist and the call just fails.
+        unsafe {
+            let corner = DWMWCP_DONOTROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                (&raw const corner).cast(),
+                std::mem::size_of_val(&corner) as u32,
+            );
+            let none = DWMWA_COLOR_NONE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                (&raw const none).cast(),
+                std::mem::size_of_val(&none) as u32,
+            );
+        }
+    }
+
     pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
         let mut rect = RECT::default();
-        // SAFETY: só lê a área de trabalho e o DPI do sistema.
+        // SAFETY: only reads the work area and the system DPI.
         unsafe {
             let _ = SystemParametersInfoW(
                 SPI_GETWORKAREA,
@@ -366,7 +410,7 @@ mod platform {
 
     pub fn show(hwnd: isize, visible: bool) {
         let hwnd = HWND(hwnd as *mut _);
-        // SAFETY: HWND da própria janela do app.
+        // SAFETY: HWND of the app's own window.
         unsafe {
             if visible {
                 let _ = ShowWindow(hwnd, SW_SHOW);
@@ -394,6 +438,10 @@ mod platform {
         false
     }
     pub fn show(_: isize, _: bool) {}
+    pub fn is_iconic(_: isize) -> bool {
+        false
+    }
+    pub fn frameless(_: isize) {}
     pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
         ((0, 0, 1920, 1080), 1.)
     }
@@ -401,14 +449,14 @@ mod platform {
 
 #[cfg(all(test, windows))]
 mod tests {
-    /// Cria o ícone de verdade por um instante (sem janela, sem balão), confere
-    /// que outra instância o encontra e remove. Rode com `--ignored`.
+    /// Creates the real icon for a moment (no window, no balloon), checks
+    /// that another instance finds it and removes it. Run with `--ignored`.
     #[test]
     #[ignore]
     fn tray_icon_starts_is_found_and_goes_away() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let tray = super::start(tx).expect("criar o ícone");
-        // A "segunda instância" acha a primeira e pede para aparecer.
+        // The "second instance" finds the first one and asks it to show up.
         assert!(super::wake_existing_instance());
         let mut got = None;
         for _ in 0..200 {
@@ -438,14 +486,14 @@ mod menu_tests {
 
     #[test]
     fn stays_inside_the_work_area() {
-        // Cursor no canto de cima (barra de tarefas em cima): desce.
+        // Cursor in the top corner (taskbar at the top): goes down.
         assert_eq!(
             place_menu((1800, 10), (300, 400), (0, 40, 1920, 1080)),
             (1500, 40)
         );
-        // Perto da borda esquerda: vai para a direita do cursor.
+        // Near the left edge: goes to the right of the cursor.
         assert_eq!(place_menu((100, 1060), (300, 400), WORK), (100, 640));
-        // Menu maior que a tela não sai pela esquerda/topo.
+        // A menu bigger than the screen doesn't go past the left/top.
         assert_eq!(place_menu((50, 50), (3000, 3000), WORK), (0, 0));
     }
 }

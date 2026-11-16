@@ -1,32 +1,32 @@
-//! Preenchimento em apps do Windows ("auto-type").
+//! Filling in Windows apps ("auto-type").
 //!
-//! Com o cofre aberto, `Ctrl+Alt+A` em qualquer janela faz o Scout Vault escolher o
-//! login pelo título da janela e **digitar** `usuário ⇥ senha ↵` nela — como o
-//! KeePass. Se houver mais de um candidato (ou nenhum), o Scout Vault aparece com a
-//! lista para escolher. Nada passa pela área de transferência.
+//! With the vault open, `Ctrl+Alt+A` in any window makes Scout Vault pick the
+//! login by the window title and **type** `username ⇥ password ↵` into it — like
+//! KeePass. If there is more than one candidate (or none), Scout Vault shows up with the
+//! list to choose from. Nothing goes through the clipboard.
 //!
-//! Segurança: antes de cada parte digitada, conferimos que a janela em foco
-//! ainda é a de destino; se mudou, paramos sem digitar o resto.
+//! Security: before each typed part, we check that the focused window is
+//! still the target; if it changed, we stop without typing the rest.
 
 use std::sync::Arc;
 
 use scout_vault_core::vault::{Item, ItemKind};
 use zeroize::Zeroizing;
 
-/// Atalho global, para mostrar na interface.
+/// Global shortcut, to show in the interface.
 pub const HOTKEY_LABEL: &str = "Ctrl+Alt+A";
 
-/// Pedido de preenchimento: a janela que estava em foco quando o atalho foi usado.
+/// Fill request: the window that had focus when the shortcut was used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
-    /// `HWND` da janela de destino (como número, para cruzar threads).
+    /// `HWND` of the target window (as a number, to cross threads).
     pub window: isize,
     pub title: String,
-    /// A janela em foco era o próprio Scout Vault.
+    /// The focused window was Scout Vault itself.
     pub own_window: bool,
 }
 
-/// Uma parte do que será digitado.
+/// A part of what will be typed.
 pub enum Key {
     Text(Zeroizing<String>),
     Tab,
@@ -43,10 +43,10 @@ impl std::fmt::Debug for Key {
     }
 }
 
-/// Quem digita de verdade (trocado por um falso nos testes).
+/// Who actually types (swapped for a fake in tests).
 pub type Typer = Arc<dyn Fn(isize, Vec<Key>) -> Result<(), String> + Send + Sync>;
 
-/// O que digitar para um item: `usuário ⇥ senha` e, se pedido, `↵`.
+/// What to type for an item: `username ⇥ password` and, if asked, `↵`.
 pub fn sequence(item: &Item, press_enter: bool) -> Vec<Key> {
     let ItemKind::Login(l) = &item.kind else {
         return Vec::new();
@@ -73,7 +73,7 @@ pub fn sequence(item: &Item, press_enter: bool) -> Vec<Key> {
     keys
 }
 
-/// Pode ser digitado: login fora da lixeira, com usuário ou senha.
+/// Can be typed: a login outside the trash, with a username or password.
 pub fn typeable(item: &Item) -> bool {
     match &item.kind {
         ItemKind::Login(l) if !item.deleted => {
@@ -84,7 +84,7 @@ pub fn typeable(item: &Item) -> bool {
     }
 }
 
-/// Sufixos de domínio ignorados ao tirar o "nome" do site (`github.com` → `github`).
+/// Domain suffixes ignored when taking the site's "name" (`github.com` → `github`).
 const SUFFIXES: &[&str] = &[
     "com", "net", "org", "br", "gov", "edu", "io", "co", "app", "dev", "me", "uk", "eu", "us",
     "info", "biz", "tv", "gg", "pt", "de", "fr", "es", "it", "jp",
@@ -107,7 +107,7 @@ fn site_name(host: &str) -> Option<&str> {
         .filter(|label| label.len() >= 3)
 }
 
-/// Quão bem o item combina com o título da janela (0 = não combina).
+/// How well the item matches the window title (0 = no match).
 pub fn score(item: &Item, title: &str) -> u8 {
     if !typeable(item) {
         return 0;
@@ -131,7 +131,7 @@ pub fn score(item: &Item, title: &str) -> u8 {
     best
 }
 
-/// Candidatos para a janela, do melhor para o pior (favoritos primeiro no empate).
+/// Candidates for the window, best to worst (favorites first on a tie).
 pub fn candidates<'a>(items: &'a [Item], title: &str) -> Vec<&'a Item> {
     let mut scored: Vec<(u8, &Item)> = items
         .iter()
@@ -143,7 +143,7 @@ pub fn candidates<'a>(items: &'a [Item], title: &str) -> Vec<&'a Item> {
             .then(b.favorite.cmp(&a.favorite))
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    // Só os de melhor pontuação: um site exato vence um palpite pelo nome do site.
+    // Only the top-scoring ones: an exact site beats a guess by the site's name.
     let top = scored.first().map(|(s, _)| *s).unwrap_or(0);
     scored
         .into_iter()
@@ -152,15 +152,15 @@ pub fn candidates<'a>(items: &'a [Item], title: &str) -> Vec<&'a Item> {
         .collect()
 }
 
-/// Digitador do sistema (Windows); nos outros sistemas, só devolve erro.
+/// System typist (Windows); on other systems, it only returns an error.
 pub fn system_typer() -> Typer {
     Arc::new(|window, keys| platform::type_keys(window, &keys))
 }
 
 static SYSTEM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Permite registrar o atalho global. Só o app real chama isto; nos testes o
-/// atalho nunca é registrado no sistema.
+/// Allows registering the global shortcut. Only the real app calls this; in tests the
+/// shortcut is never registered with the system.
 pub fn enable_system_hotkey() {
     SYSTEM.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -169,7 +169,7 @@ pub fn system_hotkey_enabled() -> bool {
     SYSTEM.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Atalho global ativo; soltar este valor desliga o atalho.
+/// Active global shortcut; dropping this value turns the shortcut off.
 pub struct Listener {
     #[cfg_attr(not(windows), allow(dead_code))]
     thread_id: u32,
@@ -181,14 +181,14 @@ impl Drop for Listener {
     }
 }
 
-/// Liga o atalho global; cada uso manda um [`Request`] por `tx`.
-/// Falha se outro programa já usa o mesmo atalho.
+/// Turns the global shortcut on; each use sends a [`Request`] through `tx`.
+/// Fails if another program already uses the same shortcut.
 pub fn listen(tx: std::sync::mpsc::Sender<Request>) -> Result<Listener, String> {
     platform::listen(tx, platform::Hotkey::AutoType).map(|thread_id| Listener { thread_id })
 }
 
-/// Liga o atalho da busca rápida (`Ctrl+Shift+Espaço`); o [`Request`] traz a
-/// janela que estava em foco (onde digitar, se a pessoa escolher preencher).
+/// Turns the quick search shortcut on (`Ctrl+Shift+Space`); the [`Request`] carries the
+/// window that had focus (where to type, if the person chooses to fill).
 pub fn listen_quick_search(tx: std::sync::mpsc::Sender<Request>) -> Result<Listener, String> {
     platform::listen(tx, platform::Hotkey::QuickSearch).map(|thread_id| Listener { thread_id })
 }
@@ -209,7 +209,7 @@ mod platform {
 
     const VK_A: u32 = 0x41;
 
-    /// Qual atalho global (cada um numa thread própria).
+    /// Which global shortcut (each one on its own thread).
     #[derive(Clone, Copy)]
     pub enum Hotkey {
         AutoType,
@@ -234,26 +234,26 @@ mod platform {
         fn label(self) -> &'static str {
             match self {
                 Hotkey::AutoType => super::HOTKEY_LABEL,
-                Hotkey::QuickSearch => crate::quick_search::HOTKEY_LABEL,
+                Hotkey::QuickSearch => crate::quick_search::hotkey_label(),
             }
         }
     }
 
     fn foreground() -> HWND {
-        // SAFETY: sem parâmetros.
+        // SAFETY: no parameters.
         unsafe { GetForegroundWindow() }
     }
 
     fn title_of(hwnd: HWND) -> String {
         let mut buf = [0u16; 512];
-        // SAFETY: buffer válido.
+        // SAFETY: valid buffer.
         let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
         String::from_utf16_lossy(&buf[..n.max(0) as usize])
     }
 
     fn is_own(hwnd: HWND) -> bool {
         let mut pid = 0u32;
-        // SAFETY: ponteiro para variável local.
+        // SAFETY: pointer to a local variable.
         unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
             pid == GetCurrentProcessId()
@@ -263,7 +263,7 @@ mod platform {
     pub fn stop(thread_id: u32) {
         use windows::Win32::Foundation::{LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
-        // SAFETY: só posta uma mensagem; se a thread já acabou, falha sem efeito.
+        // SAFETY: only posts a message; if the thread has already ended, it fails harmlessly.
         let _ = unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
     }
 
@@ -274,18 +274,18 @@ mod platform {
         std::thread::Builder::new()
             .name("scout-vault-autotype-hotkey".into())
             .spawn(move || {
-                // O atalho pertence a esta thread; as mensagens chegam na fila dela.
-                // SAFETY: registro simples, sem janela.
+                // The shortcut belongs to this thread; the messages arrive in its queue.
+                // SAFETY: simple registration, no window.
                 let registered = unsafe { RegisterHotKey(None, hotkey_id, mods, vk) };
                 let ok = registered.is_ok();
-                // SAFETY: sem parâmetros.
+                // SAFETY: no parameters.
                 let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
                 let _ = ready_tx.send(registered.map(|_| thread_id).map_err(|e| e.message()));
                 if !ok {
                     return;
                 }
                 let mut msg = MSG::default();
-                // SAFETY: laço de mensagens padrão desta thread.
+                // SAFETY: standard message loop of this thread.
                 while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
                     if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == hotkey_id {
                         let hwnd = foreground();
@@ -299,17 +299,14 @@ mod platform {
                         }
                     }
                 }
-                // SAFETY: mesmo id registrado acima.
+                // SAFETY: same id registered above.
                 let _ = unsafe { UnregisterHotKey(None, hotkey_id) };
             })
             .map_err(|e| e.to_string())?;
         match ready_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Ok(thread_id)) => Ok(thread_id),
-            Ok(Err(e)) => Err(format!(
-                "O atalho {} já está em uso por outro programa ({e}).",
-                hotkey.label()
-            )),
-            Err(_) => Err("O atalho global não respondeu.".into()),
+            Ok(Err(e)) => Err(t!("autotype.hotkey_taken", hotkey = hotkey.label(), e = e)),
+            Err(_) => Err(t!("autotype.hotkey_no_answer").into()),
         }
     }
 
@@ -329,27 +326,27 @@ mod platform {
     }
 
     fn send(inputs: &mut [INPUT]) -> Result<(), String> {
-        // SAFETY: slice válido de INPUT.
+        // SAFETY: valid slice of INPUT.
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
-        // Não deixa as teclas da senha num buffer solto.
-        // SAFETY: zera a própria memória do slice (INPUT é POD).
+        // Don't leave the password keystrokes in a loose buffer.
+        // SAFETY: zeroes the slice's own memory (INPUT is POD).
         unsafe {
             std::ptr::write_bytes(inputs.as_mut_ptr(), 0, inputs.len());
         }
         if sent as usize == inputs.len() {
             Ok(())
         } else {
-            Err("O Windows bloqueou a digitação (a janela de destino pode estar rodando como administrador).".into())
+            Err(t!("autotype.blocked").into())
         }
     }
 
-    /// Espera soltar Ctrl/Alt/Shift/Win do atalho; senão o texto vira atalhos.
+    /// Waits for the shortcut's Ctrl/Alt/Shift/Win to be released; otherwise the text becomes shortcuts.
     fn wait_modifiers_released() {
         let deadline = Instant::now() + Duration::from_secs(3);
         let held = || {
             [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN]
                 .iter()
-                // SAFETY: consulta de estado de tecla.
+                // SAFETY: key state query.
                 .any(|vk| unsafe { GetAsyncKeyState(vk.0 as i32) } as u16 & 0x8000 != 0)
         };
         while held() && Instant::now() < deadline {
@@ -362,13 +359,13 @@ mod platform {
         let target = HWND(window as *mut _);
         wait_modifiers_released();
         if foreground() != target {
-            // SAFETY: HWND recebido do próprio sistema.
+            // SAFETY: HWND received from the system itself.
             let _ = unsafe { SetForegroundWindow(target) };
             std::thread::sleep(Duration::from_millis(150));
         }
         for key in keys {
             if foreground() != target {
-                return Err("A janela de destino perdeu o foco; parei de digitar.".into());
+                return Err(t!("autotype.lost_focus").into());
             }
             let mut inputs: Vec<INPUT> = match key {
                 Key::Text(text) => text
@@ -390,7 +387,7 @@ mod platform {
                 ],
             };
             send(&mut inputs)?;
-            // Dá tempo para o app trocar de campo depois do Tab.
+            // Gives the app time to switch fields after the Tab.
             std::thread::sleep(Duration::from_millis(60));
         }
         Ok(())
@@ -408,13 +405,13 @@ mod platform {
     }
 
     pub fn listen(_: std::sync::mpsc::Sender<Request>, _: Hotkey) -> Result<u32, String> {
-        Err("O preenchimento em apps só funciona no Windows por enquanto.".into())
+        Err(t!("autotype.windows_only").into())
     }
 
     pub fn stop(_: u32) {}
 
     pub fn type_keys(_: isize, _: &[Key]) -> Result<(), String> {
-        Err("O preenchimento em apps só funciona no Windows por enquanto.".into())
+        Err(t!("autotype.windows_only").into())
     }
 }
 
@@ -487,9 +484,9 @@ mod tests {
             names("Sign in to GitHub · GitHub — Mozilla Firefox"),
             ["Conta Git"]
         );
-        // Host inteiro no título.
+        // Whole host in the title.
         assert_eq!(names("bb.com.br - Login"), ["Banco"]);
-        // "bb" é curto demais para palpite pelo nome do site.
+        // "bb" is too short for a guess by the site's name.
         assert!(names("Bloco de notas bb").is_empty());
         assert!(names("Documento - Word").is_empty());
     }
@@ -503,7 +500,7 @@ mod tests {
             login("GitHub", "a", "b", &[]),
             deleted,
         ];
-        // "github" no título: o item chamado GitHub (3) e o site github.com (2 — só o nome).
+        // "github" in the title: the item named GitHub (3) and the site github.com (2 — name only).
         let got: Vec<_> = candidates(&items, "GitHub Desktop")
             .into_iter()
             .map(|i| i.name.as_str())
@@ -511,7 +508,7 @@ mod tests {
         assert_eq!(got, ["GitHub"]);
     }
 
-    /// Registra o atalho de verdade no Windows (sem digitar nada). `--ignored`.
+    /// Registers the real shortcut with Windows (without typing anything). `--ignored`.
     #[cfg(windows)]
     #[test]
     #[ignore]

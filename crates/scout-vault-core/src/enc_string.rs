@@ -1,11 +1,11 @@
-//! `EncString`: o formato textual que o Bitwarden usa para todo campo cifrado.
+//! `EncString`: the text format Bitwarden uses for every encrypted field.
 //!
-//! - Tipo 2: `2.<iv b64>|<ciphertext b64>|<mac b64>` — AES-256-CBC + HMAC-SHA256
-//!   (praticamente todos os campos do cofre e a chave do usuário).
-//! - Tipo 4: `4.<data b64>` — RSA-2048-OAEP-SHA1 (chaves de organização).
-//! - Tipo 7: `7.<COSE_Encrypt0 b64>` — criptografia "v2" (veja [`crate::cose`]).
+//! - Type 2: `2.<iv b64>|<ciphertext b64>|<mac b64>` — AES-256-CBC + HMAC-SHA256
+//!   (practically every vault field and the user key).
+//! - Type 4: `4.<data b64>` — RSA-2048-OAEP-SHA1 (organization keys).
+//! - Type 7: `7.<COSE_Encrypt0 b64>` — "v2" cryptography (see [`crate::cose`]).
 //!
-//! Este módulo só faz parse/serialização; decifrar fica em `crypto` (fase 1).
+//! This module only parses/serializes; decryption lives in `crypto`.
 
 use std::fmt;
 use std::str::FromStr;
@@ -23,7 +23,7 @@ pub enum EncString {
     Rsa2048OaepSha1 {
         data: Vec<u8>,
     },
-    /// COSE_Encrypt0 em CBOR, ainda não interpretado.
+    /// COSE_Encrypt0 in CBOR, not yet interpreted.
     Cose {
         data: Vec<u8>,
     },

@@ -1,14 +1,14 @@
-//! Teste contra um servidor de verdade (de preferência o Vaultwarden de `dev/`).
-//! Ignorado por padrão. Para rodar:
+//! Test against a real server (preferably the Vaultwarden from `dev/`).
+//! Ignored by default. To run it:
 //!
 //! ```text
 //! SCOUT_VAULT_TEST_URL=http://localhost:8000 \
-//! SCOUT_VAULT_TEST_EMAIL=teste@exemplo.com \
-//! SCOUT_VAULT_TEST_PASSWORD='senha da conta de teste' \
+//! SCOUT_VAULT_TEST_EMAIL=test@example.com \
+//! SCOUT_VAULT_TEST_PASSWORD='test account password' \
 //! cargo test -p scout-vault-core --test live_server -- --ignored --nocapture
 //! ```
 //!
-//! Use uma conta de TESTE sem 2FA. Nunca rode isso com o seu cofre real.
+//! Use a TEST account without 2FA. Never run this against your real vault.
 
 use scout_vault_core::api::{Client, DeviceInfo, ServerUrls};
 use scout_vault_core::crypto::MasterKey;
@@ -57,7 +57,7 @@ async fn login_sync_and_decrypt() {
     assert!(vault.errors.is_empty(), "{:?}", vault.errors);
 }
 
-/// Cria, edita, manda para a lixeira, restaura e apaga um item de verdade.
+/// Creates, edits, trashes, restores and deletes a real item.
 #[tokio::test]
 #[ignore = "precisa de um servidor; veja o comentário do arquivo"]
 async fn create_edit_trash_restore_delete() {
@@ -117,7 +117,7 @@ async fn create_edit_trash_restore_delete() {
         .unwrap();
     println!("criado: {}", created.id);
 
-    // Edita a senha: o histórico tem que aparecer no servidor.
+    // Edit the password: the history has to show up on the server.
     let find = |sync: &scout_vault_core::sync::SyncResponse| {
         sync.ciphers
             .iter()
@@ -179,7 +179,7 @@ async fn create_edit_trash_restore_delete() {
     assert!(gone.ciphers.iter().all(|c| c.id != created.id));
 }
 
-/// Anexa um arquivo, baixa e confere o conteúdo, e apaga.
+/// Attaches a file, downloads it, checks the contents, and deletes it.
 #[tokio::test]
 #[ignore = "precisa de um servidor; veja o comentário do arquivo"]
 async fn attachment_upload_download_delete() {
@@ -281,7 +281,7 @@ async fn attachment_upload_download_delete() {
     client.delete_cipher(&token, &created.id).await.unwrap();
 }
 
-/// Apaga itens que testes interrompidos deixaram na conta de teste.
+/// Deletes items that interrupted tests left in the test account.
 #[tokio::test]
 #[ignore = "precisa de um servidor; veja o comentário do arquivo"]
 async fn cleanup_test_leftovers() {
@@ -332,7 +332,7 @@ async fn cleanup_test_leftovers() {
     }
 }
 
-/// Cria, renomeia e apaga uma pasta; um item dentro dela fica "sem pasta".
+/// Creates, renames and deletes a folder; an item inside it ends up with "no folder".
 #[tokio::test]
 #[ignore = "precisa de um servidor; veja o comentário do arquivo"]
 async fn folder_create_rename_delete() {
@@ -366,7 +366,7 @@ async fn folder_create_rename_delete() {
         .create_folder(&token, &encrypt_folder_name(&name, &keys).unwrap())
         .await
         .unwrap();
-    // A data de revisão anda quando o cofre muda (base do sync em segundo plano).
+    // The revision date moves when the vault changes (basis of background sync).
     let after = client.revision_date(&token).await.unwrap();
     assert!(after > before, "revisão {before} → {after}");
     let note = Item {
@@ -393,7 +393,7 @@ async fn folder_create_rename_delete() {
         .unwrap();
     assert_eq!(item.folder_id.as_deref(), Some(folder.id.as_str()));
 
-    // Mover sem recifrar (arrastar para "Sem pasta" e de volta), mantendo o favorito.
+    // Moving without re-encrypting (drag to "No folder" and back), keeping the favorite.
     client
         .move_cipher_to_folder(&token, &item.id, None, true)
         .await
@@ -433,8 +433,8 @@ async fn folder_create_rename_delete() {
     client.delete_cipher(&token, &item.id).await.unwrap();
 }
 
-/// Item de organização: cria numa coleção, troca de coleção, edita e apaga.
-/// Precisa da organização de `tools/dev_org.py`.
+/// Organization item: creates it in a collection, changes collection, edits and deletes.
+/// Needs the organization from `tools/dev_org.py`.
 #[tokio::test]
 #[ignore = "precisa de um servidor; veja o comentário do arquivo"]
 async fn org_item_with_collections() {
@@ -521,7 +521,7 @@ async fn org_item_with_collections() {
     };
     assert_eq!(l.password.as_ref().unwrap().expose(), "da-empresa");
 
-    // Troca para TI e edita o nome.
+    // Switch to TI and edit the name.
     client
         .update_collections(&token, &created.id, std::slice::from_ref(&ti))
         .await

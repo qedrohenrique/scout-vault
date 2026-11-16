@@ -1,0 +1,123 @@
+{
+  "extName": {
+    "message": "Scout Vault"
+  },
+  "extDescription": {
+    "message": "Fills and saves logins from the Scout Vault app (Bitwarden compatible) on websites."
+  },
+  "cmdOpen": {
+    "message": "Open Scout Vault"
+  },
+  "cmdInline": {
+    "message": "Show logins in the page's login field"
+  },
+  "searching": {
+    "message": "Looking for logins…"
+  },
+  "popupInlineToggle": {
+    "message": "Menu in login fields"
+  },
+  "popupInlineSite": {
+    "message": "Show the menu on this site again"
+  },
+  "errAppSetup": {
+    "message": "Scout Vault didn't respond. Open the app and turn on \"Fill in the browser\" in Settings."
+  },
+  "errClosed": {
+    "message": "Scout Vault is closed. Open the app and try again."
+  },
+  "errLocked": {
+    "message": "Scout Vault is locked. Unlock it in the app and try again."
+  },
+  "errGeneric": {
+    "message": "Something went wrong."
+  },
+  "popupNoForm": {
+    "message": "Couldn't find a login form on this page."
+  },
+  "popupOpenSite": {
+    "message": "Open a website to fill."
+  },
+  "popupNoLogins": {
+    "message": "No saved logins for this site."
+  },
+  "errExpired": {
+    "message": "This prompt expired. Submit the login again to save it."
+  },
+  "captureUpdateTitle": {
+    "message": "Update the password for “$VALUE$” in Scout Vault?",
+    "placeholders": {
+      "value": {
+        "content": "$1"
+      }
+    }
+  },
+  "captureSaveTitle": {
+    "message": "Save this login in Scout Vault?"
+  },
+  "captureLockedDetail": {
+    "message": "The app will ask you to unlock the vault."
+  },
+  "captureNoUser": {
+    "message": "(no username)"
+  },
+  "captureNotNow": {
+    "message": "Not now"
+  },
+  "captureUpdate": {
+    "message": "Update"
+  },
+  "captureSave": {
+    "message": "Save"
+  },
+  "noAnswer": {
+    "message": "Scout Vault didn't respond."
+  },
+  "captureUnlockToFinish": {
+    "message": "Unlock Scout Vault to finish."
+  },
+  "captureUpdated": {
+    "message": "Password updated in Scout Vault ✓"
+  },
+  "captureSaved": {
+    "message": "Saved in Scout Vault ✓"
+  },
+  "inlineOpen": {
+    "message": "Open Scout Vault"
+  },
+  "inlineMenuLabel": {
+    "message": "Scout Vault logins"
+  },
+  "inlineHide": {
+    "message": "Don't show on this site"
+  },
+  "inlineRetry": {
+    "message": "Try again"
+  },
+  "inlineAppHint": {
+    "message": "Open the app and turn on \"Fill in the browser\"."
+  },
+  "vaultLocked": {
+    "message": "Vault locked"
+  },
+  "inlineUnlockRetry": {
+    "message": "Unlock Scout Vault and try again."
+  },
+  "inlineNoLogins": {
+    "message": "No saved logins"
+  },
+  "inlineForSite": {
+    "message": "for $VALUE$.",
+    "placeholders": {
+      "value": {
+        "content": "$1"
+      }
+    }
+  },
+  "inlineLockedRetry": {
+    "message": "Vault locked. Unlock it and try again."
+  },
+  "inlineFillFailed": {
+    "message": "Couldn't fill"
+  }
+}

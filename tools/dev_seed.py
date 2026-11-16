@@ -1,13 +1,13 @@
-"""Cria uma conta de TESTE no Vaultwarden local (dev/docker-compose.yml) e
-popula alguns itens, sem abrir navegador. Grava as credenciais em
-dev/test-account.env (ignorado pelo git) para o teste ao vivo.
+"""Creates a TEST account on the local Vaultwarden (dev/docker-compose.yml) and
+fills it with a few items, without opening a browser. Writes the credentials to
+dev/test-account.env (ignored by git) for the live test.
 
-Uso:  python tools/dev_seed.py [--url http://localhost:8000] [--totp]
+Usage:  python tools/dev_seed.py [--url http://localhost:8000] [--totp]
 
-Com --totp, a conta ganha 2FA por autenticador e as credenciais (com o segredo
-TOTP) vão para dev/test-account-2fa.env.
+With --totp, the account gets authenticator 2FA and the credentials (with the
+TOTP secret) go to dev/test-account-2fa.env.
 
-Só aceita servidores em localhost — nunca aponte para um servidor real.
+Only accepts servers on localhost — never point it at a real server.
 """
 
 import argparse
@@ -68,11 +68,11 @@ def totp(secret_b32: str, at: float | None = None) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8000")
-    ap.add_argument("--totp", action="store_true", help="ativa 2FA por autenticador")
+    ap.add_argument("--totp", action="store_true", help="enable authenticator 2FA")
     args = ap.parse_args()
     base = args.url.rstrip("/")
     if urlparse(base).hostname not in {"localhost", "127.0.0.1", "::1"}:
-        sys.exit("recusado: dev_seed só roda contra servidor local")
+        sys.exit("refused: dev_seed only runs against a local server")
 
     email = f"teste-{secrets.token_hex(3)}@cofre.test"
     password = secrets.token_urlsafe(18)
@@ -87,14 +87,14 @@ def main() -> None:
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
-    # Fluxo atual: sem SMTP configurado, o servidor devolve direto o token de verificação.
+    # Current flow: with no SMTP configured, the server returns the verification token directly.
     verification_token = request(
         f"{base}/identity/accounts/register/send-verification-email",
         json_body={"email": email, "name": "Conta de teste do Scout Vault"},
         headers={"Accept": "application/json"},
     )
     if not isinstance(verification_token, str):
-        sys.exit("o servidor não devolveu token de verificação (SMTP ligado?)")
+        sys.exit("the server did not return a verification token (is SMTP enabled?)")
 
     request(
         f"{base}/identity/accounts/register/finish",
@@ -171,11 +171,11 @@ def main() -> None:
         }
     )
     for item in items:
-        item["encryptedFor"] = user_id  # exigido desde web-v2025.6.0
+        item["encryptedFor"] = user_id  # required since web-v2025.6.0
         request(f"{base}/api/ciphers", json_body=item, token=token)
 
     if args.totp:
-        # O servidor sugere a chave e devolve um token de verificação que a ativação exige.
+        # The server suggests the key and returns a verification token that activation requires.
         setup = request(
             f"{base}/api/two-factor/get-authenticator",
             json_body={"masterPasswordHash": server_hash(mk, password)},
@@ -196,14 +196,14 @@ def main() -> None:
             f"SCOUT_VAULT_TEST_2FA_PASSWORD={password}\nSCOUT_VAULT_TEST_2FA_TOTP_SECRET={secret}\n",
             encoding="utf-8",
         )
-        print(f"conta {email} criada com 2FA por autenticador; credenciais em {ENV_FILE_2FA}")
+        print(f"account {email} created with authenticator 2FA; credentials in {ENV_FILE_2FA}")
         return
 
     ENV_FILE.write_text(
         f"SCOUT_VAULT_TEST_URL={base}\nSCOUT_VAULT_TEST_EMAIL={email}\nSCOUT_VAULT_TEST_PASSWORD={password}\n",
         encoding="utf-8",
     )
-    print(f"conta {email} criada com 1 pasta e {len(items)} itens; credenciais em {ENV_FILE}")
+    print(f"account {email} created with 1 folder and {len(items)} items; credentials in {ENV_FILE}")
 
 
 if __name__ == "__main__":

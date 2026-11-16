@@ -1,13 +1,13 @@
 version: 2
 updates:
-  # Correções de segurança chegam como PR assim que saem; o resto, uma vez por semana.
+  # Security fixes arrive as PRs as soon as they are out; everything else, once a week.
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      cargo-menores:
+      cargo-minor:
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions

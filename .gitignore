@@ -5,6 +5,6 @@ dev/vw-data/
 dev/test-account.env
 dev/test-account-2fa.env
 
-# Pacotes de release
+# Release packages
 /dist/
 __pycache__/

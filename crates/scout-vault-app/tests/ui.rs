@@ -1,5 +1,5 @@
-//! Testes de integração de UI: telas reais numa janela headless (nada aparece
-//! na tela), com cliques e digitação despachados pelo mesmo caminho do app.
+//! UI integration tests: real screens in a headless window (nothing shows up
+//! on screen), with clicks and typing dispatched through the same path as the app.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 use scout_vault_app::app::{ScoutVaultApp, ScreenKind};
 use scout_vault_app::appearance::{Accent, Appearance, ThemeChoice};
-use scout_vault_app::clipboard::CLEAR_AFTER;
+use scout_vault_app::clipboard::DEFAULT_CLEAR_SECS;
 use scout_vault_app::flow::{Session, Unlocked};
 use scout_vault_app::settings::SettingsStore;
 use scout_vault_core::api::{Client, DeviceInfo, ServerUrls};
@@ -38,7 +38,7 @@ fn fixture_password_and_email() -> (String, String) {
     )
 }
 
-/// Scout Vault sintético do `scout-vault-core` (gerado em Python), já aberto.
+/// Synthetic vault from `scout-vault-core` (generated in Python), already open.
 fn unlocked_fixture() -> Unlocked {
     let (password, email) = fixture_password_and_email();
     let kdf = Kdf::Pbkdf2Sha256 { iterations: 5000 };
@@ -81,6 +81,8 @@ fn open_app(
     unlocked: Option<Unlocked>,
 ) -> (AnyWindowHandle, Entity<ScoutVaultApp>) {
     cx.update(gpui_kit::init);
+    // The texts checked here are the Portuguese ones (English lives in `ui_en.rs`).
+    scout_vault_app::i18n::set(scout_vault_app::i18n::Language::PtBr);
     cx.update(|cx| {
         gpui_kit::open_window(options(), cx, |window, cx| {
             cx.new(|cx| match unlocked {
@@ -92,7 +94,7 @@ fn open_app(
     })
 }
 
-/// Espera um trabalho que roda fora do executor do GPUI (KDF no Tokio).
+/// Waits for work that runs outside the GPUI executor (KDF on Tokio).
 fn wait_until(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bool) {
     for _ in 0..500 {
         cx.run_until_parked();
@@ -115,7 +117,7 @@ fn login_validates_fields_before_touching_the_network(cx: &mut TestAppContext) {
         window.click("login-submit", cx);
         assert_eq!(
             window.find("login-status").label(),
-            Some("Informe o e-mail da conta.")
+            Some("Digite o e-mail da conta.")
         );
 
         window.click("login-email", cx);
@@ -123,7 +125,7 @@ fn login_validates_fields_before_touching_the_network(cx: &mut TestAppContext) {
         window.click("login-submit", cx);
         assert_eq!(
             window.find("login-status").label(),
-            Some("Informe a senha mestra.")
+            Some("Digite a senha do cofre.")
         );
     })
     .unwrap();
@@ -144,18 +146,18 @@ fn sso_option_swaps_email_for_organization(cx: &mut TestAppContext) {
         assert!(window.try_find("login-email").is_none());
         assert!(window.try_find("login-sso-identifier").is_some());
 
-        // Sem identificador e sem senha: valida antes de abrir o navegador.
+        // No identifier and no password: validates before opening the browser.
         window.click("login-submit", cx);
         assert_eq!(
             window.find("login-status").label(),
-            Some("Informe o identificador SSO da organização.")
+            Some("Digite o identificador SSO da sua empresa.")
         );
         window.click("login-sso-identifier", cx);
         window.input("minha-empresa", cx);
         window.click("login-submit", cx);
         assert_eq!(
             window.find("login-status").label(),
-            Some("Informe a senha mestra: ela abre o cofre depois do SSO.")
+            Some("Digite a senha do cofre: ela abre o cofre depois do SSO.")
         );
     })
     .unwrap();
@@ -166,7 +168,7 @@ fn self_hosted_needs_a_valid_url(cx: &mut TestAppContext) {
     let (handle, _) = open_app(cx, None);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        // O campo de URL só aparece ao escolher "Servidor próprio".
+        // The URL field only shows up after choosing "Self-hosted server".
         assert!(window.try_find("login-server-url").is_none());
         window.within("login-server").click(2usize, cx);
         assert!(window.try_find("login-server-url").is_some());
@@ -202,7 +204,7 @@ fn browse_reveal_copy_and_lock(cx: &mut TestAppContext) {
         })
     };
 
-    // Filtros da barra lateral.
+    // Sidebar filters.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("filter-card", cx);
@@ -218,7 +220,7 @@ fn browse_reveal_copy_and_lock(cx: &mut TestAppContext) {
         .unwrap();
     assert!(!visible(cx).contains(&"note-deleted".to_owned()));
 
-    // Abre o login e confere que a senha começa escondida.
+    // Opens the login and checks that the password starts hidden.
     cx.update_window(handle, |_, window, cx| {
         vault_view.update(cx, |v, cx| v.select_item("login-1", window, cx));
         window.render_frame(cx);
@@ -231,7 +233,7 @@ fn browse_reveal_copy_and_lock(cx: &mut TestAppContext) {
         window.click("reveal-password", cx);
         assert_eq!(window.find("value-password").label(), Some("••••••••"));
 
-        // Copiar não precisa revelar.
+        // Copying doesn't require revealing.
         window.click("copy-password", cx);
     })
     .unwrap();
@@ -240,16 +242,16 @@ fn browse_reveal_copy_and_lock(cx: &mut TestAppContext) {
         |cx: &mut TestAppContext| cx.update(|cx| cx.read_from_clipboard().and_then(|c| c.text()));
     assert_eq!(clipboard(cx).as_deref(), Some("s3nh@-ção"));
 
-    // Antes do prazo continua lá; depois some.
+    // Before the timeout it is still there; afterwards it is gone.
     cx.executor()
-        .advance_clock(CLEAR_AFTER - Duration::from_secs(1));
+        .advance_clock(Duration::from_secs(u64::from(DEFAULT_CLEAR_SECS) - 1));
     cx.run_until_parked();
     assert_eq!(clipboard(cx).as_deref(), Some("s3nh@-ção"));
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
     assert!(clipboard(cx).unwrap_or_default().is_empty());
 
-    // Bloquear descarta o cofre decifrado e pede a senha.
+    // Locking discards the decrypted vault and asks for the password.
     cx.update_window(handle, |_, window, cx| window.click("vault-lock", cx))
         .unwrap();
     cx.update(|cx| {
@@ -257,7 +259,7 @@ fn browse_reveal_copy_and_lock(cx: &mut TestAppContext) {
         assert!(app.read(cx).vault_view().is_none());
     });
 
-    // Senha errada.
+    // Wrong password.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("unlock-password", cx);
@@ -268,12 +270,12 @@ fn browse_reveal_copy_and_lock(cx: &mut TestAppContext) {
     wait_until(cx, |cx| {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
-            window.find("unlock-status").label() == Some("Senha mestra incorreta.")
+            window.find("unlock-status").label() == Some("Senha do cofre incorreta.")
         })
         .unwrap()
     });
 
-    // Senha certa reabre o cofre, sem rede.
+    // The right password reopens the vault, without network.
     let (password, _) = fixture_password_and_email();
     cx.update_window(handle, |_, window, cx| {
         window.click("unlock-password", cx);
@@ -292,10 +294,10 @@ fn locks_after_inactivity(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| {
             app.set_auto_lock_after(Duration::from_secs(60));
-            // Ainda dentro do prazo: continua aberto.
+            // Still within the timeout: stays open.
             app.lock_if_idle(Instant::now(), window, cx);
             assert_eq!(app.screen_kind(), ScreenKind::Vault);
-            // Passou do prazo: bloqueia.
+            // Past the timeout: locks.
             app.lock_if_idle(Instant::now() + Duration::from_secs(61), window, cx);
             assert_eq!(app.screen_kind(), ScreenKind::Locked);
         });
@@ -320,7 +322,7 @@ fn search_filters_the_list(cx: &mut TestAppContext) {
         })
     };
 
-    // `set_query` escreve no campo de busca da lista, que dispara a busca real.
+    // `set_query` writes into the list's search field, which triggers the real search.
     for (query, expected) in [
         ("banco.example", vec!["login-1"]),
         ("ana souza", vec!["card-org"]),
@@ -337,8 +339,8 @@ fn search_filters_the_list(cx: &mut TestAppContext) {
     }
 }
 
-/// Login completo pela UI contra um servidor de verdade (Vaultwarden local).
-/// Rode com as variáveis de `dev/test-account.env`:
+/// Full login through the UI against a real server (local Vaultwarden).
+/// Run with the variables from `dev/test-account.env`:
 /// `cargo test -p scout-vault-app --test ui -- --ignored`
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
@@ -394,7 +396,7 @@ fn logs_in_through_the_ui_against_a_real_server(cx: &mut TestAppContext) {
     assert!(!names.is_empty(), "o cofre de teste deveria ter itens");
 }
 
-/// A cor do tema bate com a amostra (tolerância para arredondamento HSL).
+/// The theme color matches the swatch (tolerance for HSL rounding).
 fn same_color(a: gpui_kit::Hsla, b: gpui_kit::Hsla) -> bool {
     let (a, b) = (a.to_rgb(), b.to_rgb());
     (a.r - b.r).abs() < 0.01 && (a.g - b.g).abs() < 0.01 && (a.b - b.b).abs() < 0.01
@@ -410,7 +412,7 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
     };
     let mut light_bg = gpui_kit::Hsla::default();
 
-    // Começa com a cor padrão (jade) aplicada.
+    // Starts with the default color (jade) applied.
     cx.update(|cx| {
         let dark = cx.theme().is_dark();
         assert!(same_color(cx.theme().primary, Accent::Jade.swatch(dark)));
@@ -421,27 +423,27 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
         window.click("vault-settings", cx);
     })
     .unwrap();
-    // O pedido sai por evento, tratado depois do clique.
+    // The request goes out as an event, handled after the click.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("settings-close").is_some());
 
         light_bg = cx.theme().background;
-        // Claro → escuro: a interface não some — o modo já é o novo, mas as
-        // cores começam de onde estavam…
+        // Light → dark: the interface doesn't disappear — the mode is already the new one, but the
+        // colors start from where they were…
         window.click("theme-dark", cx);
         assert!(cx.theme().is_dark());
         assert!(same_color(cx.theme().background, light_bg));
         assert!(theme_fx::running(cx));
     })
     .unwrap();
-    // …no meio, cada cor é uma mistura das duas…
+    // …in the middle, each color is a blend of both…
     cx.executor().advance_clock(theme_fx::FLIP / 2);
     cx.run_until_parked();
     let mid = cx.update(|cx| cx.theme().background);
     assert!(!same_color(mid, light_bg));
     assert!(cx.update(|cx| theme_fx::running(cx)));
-    // …e no fim chega exatamente ao tema escuro.
+    // …and at the end it reaches exactly the dark theme.
     settle(cx);
     cx.update(|cx| {
         assert!(cx.theme().background.l < mid.l);
@@ -450,7 +452,7 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
 
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        // A cor de destaque também se transforma (não pula).
+        // The accent color transforms too (doesn't jump).
         window.click("accent-coral", cx);
         assert!(theme_fx::running(cx));
         assert!(!same_color(cx.theme().primary, Accent::Coral.swatch(true)));
@@ -459,7 +461,7 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
     settle(cx);
     cx.update(|cx| assert!(same_color(cx.theme().primary, Accent::Coral.swatch(true))));
 
-    // Outra troca no meio de uma transição continua dali para o novo alvo.
+    // Another switch in the middle of a transition continues from there to the new target.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("theme-light", cx);
@@ -476,7 +478,7 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
     settle(cx);
     cx.update(|cx| {
         assert!(!cx.theme().is_dark());
-        // A cor escolhida sobrevive à troca de modo.
+        // The chosen color survives the mode switch.
         assert!(same_color(cx.theme().primary, Accent::Coral.swatch(false)));
         assert_eq!(cx.theme().font_size, gpui_kit::px(17.));
         assert_eq!(cx.theme().radius, gpui_kit::px(10.));
@@ -496,7 +498,7 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
         );
     });
 
-    // Fechar volta para o cofre, que continuou aberto por baixo.
+    // Closing goes back to the vault, which stayed open underneath.
     cx.update_window(handle, |_, window, cx| {
         window.click("settings-close", cx);
     })
@@ -551,7 +553,7 @@ fn shows_live_totp_code_and_copies_it_without_spaces(cx: &mut TestAppContext) {
             .label()
             .unwrap()
             .ends_with(" s"));
-        // A chave continua escondida.
+        // The key stays hidden.
         assert_eq!(window.find("value-totp").label(), Some("••••••••"));
         window.click("copy-totp-code", cx);
     })
@@ -579,7 +581,7 @@ fn keyboard_shortcuts_copy_search_and_lock(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(clipboard(cx).as_deref(), Some("pessoa"));
 
-    // Ctrl+F leva o foco para a busca: o texto digitado filtra a lista.
+    // Ctrl+F moves focus to the search: the typed text filters the list.
     cx.update_window(handle, |_, window, cx| {
         window.press("ctrl-f", cx);
         window.input("banco", cx);
@@ -658,7 +660,7 @@ fn password_generator_follows_options_and_saves_them(cx: &mut TestAppContext) {
         Some(pw)
     );
 
-    // Esc fecha e volta ao cofre.
+    // Esc closes and goes back to the vault.
     cx.update_window(handle, |_, window, cx| window.press("escape", cx))
         .unwrap();
     cx.update(|cx| {
@@ -668,7 +670,7 @@ fn password_generator_follows_options_and_saves_them(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Servidor HTTP mínimo que responde 400 a tudo (refresh token recusado).
+/// Minimal HTTP server that answers 400 to everything (refresh token refused).
 fn server_that_rejects_tokens() -> String {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -713,7 +715,7 @@ fn expired_session_returns_to_login(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert_eq!(
             window.find("login-status").label(),
-            Some("A sessão expirou no servidor. Entre novamente.")
+            Some("Sua sessão expirou. Entre de novo.")
         );
     })
     .unwrap();
@@ -721,7 +723,7 @@ fn expired_session_returns_to_login(cx: &mut TestAppContext) {
 
 type Typed = Arc<std::sync::Mutex<Vec<(isize, Vec<String>)>>>;
 
-/// Digitador falso: registra o que seria digitado em vez de mexer no teclado.
+/// Fake typist: records what would be typed instead of touching the keyboard.
 fn fake_typer(app: &Entity<ScoutVaultApp>, cx: &mut TestAppContext) -> Typed {
     use scout_vault_app::autotype::Key;
     let typed: Typed = Default::default();
@@ -785,7 +787,7 @@ fn autotype_asks_when_the_title_does_not_decide(cx: &mut TestAppContext) {
             app.handle_autotype(request("Sem título - Bloco de Notas"), window, cx)
         });
         window.render_frame(cx);
-        // Sem sugestão: lista todos os logins digitáveis.
+        // No suggestion: lists every typeable login.
         assert!(window.try_find("autotype-pick-login-1").is_some());
         assert!(window.try_find("autotype-pick-card-org").is_none());
         window.click("autotype-search", cx);
@@ -795,7 +797,7 @@ fn autotype_asks_when_the_title_does_not_decide(cx: &mut TestAppContext) {
         window.click("autotype-pick-login-item-key", cx);
     })
     .unwrap();
-    // Este item pede a senha mestra: nada é digitado antes de confirmar.
+    // This item asks for the master password: nothing is typed before confirming.
     let (password, _) = fixture_password_and_email();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -820,7 +822,7 @@ fn autotype_waits_for_unlock_and_ignores_own_window(cx: &mut TestAppContext) {
     let typed = fake_typer(&app, cx);
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| {
-            // A própria janela do Scout Vault: nada a digitar.
+            // Scout Vault's own window: nothing to type.
             let mut own = request("Scout Vault");
             own.own_window = true;
             app.handle_autotype(own, window, cx);
@@ -840,7 +842,7 @@ fn autotype_waits_for_unlock_and_ignores_own_window(cx: &mut TestAppContext) {
         window.click("unlock-submit", cx);
     })
     .unwrap();
-    // Ao desbloquear, o pedido guardado é atendido.
+    // On unlock, the stored request is handled.
     wait_until(cx, |_| !typed.lock().unwrap().is_empty());
     assert_eq!(typed.lock().unwrap().len(), 1);
     assert_eq!(typed.lock().unwrap()[0].1[0], "pessoa");
@@ -861,7 +863,7 @@ fn autotype_can_be_turned_off_and_skip_enter(cx: &mut TestAppContext) {
     });
     let typed = fake_typer(&app, cx);
 
-    // Configurações: tira o Enter; depois desliga tudo.
+    // Settings: remove the Enter; then turn everything off.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| app.open_settings(window, cx));
         window.render_frame(cx);
@@ -926,7 +928,7 @@ fn entry_art_can_be_stilled(cx: &mut TestAppContext) {
         app.update(cx, |app, cx| app.close_settings(cx));
         window.render_frame(cx);
         assert_eq!(window.find("entry-backdrop").label(), Some("parado"));
-        // "Parado" vale para todas as animações da interface.
+        // "Still" applies to every interface animation.
         assert!(cx.reduce_motion());
     })
     .unwrap();
@@ -955,7 +957,7 @@ fn remembered_session_reopens_locked_and_unlocks_offline(cx: &mut TestAppContext
     cx.update(gpui_kit::init);
     let store = SettingsStore::in_memory();
 
-    // Primeira abertura: cofre aberto; bloquear guarda a sessão.
+    // First launch: vault open; locking stores the session.
     let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.lock(window, cx))
@@ -963,11 +965,11 @@ fn remembered_session_reopens_locked_and_unlocks_offline(cx: &mut TestAppContext
     .unwrap();
     assert!(scout_vault_app::saved_session::load(&store).is_some());
 
-    // "Reabrir o app": começa no desbloqueio, sem login.
+    // "Reopen the app": starts at unlock, without login.
     let (handle, app) = open_with_store(cx, &store, None);
     cx.update(|cx| assert_eq!(app.read(cx).screen_kind(), ScreenKind::Locked));
 
-    // O servidor do fixture não existe (127.0.0.1:9): abre do cache, offline.
+    // The fixture's server doesn't exist (127.0.0.1:9): opens from the cache, offline.
     let (password, _) = fixture_password_and_email();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -998,7 +1000,7 @@ fn logging_out_or_turning_off_forgets_the_session(cx: &mut TestAppContext) {
     .unwrap();
     assert!(scout_vault_app::saved_session::load(&store).is_some());
 
-    // Sair da conta apaga.
+    // Signing out deletes it.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("unlock-logout", cx);
@@ -1008,7 +1010,7 @@ fn logging_out_or_turning_off_forgets_the_session(cx: &mut TestAppContext) {
     assert!(scout_vault_app::saved_session::load(&store).is_none());
     assert!(store.read_session_blob_for_tests().is_none());
 
-    // Desligar a opção também apaga.
+    // Turning the option off deletes it too.
     let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.lock(window, cx))
@@ -1035,14 +1037,14 @@ fn editor_validates_switches_kind_and_keeps_data_on_failure(cx: &mut TestAppCont
         window.render_frame(cx);
         window.click("vault-new", cx);
         window.render_frame(cx);
-        // Sem nome não salva.
+        // Doesn't save without a name.
         window.click("editor-save", cx);
         window.render_frame(cx);
         assert_eq!(
             window.find("editor-status").label(),
             Some("Dê um nome ao item.")
         );
-        // Troca para nota e volta para login sem perder o nome.
+        // Switch to note and back to login without losing the name.
         window.click("editor-name", cx);
         window.input("Meu novo", cx);
         window.click("editor-kind-note", cx);
@@ -1068,7 +1070,7 @@ fn editor_validates_switches_kind_and_keeps_data_on_failure(cx: &mut TestAppCont
         "senha gerada"
     );
 
-    // O servidor do fixture não existe: o erro aparece e o formulário continua lá.
+    // The fixture's server doesn't exist: the error shows up and the form stays there.
     cx.update_window(handle, |_, window, cx| window.click("editor-save", cx))
         .unwrap();
     wait_until(cx, |cx| {
@@ -1111,7 +1113,7 @@ fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("item-edit").is_some());
-        // Item na lixeira: restaurar e apagar de vez, sem editar.
+        // Item in the trash: restore and delete permanently, without editing.
         vault.update(cx, |v, cx| {
             v.set_filter(scout_vault_app::item_list::Filter::Trash, window, cx)
         });
@@ -1132,7 +1134,7 @@ fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     .unwrap();
 }
 
-/// Cria, edita e apaga um item pela interface, contra o Vaultwarden local.
+/// Creates, edits and deletes an item through the interface, against the local Vaultwarden.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn creates_edits_and_deletes_through_the_ui(cx: &mut TestAppContext) {
@@ -1176,7 +1178,7 @@ fn creates_edits_and_deletes_through_the_ui(cx: &mut TestAppContext) {
         })
     };
 
-    // Criar.
+    // Create.
     cx.update_window(handle, |_, window, cx| {
         window.click("vault-new", cx);
         window.render_frame(cx);
@@ -1197,7 +1199,7 @@ fn creates_edits_and_deletes_through_the_ui(cx: &mut TestAppContext) {
     let created = find(cx, &name).unwrap();
     cx.update(|cx| assert_eq!(vault.read(cx).selected().unwrap().id, created.id));
 
-    // Editar: troca a senha.
+    // Edit: change the password.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("item-edit", cx);
@@ -1218,7 +1220,7 @@ fn creates_edits_and_deletes_through_the_ui(cx: &mut TestAppContext) {
         })
     });
 
-    // Lixeira e apagar de vez.
+    // Trash and delete permanently.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("item-trash", cx);
@@ -1239,7 +1241,7 @@ fn creates_edits_and_deletes_through_the_ui(cx: &mut TestAppContext) {
     wait_until(cx, |cx| find(cx, &name).is_none());
 }
 
-/// Anexa, abre e remove um arquivo pela interface, contra o Vaultwarden local.
+/// Attaches, opens and removes a file through the interface, against the local Vaultwarden.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn attachments_through_the_ui(cx: &mut TestAppContext) {
@@ -1296,12 +1298,12 @@ fn attachments_through_the_ui(cx: &mut TestAppContext) {
     });
     let att = cx.update(|cx| vault.read(cx).selected().unwrap().attachments[0].clone());
     assert_eq!(att.file_name, file.file_name().unwrap().to_string_lossy());
-    // O servidor guarda o tamanho do arquivo cifrado (IV, MAC e padding a mais).
+    // The server stores the size of the encrypted file (extra IV, MAC and padding).
     assert!(att
         .size
         .is_some_and(|s| s > "conteúdo secreto".len() as u64));
 
-    // Abrir baixa, decifra e grava a cópia temporária.
+    // Opening downloads, decrypts and writes the temporary copy.
     cx.update(|cx| vault.update(cx, |v, cx| v.open_attachment(att.id.clone(), cx)));
     wait_until(cx, |cx| {
         cx.update(|cx| {
@@ -1314,7 +1316,7 @@ fn attachments_through_the_ui(cx: &mut TestAppContext) {
         })
     });
 
-    // Remover (dois cliques) e apagar o item.
+    // Remove (two clicks) and delete the item.
     let remove = gpui_kit::SharedString::from(format!("attach-remove-{}", att.id));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -1387,14 +1389,14 @@ fn browser_requests_follow_setting_and_lock_state(cx: &mut TestAppContext) {
         url: "https://banco.example.com/entrar".into(),
     };
 
-    // Desligado por padrão.
+    // Off by default.
     let off = browser_ask(cx, handle, &app, list());
-    assert!(off["error"].as_str().unwrap().contains("desligada"));
+    assert!(off["error"].as_str().unwrap().contains("desligado"));
 
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.open_settings(window, cx));
         window.render_frame(cx);
-        // Fica mais abaixo na página; o clique é testado pelo método do botão.
+        // It sits lower on the page; the click is tested through the button's method.
         let view = app.read(cx).settings_view().unwrap().clone();
         view.update(cx, |v, cx| v.set_browser_fill(true, cx));
     })
@@ -1419,7 +1421,7 @@ fn browser_requests_follow_setting_and_lock_state(cx: &mut TestAppContext) {
         },
     );
     assert_eq!(fill["password"], "s3nh@-ção");
-    // Outro site não recebe a senha.
+    // Another site doesn't get the password.
     let other = browser_ask(
         cx,
         handle,
@@ -1451,7 +1453,7 @@ fn progress_bar_shows_while_syncing(cx: &mut TestAppContext) {
         assert!(window.try_find("vault-progress").is_some());
     })
     .unwrap();
-    // O servidor do fixture não existe: a sincronização falha e a barra some.
+    // The fixture's server doesn't exist: the sync fails and the bar goes away.
     wait_until(cx, |cx| {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -1461,7 +1463,7 @@ fn progress_bar_shows_while_syncing(cx: &mut TestAppContext) {
     });
 }
 
-/// O formulário aproveita a largura: campos curtos dividem a linha.
+/// The form uses the width: short fields share the row.
 #[gpui_kit::test]
 fn editor_layout_puts_short_fields_side_by_side(cx: &mut TestAppContext) {
     let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
@@ -1476,11 +1478,11 @@ fn editor_layout_puts_short_fields_side_by_side(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.click("vault-new", cx);
         window.render_frame(cx);
-        // Seletor de tipo na barra, na altura do Salvar.
+        // Type picker in the bar, at the height of Save.
         let kind = f32::from(window.find("editor-kind-login").bounds().center().y);
         let save = f32::from(window.find("editor-save").bounds().center().y);
         assert!((kind - save).abs() < 2.0, "seletor {kind} x salvar {save}");
-        // Centralizado no espaço livre: sobra igual dos dois lados.
+        // Centered in the free space: equal room on both sides.
         let first = window.find("editor-kind-login").bounds();
         let last = window.find("editor-kind-identity").bounds();
         let cancel = window.find("editor-cancel").bounds();
@@ -1491,7 +1493,7 @@ fn editor_layout_puts_short_fields_side_by_side(cx: &mut TestAppContext) {
             (left_gap - right_gap).abs() < 16.0,
             "esquerda {left_gap} x direita {right_gap}"
         );
-        // Login: usuário e senha lado a lado.
+        // Login: username and password side by side.
         let (ys, _) = row(window, &["editor-username", "editor-password"]);
         assert!((ys[0] - ys[1]).abs() < 1.0, "{ys:?}");
         window.click("editor-kind-card", cx);
@@ -1514,7 +1516,7 @@ fn editor_layout_puts_short_fields_side_by_side(cx: &mut TestAppContext) {
         );
         let number = f32::from(window.find("editor-card-number").bounds().size.width);
         assert!(number > 300.0, "número do cartão largo: {number}");
-        // Nada passa da borda da janela.
+        // Nothing goes past the window edge.
         let right = f32::from(window.find("editor-save").bounds().right());
         assert!(right <= 1100.0, "{right}");
         window.click("editor-kind-identity", cx);
@@ -1553,18 +1555,18 @@ fn sync_button_shows_progress_then_result_then_resets(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert_eq!(label(cx).as_deref(), Some("Sincronizando…"));
-    // O servidor do fixture não existe: termina com erro e mostra o ✗…
+    // The fixture's server doesn't exist: ends with an error and shows the ✗…
     wait_until(cx, |cx| {
-        label(cx).as_deref() == Some("Não foi possível sincronizar")
+        label(cx).as_deref() == Some("Não deu para sincronizar")
     });
-    // …que volta às setas depois de um instante.
+    // …which goes back to the arrows after a moment.
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(1700));
     cx.run_until_parked();
     assert_eq!(label(cx).as_deref(), Some("Sincronizar"));
 }
 
-/// Avisos viram toasts: aparecem, ficam um pouco e saem. Nada fica fixo no rodapé.
+/// Notices become toasts: they appear, stay a bit and leave. Nothing stays fixed in the footer.
 #[gpui_kit::test]
 fn actions_show_a_toast_that_goes_away(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
@@ -1586,11 +1588,11 @@ fn actions_show_a_toast_that_goes_away(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert_eq!(texts(cx), ["Copiado: Senha · some em 30 s"]);
-    // Copiar de novo não empilha o mesmo aviso.
+    // Copying again doesn't stack the same notice.
     cx.update_window(handle, |_, window, cx| window.click("copy-password", cx))
         .unwrap();
     assert_eq!(texts(cx).len(), 1);
-    // Depois do tempo, sai (e some da tela).
+    // After the timeout, it leaves (and disappears from the screen).
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(3000));
     cx.run_until_parked();
@@ -1608,7 +1610,7 @@ fn folder_controls_show_up_and_validate(cx: &mut TestAppContext) {
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
     let toasts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
 
-    // "+" ao lado de Pastas abre o campo; vazio não cria.
+    // "+" next to Folders opens the field; empty doesn't create.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("folder-new-name").is_none());
@@ -1627,7 +1629,7 @@ fn folder_controls_show_up_and_validate(cx: &mut TestAppContext) {
     })
     .unwrap();
 
-    // Com uma pasta aberta: renomear e apagar no cabeçalho.
+    // With a folder open: rename and delete in the header.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("folder-new-name").is_none());
@@ -1663,7 +1665,7 @@ fn folder_controls_show_up_and_validate(cx: &mut TestAppContext) {
     .unwrap();
 }
 
-/// Cria, renomeia e apaga uma pasta pela interface, contra o Vaultwarden local.
+/// Creates, renames and deletes a folder through the interface, against the local Vaultwarden.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn folders_through_the_ui(cx: &mut TestAppContext) {
@@ -1723,7 +1725,7 @@ fn folders_through_the_ui(cx: &mut TestAppContext) {
     .unwrap();
     wait_until(cx, |cx| folder(cx, &name).is_some());
     let id = folder(cx, &name).unwrap();
-    // Abre a pasta recém-criada.
+    // Opens the freshly created folder.
     wait_until(cx, |cx| {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -1790,7 +1792,7 @@ fn pinning_adds_quick_access_and_is_saved(cx: &mut TestAppContext) {
     .unwrap();
     assert_eq!(store.load().pinned_items, ["login-1"], "fica salvo");
 
-    // Com outro filtro ativo, o atalho volta para "Todos" e abre o item.
+    // With another filter active, the shortcut goes back to "All" and opens the item.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("pinned-login-1").is_some());
@@ -1811,7 +1813,7 @@ fn pinning_adds_quick_access_and_is_saved(cx: &mut TestAppContext) {
         assert_eq!(*v.list().read(cx).delegate().filter(), Filter::All);
     });
 
-    // Desafixar tira da barra e do arquivo.
+    // Unpinning removes it from the bar and from the file.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("item-pin", cx);
@@ -1831,7 +1833,7 @@ fn tray_commands_and_close_without_tray(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| {
-            // Sem bandeja (testes), fechar fecha de verdade.
+            // Without a tray (tests), closing really closes.
             assert!(app.on_close_requested(window, cx));
             app.handle_tray(scout_vault_app::tray::Command::Show, window, cx);
             app.handle_tray(scout_vault_app::tray::Command::Lock, window, cx);
@@ -1894,7 +1896,7 @@ fn editor_collects_files_and_keeps_them_across_kinds(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(files[0].parent().unwrap());
 }
 
-/// Cria uma nota já com arquivos e anexa mais pelo detalhe, contra o Vaultwarden local.
+/// Creates a note already with files and attaches more from the detail, against the local Vaultwarden.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn note_with_files_through_the_ui(cx: &mut TestAppContext) {
@@ -1951,7 +1953,7 @@ fn note_with_files_through_the_ui(cx: &mut TestAppContext) {
         })
     });
 
-    // Dois de uma vez pelo detalhe (como arrastar vários).
+    // Two at once from the detail (like dragging several).
     cx.update(|cx| vault.update(cx, |v, cx| v.attach_paths(&more, cx)));
     wait_until(cx, |cx| {
         cx.update(|cx| {
@@ -1975,7 +1977,7 @@ fn note_with_files_through_the_ui(cx: &mut TestAppContext) {
     });
     assert_eq!(names, ["contrato.txt", "foto.png", "recibo.txt", "rg.pdf"]);
 
-    // Limpa: lixeira e apagar de vez.
+    // Clean up: trash and delete permanently.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("item-trash", cx);
@@ -2007,7 +2009,7 @@ fn org_items_choose_owner_and_collections(cx: &mut TestAppContext) {
     let editor =
         |cx: &mut TestAppContext| cx.update(|cx| vault.read(cx).editor().cloned().unwrap());
 
-    // Coleções na barra lateral, embaixo da organização; filtrar por uma.
+    // Collections in the sidebar, below the organization; filter by one.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("filter-col-col-fin").is_some());
@@ -2027,7 +2029,7 @@ fn org_items_choose_owner_and_collections(cx: &mut TestAppContext) {
     });
     assert_eq!(visible, ["card-org"]);
 
-    // Novo item a partir da coleção: já nasce na organização e nela.
+    // New item from the collection: born in the organization and in it.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("vault-new", cx);
@@ -2055,7 +2057,7 @@ fn org_items_choose_owner_and_collections(cx: &mut TestAppContext) {
     })
     .unwrap();
     cx.update(|cx| assert_eq!(e.read(cx).collections(), ["col-fin"]));
-    // Sem coleção não salva.
+    // Doesn't save without a collection.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("editor-col-col-fin", cx);
@@ -2075,7 +2077,7 @@ fn org_items_choose_owner_and_collections(cx: &mut TestAppContext) {
     })
     .unwrap();
 
-    // Item existente da organização: dono fixo, coleções editáveis.
+    // Existing organization item: fixed owner, editable collections.
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| {
             v.set_filter(Filter::All, window, cx);
@@ -2095,8 +2097,8 @@ fn org_items_choose_owner_and_collections(cx: &mut TestAppContext) {
     cx.update(|cx| assert_eq!(e.read(cx).owner(), Some("org-1")));
 }
 
-/// Cria um item numa organização pela interface, contra o Vaultwarden local.
-/// Precisa da organização de `tools/dev_org.py`.
+/// Creates an item in an organization through the interface, against the local Vaultwarden.
+/// Needs the organization from `tools/dev_org.py`.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn org_item_through_the_ui(cx: &mut TestAppContext) {
@@ -2207,7 +2209,7 @@ fn opens_without_password_for_n_days_until_password_changes(cx: &mut TestAppCont
     settings.unlock_memory_days = 7;
     store.save(&settings);
 
-    // Primeira vez: bloqueia e desbloqueia com a senha (isso guarda a chave).
+    // First time: lock and unlock with the password (that stores the key).
     let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.lock(window, cx))
@@ -2230,11 +2232,11 @@ fn opens_without_password_for_n_days_until_password_changes(cx: &mut TestAppCont
         scout_vault_app::quick_unlock::open(&store, &saved).is_some(),
         "chave guardada não abriu"
     );
-    // "Reabrir o app": já abre desbloqueado, sem senha.
+    // "Reopen the app": opens already unlocked, without a password.
     let (_, app2) = open_with_store(cx, &store, None);
     cx.update(|cx| assert_eq!(app2.read(cx).screen_kind(), ScreenKind::Vault));
 
-    // Senha mestra trocada noutro lugar: a user key cifrada do perfil muda no sync.
+    // Master password changed elsewhere: the profile's encrypted user key changes on sync.
     let mut session = scout_vault_app::saved_session::load(&store).unwrap();
     let mut sync = (*session.sync).clone();
     sync.profile.key = Some("2.outra|chave|cifrada".into());
@@ -2254,7 +2256,7 @@ fn full_login_is_required_after_n_days(cx: &mut TestAppContext) {
     let mut session = unlocked_fixture().session;
     session.logged_in_at = scout_vault_app::flow::now_secs() - 31 * 86_400;
     scout_vault_app::saved_session::save(&store, &session);
-    // Padrão: 30 dias. Passou de 30 → pede login.
+    // Default: 30 days. Past 30 → asks for login.
     let (_, app) = open_with_store(cx, &store, None);
     cx.update(|cx| assert_eq!(app.read(cx).screen_kind(), ScreenKind::Login));
     assert!(
@@ -2262,7 +2264,7 @@ fn full_login_is_required_after_n_days(cx: &mut TestAppContext) {
         "sessão esquecida"
     );
 
-    // Com "Nunca", a mesma sessão antiga continua valendo.
+    // With "Never", the same old session still works.
     let mut settings = store.load();
     settings.relogin_days = 0;
     store.save(&settings);
@@ -2282,7 +2284,7 @@ fn auto_lock_follows_the_setting(cx: &mut TestAppContext) {
     let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| {
-            // "Nunca": nem depois de um dia.
+            // "Never": not even after a day.
             app.lock_if_idle(Instant::now() + Duration::from_secs(86_400), window, cx);
             assert_eq!(app.screen_kind(), ScreenKind::Vault);
         })
@@ -2304,14 +2306,14 @@ fn auto_lock_follows_the_setting(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Clicar num item da lista mostra ele, mesmo com o formulário aberto.
+/// Clicking an item in the list shows it, even with the form open.
 #[gpui_kit::test]
 fn clicking_an_item_leaves_the_form(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
     let selected =
         |cx: &mut TestAppContext| cx.update(|cx| vault.read(cx).selected().map(|i| i.id.clone()));
-    // Formulário de item novo aberto → clica num item.
+    // New item form open → click an item.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("vault-new", cx);
@@ -2329,7 +2331,7 @@ fn clicking_an_item_leaves_the_form(cx: &mut TestAppContext) {
     assert!(cx.update(|cx| vault.read(cx).editor().is_none()));
     assert_eq!(selected(cx).as_deref(), Some("login-1"));
 
-    // Editando um item → clica em outro: mostra o outro.
+    // Editing an item → click another one: shows the other one.
     cx.update_window(handle, |_, window, cx| {
         window.click("item-edit", cx);
         window.render_frame(cx);
@@ -2345,7 +2347,7 @@ fn clicking_an_item_leaves_the_form(cx: &mut TestAppContext) {
     assert_eq!(selected(cx).as_deref(), Some("identity-1"));
 }
 
-/// Arrastar para uma pasta com o formulário aberto não perde o formulário.
+/// Dragging to a folder with the form open doesn't lose the form.
 #[gpui_kit::test]
 fn dragging_into_a_folder_waits_for_the_form(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
@@ -2363,12 +2365,12 @@ fn dragging_into_a_folder_waits_for_the_form(cx: &mut TestAppContext) {
     assert!(cx.update(|cx| vault.read(cx).editor().is_some()));
     assert_eq!(
         texts(cx),
-        ["Salve ou cancele o formulário antes de mover itens."]
+        ["Salve ou cancele a edição antes de mover itens."]
     );
 }
 
-/// Arrasta um item para uma pasta e uma pasta para dentro de outra, contra o
-/// Vaultwarden local.
+/// Drags an item into a folder and a folder into another one, against the
+/// local Vaultwarden.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
@@ -2465,7 +2467,7 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
         folder_id(cx, &inner).unwrap(),
     );
 
-    // Um item sem pasta, para arrastar.
+    // An item with no folder, to drag.
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| v.set_filter(Filter::Folder(None), window, cx));
         window.render_frame(cx);
@@ -2482,7 +2484,7 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
     idle(cx);
     let item_id = item_state(cx, &item_name).unwrap().0;
 
-    // Item → pasta B.
+    // Item → folder B.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.drag_to(
@@ -2497,7 +2499,7 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
     });
     idle(cx);
 
-    // Pasta B → dentro de A: vira "A/B" e aparece recuada, só com o nome.
+    // Folder B → inside A: becomes "A/B" and shows up indented, with just the name.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.drag_to(
@@ -2520,7 +2522,7 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
                 .label(),
             Some(inner.as_str())
         );
-        // E de volta para o topo, soltando no título "Pastas".
+        // And back to the top level, dropping on the "Folders" heading.
         window.drag_to(
             gpui_kit::SharedString::from(format!("filter-folder-{inner_id}")),
             "folders-header",
@@ -2531,7 +2533,7 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
     wait_until(cx, |cx| folder_id(cx, &inner) == Some(inner_id.clone()));
     idle(cx);
 
-    // Item → Sem pasta.
+    // Item → No folder.
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| {
             v.set_filter(Filter::Folder(Some(inner_id.clone())), window, cx)
@@ -2549,7 +2551,7 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
     });
     idle(cx);
 
-    // Limpeza: apaga as pastas e o item.
+    // Clean up: deletes the folders and the item.
     for id in [inner_id, outer_id] {
         cx.update_window(handle, |_, window, cx| {
             vault.update(cx, |v, cx| {
@@ -2590,8 +2592,8 @@ fn drag_and_drop_through_the_ui(cx: &mut TestAppContext) {
     wait_until(cx, |cx| item_state(cx, &item_name).is_none());
 }
 
-/// Menu da bandeja: reflete bloqueio e acesso rápido; copiar, gerar e
-/// sincronizar funcionam sem abrir o item.
+/// Tray menu: reflects locking and quick access; copy, generate and
+/// sync work without opening the item.
 #[gpui_kit::test]
 fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     use scout_vault_app::tray::{Command, PinnedEntry};
@@ -2602,12 +2604,12 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
     let menu = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).tray_menu_state(cx));
 
-    // Aberto, sem fixados.
+    // Unlocked, nothing pinned.
     let state = menu(cx);
     assert!(state.unlocked);
     assert!(state.pinned.is_empty());
 
-    // Fixa um login: aparece com usuário e senha.
+    // Pin a login: shows up with username and password.
     cx.update(|cx| vault.update(cx, |v, _| v.set_pinned(vec!["login-1".into()])));
     assert_eq!(
         menu(cx).pinned,
@@ -2617,11 +2619,11 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
             has_username: true,
             has_password: true,
             has_totp: true,
-            icon: Some(gpui_kit::assets::IconName::Globe),
+            icon: Some(gpui_kit::assets::IconName::Globe.into()),
         }]
     );
 
-    // Copiar a senha pelo menu, sem abrir o item.
+    // Copy the password from the menu, without opening the item.
     let copy = |what| Command::Copy {
         item_id: "login-1".into(),
         what,
@@ -2634,7 +2636,7 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     .unwrap();
     assert_eq!(texts(cx), ["Copiado: Senha · some em 30 s"]);
     assert!(cx.update(|cx| vault.read(cx).selected().is_none()));
-    // Campo que o item não tem.
+    // A field the item doesn't have.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| {
             let missing = Command::Copy {
@@ -2647,7 +2649,7 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     .unwrap();
     assert!(texts(cx).contains(&"Este item não tem senha.".to_owned()));
 
-    // Gerar e copiar.
+    // Generate and copy.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| {
             a.handle_tray(Command::GeneratePassword, window, cx)
@@ -2656,16 +2658,16 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     .unwrap();
     assert!(texts(cx).contains(&"Senha gerada e copiada · some em 30 s".to_owned()));
 
-    // Sincronizar começa na hora.
+    // Sync starts right away.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.handle_tray(Command::Sync, window, cx));
     })
     .unwrap();
     assert!(cx.update(|cx| vault.read(cx).is_busy()));
-    // Espera a tentativa terminar (sem servidor, falha) antes de seguir.
+    // Wait for the attempt to finish (no server, it fails) before going on.
     wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
 
-    // Bloqueado: menu sem acesso rápido, e copiar pede o desbloqueio.
+    // Locked: menu without quick access, and copying asks to unlock.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.handle_tray(Command::Lock, window, cx));
     })
@@ -2682,8 +2684,8 @@ fn tray_menu_copies_generates_and_follows_lock(cx: &mut TestAppContext) {
     assert!(texts(cx).contains(&"Desbloqueie o cofre para copiar.".to_owned()));
 }
 
-/// O menu da bandeja é uma janela do app: abre no cursor, cada linha faz a
-/// ação e fecha o menu; `Esc` fecha; bloqueado, só oferece desbloquear.
+/// The tray menu is an app window: opens at the cursor, each row does the
+/// action and closes the menu; `Esc` closes; when locked, it only offers unlock.
 #[gpui_kit::test]
 fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
     use scout_vault_app::tray::Command;
@@ -2707,7 +2709,7 @@ fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
         cx.update_window(menu, |_, _, _| ()).is_ok()
     };
 
-    // Aberto: acesso rápido com os botões de cada campo do item.
+    // Unlocked: quick access with buttons for each of the item's fields.
     let (menu, view) = open(cx);
     assert!(cx.update(|cx| view.read(cx).state().unlocked));
     cx.update_window(menu, |_, window, cx| {
@@ -2733,7 +2735,7 @@ fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
     assert_eq!(texts(cx), ["Copiado: Senha · some em 30 s"]);
     assert!(!is_open(cx, menu), "escolher fecha o menu");
 
-    // Abrir de novo troca o menu; Esc fecha.
+    // Opening again replaces the menu; Esc closes.
     let (menu, _) = open(cx);
     cx.update_window(menu, |_, window, cx| {
         window.render_frame(cx);
@@ -2743,7 +2745,7 @@ fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!is_open(cx, menu));
 
-    // Gerar senha pelo menu.
+    // Generate a password from the menu.
     let (menu, _) = open(cx);
     cx.update_window(menu, |_, window, cx| {
         window.render_frame(cx);
@@ -2753,7 +2755,7 @@ fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(texts(cx).contains(&"Senha gerada e copiada · some em 30 s".to_owned()));
 
-    // Bloquear pelo menu; o próximo menu só oferece desbloquear e gerar.
+    // Lock from the menu; the next menu only offers unlock and generate.
     let (menu, _) = open(cx);
     cx.update_window(menu, |_, window, cx| {
         window.render_frame(cx);
@@ -2777,7 +2779,7 @@ fn tray_popup_menu_runs_actions_and_closes(cx: &mut TestAppContext) {
     .unwrap();
 }
 
-/// A janela do menu tem a altura exata das linhas (sem sobra nem corte).
+/// The menu window has the exact height of the rows (no extra space and no clipping).
 #[test]
 fn tray_menu_height_follows_its_rows() {
     use scout_vault_app::tray::{MenuState, PinnedEntry};
@@ -2799,13 +2801,13 @@ fn tray_menu_height_follows_its_rows() {
     };
     assert!(locked.height < empty.height);
     assert!(window_size(&pin(2)).height > window_size(&pin(1)).height);
-    // Muitos fixados rolam dentro do menu em vez de crescer sem fim.
+    // Many pinned items scroll inside the menu instead of growing forever.
     assert_eq!(window_size(&pin(6)).height, window_size(&pin(10)).height);
     assert_eq!(locked.width, empty.width);
 }
 
-/// Bloquear o Windows (ou suspender) bloqueia o cofre — a não ser que a
-/// opção esteja desligada.
+/// Locking Windows (or sleeping) locks the vault — unless the
+/// option is off.
 #[gpui_kit::test]
 fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
     use scout_vault_app::windows_events::OsEvent;
@@ -2813,7 +2815,7 @@ fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
     let (dir, store) = file_store("lockwin");
     let mut settings = store.load();
     assert!(settings.lock_with_windows, "ligado por padrão");
-    // Desligado: nada muda.
+    // Off: nothing changes.
     settings.lock_with_windows = false;
     store.save(&settings);
     let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
@@ -2824,7 +2826,7 @@ fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
         })
     })
     .unwrap();
-    // Ligado: bloqueia ao bloquear o Windows…
+    // On: locks when Windows locks…
     settings.lock_with_windows = true;
     store.save(&settings);
     cx.update_window(handle, |_, window, cx| {
@@ -2834,7 +2836,7 @@ fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
         })
     })
     .unwrap();
-    // …e ao suspender.
+    // …and on sleep.
     let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| {
@@ -2843,7 +2845,7 @@ fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
         })
     })
     .unwrap();
-    // A opção aparece nas configurações.
+    // The option shows up in settings.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |app, cx| app.open_settings(window, cx));
         window.render_frame(cx);
@@ -2853,8 +2855,8 @@ fn locks_with_windows_unless_turned_off(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Item com "pedir a senha mestra": mostrar, copiar e editar esperam a senha;
-/// senha errada não libera; trocar de item volta a pedir.
+/// Item with "ask for the master password": show, copy and edit wait for the password;
+/// a wrong password doesn't release it; switching items asks again.
 #[gpui_kit::test]
 fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -2866,7 +2868,7 @@ fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
         vault.update(cx, |v, cx| v.select_item("login-item-key", window, cx));
         window.render_frame(cx);
         assert!(window.try_find("reprompt-card").is_some());
-        // Mostrar a senha: abre o pedido em vez de revelar.
+        // Show the password: opens the prompt instead of revealing.
         window.click("reveal-password", cx);
     })
     .unwrap();
@@ -2874,7 +2876,7 @@ fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert!(window.try_find("reprompt-password").is_some());
         assert_eq!(window.find("value-password").label(), Some("••••••••"));
-        // Senha errada.
+        // Wrong password.
         window.click("reprompt-password", cx);
         window.input("errada", cx);
         window.press("enter", cx);
@@ -2890,10 +2892,10 @@ fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         assert_eq!(
             window.find("reprompt-error").label(),
-            Some("Senha mestra incorreta.")
+            Some("Senha do cofre incorreta.")
         );
         assert_eq!(window.find("value-password").label(), Some("••••••••"));
-        // Agora a certa: revela o que tinha sido pedido.
+        // Now the right one: reveals what had been requested.
         window.click("reprompt-password", cx);
         window.input(&password, cx);
         window.click("reprompt-confirm", cx);
@@ -2909,13 +2911,13 @@ fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("reprompt-ok").is_some());
-        // Liberado: copiar vai direto.
+        // Released: copying goes straight through.
         window.click("copy-password", cx);
     })
     .unwrap();
     assert!(texts(cx).contains(&"Copiado: Senha · some em 30 s".to_owned()));
 
-    // Outro item e de volta: pede de novo; editar espera a senha.
+    // Another item and back: asks again; editing waits for the password.
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| {
             v.select_item("login-1", window, cx);
@@ -2935,11 +2937,11 @@ fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
     })
     .unwrap();
     wait_until(cx, |cx| cx.update(|cx| vault.read(cx).editor().is_some()));
-    // O formulário mostra a opção marcada.
+    // The form shows the option checked.
     let draft = cx.update(|cx| vault.read(cx).editor().unwrap().read(cx).to_item(cx));
     assert!(draft.reprompt);
 
-    // Itens sem a opção não pedem nada.
+    // Items without the option don't ask for anything.
     cx.update_window(handle, |_, window, cx| {
         window.click("editor-cancel", cx);
     })
@@ -2955,7 +2957,7 @@ fn reprompt_guards_reveal_copy_and_edit(cx: &mut TestAppContext) {
     .unwrap();
 }
 
-/// Pela bandeja e pelo navegador, o item que pede a senha mestra não sai sem ela.
+/// Through the tray and the browser, the item that asks for the master password doesn't go out without it.
 #[gpui_kit::test]
 fn reprompt_guards_tray_copy_and_browser_fill(cx: &mut TestAppContext) {
     use scout_vault_app::tray::Command;
@@ -2977,7 +2979,7 @@ fn reprompt_guards_tray_copy_and_browser_fill(cx: &mut TestAppContext) {
         });
     })
     .unwrap();
-    // Não copiou: abriu o item com o pedido.
+    // Didn't copy: opened the item with the prompt.
     assert!(texts(cx).is_empty());
     cx.update(|cx| {
         assert_eq!(
@@ -2994,12 +2996,12 @@ fn reprompt_guards_tray_copy_and_browser_fill(cx: &mut TestAppContext) {
         window.press("enter", cx);
     })
     .unwrap();
-    // Confirmou: a cópia pedida acontece.
+    // Confirmed: the requested copy happens.
     wait_until(cx, |cx| {
         texts(cx).contains(&"Copiado: Senha · some em 30 s".to_owned())
     });
 
-    // Navegador: recusa preencher.
+    // Browser: refuses to fill.
     let items = cx.update(|cx| {
         vault
             .read(cx)
@@ -3019,13 +3021,13 @@ fn reprompt_guards_tray_copy_and_browser_fill(cx: &mut TestAppContext) {
     );
     assert!(reply["error"]
         .as_str()
-        .is_some_and(|e| e.contains("pede a senha mestra")));
+        .is_some_and(|e| e.contains("pede a senha do cofre")));
     assert!(reply.get("password").is_none());
 }
 
-/// Windows Hello (com um assinador falso no lugar do Windows): ligar com o
-/// cofre aberto guarda a chave cifrada; o botão abre o cofre; outra chave do
-/// Hello ou cancelar não abrem; sair da conta apaga.
+/// Windows Hello (with a fake signer in place of Windows): turning it on with the
+/// vault open stores the encrypted key; the button opens the vault; another Hello
+/// key or canceling doesn't open it; signing out deletes it.
 #[gpui_kit::test]
 fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
     use scout_vault_app::hello;
@@ -3044,7 +3046,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
             .clone()
     });
 
-    // Liga nas configurações (com o cofre aberto, pede o Hello na hora).
+    // Turn it on in settings (with the vault open, it asks for Hello right away).
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.open_settings(window, cx));
         window.render_frame(cx);
@@ -3054,12 +3056,12 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
     })
     .unwrap();
     wait_until(cx, |cx| {
-        texts(cx).contains(&"Windows Hello ligado para desbloquear".to_owned())
+        texts(cx).contains(&"Windows Hello ligado".to_owned())
     });
     assert!(store.load().windows_hello);
     assert!(hello::is_enrolled(&store, &session));
 
-    // Bloqueia: aparece "Usar Windows Hello", e ele abre o cofre.
+    // Lock: "Use Windows Hello" shows up, and it opens the vault.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| {
             a.close_settings(cx);
@@ -3073,7 +3075,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
         cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
     });
 
-    // Outra chave do Hello (ex.: outro usuário do Windows): não abre.
+    // Another Hello key (e.g. another Windows user): doesn't open.
     cx.update(|cx| hello::install(cx, hello::fake_signer(b"tpm-2")));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.lock(window, cx));
@@ -3094,7 +3096,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
         ScreenKind::Locked
     );
 
-    // Cancelar no Hello: explica e continua bloqueado.
+    // Cancel in Hello: explains and stays locked.
     cx.update(|cx| hello::install(cx, hello::canceling_signer()));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -3103,7 +3105,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
     .unwrap();
     wait_until(cx, |cx| unlock(cx).is_some_and(|e| e.contains("cancelado")));
 
-    // A senha mestra mudou no servidor: a chave do Hello é descartada.
+    // The master password changed on the server: the Hello key is discarded.
     let mut changed = session.clone();
     let mut sync = (*changed.sync).clone();
     sync.profile.key = Some("2.outra|chave|qualquer".into());
@@ -3111,7 +3113,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
     assert!(hello::password_changed(&store, &changed));
     assert!(!hello::is_enrolled(&store, &session));
 
-    // Senha mestra digitada com a opção ainda ligada: configura de novo sozinho.
+    // Master password typed with the option still on: sets it up again on its own.
     cx.update(|cx| hello::install(cx, hello::fake_signer(b"tpm-1")));
     let (password, _) = fixture_password_and_email();
     cx.update_window(handle, |_, window, cx| {
@@ -3122,7 +3124,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
     })
     .unwrap();
     wait_until(cx, |_| hello::is_enrolled(&store, &session));
-    // Sair da conta apaga.
+    // Signing out deletes it.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.lock(window, cx));
     })
@@ -3136,7 +3138,7 @@ fn windows_hello_unlocks_and_is_forgotten(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Sem Windows Hello no computador: ligar a opção explica e volta a desligar.
+/// No Windows Hello on the computer: turning the option on explains and turns it back off.
 #[gpui_kit::test]
 fn windows_hello_without_support_turns_back_off(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -3155,8 +3157,8 @@ fn windows_hello_without_support_turns_back_off(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Sync em segundo plano: só sincroniza quando a revisão do servidor muda, e
-/// não atrapalha um formulário aberto nem roda com a opção desligada.
+/// Background sync: only syncs when the server revision changes, and
+/// doesn't disturb an open form nor runs with the option off.
 #[gpui_kit::test]
 fn background_sync_only_when_the_vault_changed(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -3166,14 +3168,14 @@ fn background_sync_only_when_the_vault_changed(cx: &mut TestAppContext) {
     let revision = |cx: &mut TestAppContext, date: i64| {
         cx.update(|cx| vault.update(cx, |v, cx| v.on_revision(date, cx)))
     };
-    // Primeira resposta: vira a base, sem sync.
+    // First answer: becomes the baseline, no sync.
     revision(cx, 100);
     assert!(!busy(cx));
     assert_eq!(cx.update(|cx| vault.read(cx).last_revision()), Some(100));
-    // Mesma revisão: nada.
+    // Same revision: nothing.
     revision(cx, 100);
     assert!(!busy(cx));
-    // Formulário aberto: espera (não sincroniza por baixo da edição).
+    // Form open: waits (doesn't sync underneath the edit).
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| v.new_item(window, cx));
     })
@@ -3185,18 +3187,18 @@ fn background_sync_only_when_the_vault_changed(cx: &mut TestAppContext) {
         window.click("editor-cancel", cx);
     })
     .unwrap();
-    // Opção desligada: nada.
+    // Option off: nothing.
     cx.update(|cx| vault.update(cx, |v, _| v.set_background_sync(false)));
     revision(cx, 200);
     assert!(!busy(cx));
-    // Ligada e mudou: sincroniza.
+    // On and changed: syncs.
     cx.update(|cx| vault.update(cx, |v, _| v.set_background_sync(true)));
     revision(cx, 200);
     assert!(busy(cx));
-    // (o servidor do fixture não existe: o sync falha e a base continua a antiga)
+    // (the fixture's server doesn't exist: the sync fails and the baseline stays the old one)
     wait_until(cx, |cx| !busy(cx));
     assert_eq!(cx.update(|cx| vault.read(cx).last_revision()), Some(100));
-    // A opção aparece nas configurações e começa ligada.
+    // The option shows up in settings and starts on.
     assert!(cx.update(|cx| app.read(cx).store().load().background_sync));
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.open_settings(window, cx));
@@ -3206,8 +3208,8 @@ fn background_sync_only_when_the_vault_changed(cx: &mut TestAppContext) {
     .unwrap();
 }
 
-/// Contra o Vaultwarden local: uma pasta criada "em outro aparelho" aparece
-/// sozinha depois da checagem de revisão.
+/// Against the local Vaultwarden: a folder created "on another device" shows up
+/// on its own after the revision check.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn background_sync_picks_up_changes_from_elsewhere(cx: &mut TestAppContext) {
@@ -3239,13 +3241,13 @@ fn background_sync_picks_up_changes_from_elsewhere(cx: &mut TestAppContext) {
     });
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
     let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
-    // Primeira checagem: base.
+    // First check: baseline.
     cx.update(|cx| vault.update(cx, |v, cx| v.check_now(cx)));
     wait_until(cx, |cx| {
         cx.update(|cx| vault.read(cx).last_revision().is_some())
     });
 
-    // "Outro aparelho" cria uma pasta direto no servidor.
+    // "Another device" creates a folder directly on the server.
     let name = format!("Pasta UI {} remota", std::process::id());
     let (client_name, folder_id) = {
         let name = name.clone();
@@ -3275,7 +3277,7 @@ fn background_sync_picks_up_changes_from_elsewhere(cx: &mut TestAppContext) {
         .unwrap()
     };
 
-    // A checagem percebe e sincroniza sozinha.
+    // The check notices and syncs on its own.
     cx.update(|cx| vault.update(cx, |v, cx| v.check_now(cx)));
     let has_folder = |cx: &mut TestAppContext| {
         cx.update(|cx| {
@@ -3293,7 +3295,7 @@ fn background_sync_picks_up_changes_from_elsewhere(cx: &mut TestAppContext) {
     wait_until(cx, has_folder);
     assert!(texts(cx).contains(&"Cofre atualizado com mudanças de outro aparelho".to_owned()));
 
-    // Limpeza.
+    // Clean up.
     wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| {
@@ -3310,9 +3312,9 @@ fn background_sync_picks_up_changes_from_elsewhere(cx: &mut TestAppContext) {
     wait_until(cx, |cx| !has_folder(cx));
 }
 
-/// Salvar logins do navegador, sem servidor: o `check` responde sem senha e sem
-/// incomodar quando bloqueado; o `save` recusa com formulário aberto e, com o
-/// cofre bloqueado, espera o desbloqueio.
+/// Saving logins from the browser, without a server: `check` answers without a password and without
+/// bothering when locked; `save` refuses with a form open and, with the
+/// vault locked, waits for unlock.
 #[gpui_kit::test]
 fn browser_save_checks_waits_for_unlock_and_spares_the_form(cx: &mut TestAppContext) {
     use scout_vault_app::browser::Request;
@@ -3350,22 +3352,20 @@ fn browser_save_checks_waits_for_unlock_and_spares_the_form(cx: &mut TestAppCont
         json!({ "action": "save" })
     );
 
-    // Formulário aberto: não salva por baixo dele.
+    // Form open: doesn't save underneath it.
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| v.new_item(window, cx));
     })
     .unwrap();
     let r = browser_ask(cx, handle, &app, save("https://novo.example", "eu", "x"));
-    assert!(r["error"]
-        .as_str()
-        .is_some_and(|e| e.contains("formulário")));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("editando")));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("editor-cancel", cx);
     })
     .unwrap();
 
-    // Bloqueado: o `check` não chama atenção; o `save` espera o desbloqueio.
+    // Locked: `check` doesn't draw attention; `save` waits for unlock.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| a.lock(window, cx))
     })
@@ -3394,15 +3394,15 @@ fn browser_save_checks_waits_for_unlock_and_spares_the_form(cx: &mut TestAppCont
     wait_until(cx, |cx| {
         cx.update(|cx| app.read(cx).screen_kind() == ScreenKind::Vault)
     });
-    // Desbloqueou: o login guardado vai para o servidor (que no fixture não existe).
+    // Unlocked: the stored login goes to the server (which doesn't exist in the fixture).
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
     assert!(cx.update(|cx| vault.read(cx).is_busy()));
     wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_busy()));
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Contra o Vaultwarden local: salva um login novo pelo navegador, depois
-/// atualiza a senha dele, e confere o histórico de senhas.
+/// Against the local Vaultwarden: saves a new login from the browser, then
+/// updates its password, and checks the password history.
 #[gpui_kit::test]
 #[ignore = "precisa de servidor; veja dev/test-account.env"]
 fn browser_save_and_update_through_the_app(cx: &mut TestAppContext) {
@@ -3476,7 +3476,7 @@ fn browser_save_and_update_through_the_app(cx: &mut TestAppContext) {
     assert_eq!(l.username.as_deref(), Some("eu@site"));
     assert_eq!(l.uris, [format!("https://{site}")]);
 
-    // Mesma senha: nada a fazer. Senha nova: atualiza o mesmo item.
+    // Same password: nothing to do. New password: updates the same item.
     assert_eq!(
         browser_ask(
             cx,
@@ -3509,7 +3509,7 @@ fn browser_save_and_update_through_the_app(cx: &mut TestAppContext) {
     idle(cx);
     assert_eq!(find(cx).unwrap().id, item.id, "atualizou, não duplicou");
 
-    // Limpeza.
+    // Clean up.
     cx.update_window(handle, |_, window, cx| {
         vault.update(cx, |v, cx| v.select_item(&item.id, window, cx));
         window.render_frame(cx);
@@ -3548,7 +3548,7 @@ fn browser_save_and_update_through_the_app(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Com "Movimento: Parado", trocar o tema é direto: sem círculo nem véu.
+/// With "Motion: Still", switching the theme is direct: no circle and no veil.
 #[gpui_kit::test]
 fn theme_change_without_motion_is_instant(cx: &mut TestAppContext) {
     use scout_vault_app::theme_fx;
@@ -3569,8 +3569,8 @@ fn theme_change_without_motion_is_instant(cx: &mut TestAppContext) {
     .unwrap();
 }
 
-/// Busca rápida: acha, copia, preenche no app de destino, respeita o pedido de
-/// senha mestra e, com o cofre bloqueado, manda desbloquear.
+/// Quick search: finds, copies, fills in the target app, respects the master password
+/// prompt and, with the vault locked, asks to unlock.
 #[gpui_kit::test]
 fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
     use scout_vault_app::vault_view::CopyShortcut;
@@ -3590,7 +3590,7 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
             .expect("busca rápida aberta")
     };
 
-    // Achar e copiar a senha (sem abrir o item no app).
+    // Find and copy the password (without opening the item in the app).
     let (popup, quick) = open(cx, "Entrar - Banco", false);
     popup
         .update(cx, |_, window, cx| {
@@ -3604,13 +3604,13 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(texts(cx).contains(&"Copiado: Senha · some em 30 s".to_owned()));
     assert!(cx.update(|cx| vault.read(cx).selected().is_none()));
-    // Mostra "Senha copiada" e fecha sozinha.
+    // Shows "Password copied" and closes on its own.
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(1));
     cx.run_until_parked();
     assert!(popup.update(cx, |_, _, _| ()).is_err(), "a janela fechou");
 
-    // Enter: digita no app que estava em foco.
+    // Enter: types into the app that had focus.
     let (popup, quick) = open(cx, "Entrar - Banco", false);
     popup
         .update(cx, |_, window, cx| {
@@ -3627,7 +3627,7 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
     assert_eq!(keys[2], "s3nh@-ção");
     typed.lock().unwrap().clear();
 
-    // Item que pede a senha mestra: nada é digitado antes de confirmar.
+    // Item that asks for the master password: nothing is typed before confirming.
     let (popup, quick) = open(cx, "Outro app", false);
     popup
         .update(cx, |_, window, cx| {
@@ -3641,7 +3641,7 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
     assert!(typed.lock().unwrap().is_empty());
     assert!(cx.update(|cx| vault.read(cx).reprompt_open()));
 
-    // Usada dentro do próprio Scout Vault: Enter abre o item no app.
+    // Used inside Scout Vault itself: Enter opens the item in the app.
     let (popup, quick) = open(cx, "Scout Vault", true);
     popup
         .update(cx, |_, window, cx| {
@@ -3658,7 +3658,7 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
         Some("identity-1".into())
     );
 
-    // Bloqueado: não abre a janelinha; pede para desbloquear.
+    // Locked: doesn't open the small window; asks to unlock.
     cx.update_window(handle, |_, window, cx| {
         app.update(cx, |a, cx| {
             a.lock(window, cx);
@@ -3668,4 +3668,296 @@ fn quick_search_finds_copies_and_fills(cx: &mut TestAppContext) {
     .unwrap();
     assert!(cx.update(|cx| app.read(cx).quick_search().is_none()));
     assert!(texts(cx).contains(&"Desbloqueie o cofre para usar a busca rápida.".to_owned()));
+}
+
+/// The clipboard clearing time comes from the settings (and
+/// shows up in the notice); "Never" doesn't clear nor promise to clear.
+#[gpui_kit::test]
+fn clipboard_clear_time_follows_the_setting(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (_dir, store) = file_store("clip");
+    let mut s = store.load();
+    s.clipboard_clear_secs = 10;
+    store.save(&s);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let texts = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("login-1", window, cx));
+        window.render_frame(cx);
+        window.click("copy-password", cx);
+    })
+    .unwrap();
+    assert_eq!(texts(cx), ["Copiado: Senha · some em 10 s"]);
+    // 10 s later, it's gone.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(11));
+    cx.run_until_parked();
+    assert!(cx
+        .update(|cx| cx.read_from_clipboard().and_then(|c| c.text()))
+        .unwrap_or_default()
+        .is_empty());
+
+    // "Never": copies without a deadline and the value stays.
+    cx.update(|cx| scout_vault_app::clipboard::set_clear_after_secs(0, cx));
+    cx.update_window(handle, |_, window, cx| window.click("copy-password", cx))
+        .unwrap();
+    assert!(texts(cx).contains(&"Copiado: Senha".to_owned()));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(40));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|c| c.text())),
+        Some("s3nh@-ção".to_owned())
+    );
+}
+
+/// "Lock on minimize": minimizing (or going to the tray) locks only with
+/// the option on.
+#[gpui_kit::test]
+fn minimizing_locks_only_when_asked(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.on_minimized(window, cx))
+    })
+    .unwrap();
+    assert_eq!(
+        cx.update(|cx| app.read(cx).screen_kind()),
+        ScreenKind::Vault
+    );
+
+    let (_dir, store) = file_store("minimize");
+    let mut s = store.load();
+    s.lock_on_minimize = true;
+    store.save(&s);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.on_minimized(window, cx))
+    })
+    .unwrap();
+    assert_eq!(
+        cx.update(|cx| app.read(cx).screen_kind()),
+        ScreenKind::Locked
+    );
+}
+
+/// Fake leak API server: answers `login-1` (the fixture's password)
+/// as leaked 7 times, and returns the requested paths.
+fn fake_pwned_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = paths.clone();
+    let (_, leaked) = scout_vault_core::health::pwned_hash("s3nh@-ção");
+    std::thread::spawn(move || {
+        for sock in listener.incoming() {
+            let Ok(mut sock) = sock else { break };
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            if let Some(path) = request.split_whitespace().nth(1) {
+                seen.lock().unwrap().push(path.to_owned());
+            }
+            let body = format!("{leaked}:7\r\n0000000000000000000000000000000000A:0");
+            let _ = sock.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    (url, paths)
+}
+
+/// "Password health": opens from the vault, shows the score and the tabs, checks for
+/// leaks (hash prefixes only), opens the clicked item and goes away on lock.
+#[gpui_kit::test]
+fn health_report_checks_and_opens_items(cx: &mut TestAppContext) {
+    use scout_vault_app::health_view::{Pwned, Tab};
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-health", cx);
+    })
+    .unwrap();
+    let health = cx.update(|cx| app.read(cx).health_view().cloned().expect("tela aberta"));
+    let checked = cx.update(|cx| health.read(cx).report().checked);
+    assert!(checked > 0, "o fixture tem logins com senha");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("health-score").is_some());
+        for tab in Tab::ALL {
+            assert!(window.try_find(tab.id()).is_some());
+        }
+        // Leaks not checked yet: "?" and the check button.
+        assert!(window
+            .find(Tab::Exposed.id())
+            .label()
+            .is_some_and(|l| l.ends_with('?')));
+        window.click(Tab::Exposed.id(), cx);
+    })
+    .unwrap();
+    assert_eq!(cx.update(|cx| health.read(cx).tab()), Tab::Exposed);
+
+    // Checks against the fake server.
+    let (url, paths) = fake_pwned_server();
+    cx.update(|cx| health.update(cx, |h, _| h.set_pwned_url(url)));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("health-check-pwned", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| matches!(health.read(cx).pwned(), Pwned::Done(_)))
+    });
+    let pwned = cx.update(|cx| health.read(cx).pwned().clone());
+    assert_eq!(pwned, Pwned::Done(vec![("login-1".to_owned(), 7)]));
+    for p in paths.lock().unwrap().iter() {
+        assert_eq!(p.len(), "/range/".len() + 5, "só o prefixo sai: {p}");
+    }
+
+    // Clicking the leaked item opens it in the vault.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("health-item-login-1", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(cx.update(|cx| app.read(cx).health_view().is_none()));
+    assert_eq!(
+        cx.update(|cx| vault.read(cx).selected().map(|i| i.id.clone())),
+        Some("login-1".to_owned())
+    );
+
+    // Locking discards the screen (it had decrypted copies).
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.open_health(window, cx);
+            assert!(a.health_view().is_some());
+            a.lock(window, cx);
+            assert!(a.health_view().is_none());
+        })
+    })
+    .unwrap();
+}
+
+/// Item icon: clicking the icon in the detail opens the picker; the choice applies
+/// right away, is stored on this computer and goes back to the default with "Default".
+#[gpui_kit::test]
+fn item_icon_can_be_chosen_saved_and_reset(cx: &mut TestAppContext) {
+    use gpui_kit::assets::IconName;
+    use scout_vault_app::item_icons::{icon_for, CustomIcon, ItemIcon};
+    cx.update(gpui_kit::init);
+    let (_dir, store) = file_store("icons");
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let icon_of = |cx: &mut TestAppContext, id: &str| {
+        cx.update(|cx| {
+            let item = vault
+                .read(cx)
+                .list()
+                .read(cx)
+                .delegate()
+                .vault()
+                .items
+                .iter()
+                .find(|i| i.id == id)
+                .cloned()
+                .unwrap();
+            icon_for(&item, cx)
+        })
+    };
+    assert_eq!(
+        icon_of(cx, "login-1"),
+        ItemIcon::Lucide(IconName::Globe),
+        "padrão: ícone do tipo"
+    );
+
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("login-1", window, cx));
+        window.render_frame(cx);
+        window.click("item-icon", cx);
+    })
+    .unwrap();
+    assert!(cx.update(|cx| vault.read(cx).icon_picker_open()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("icon-choice-gamepad", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("icon-color-violet", cx);
+    })
+    .unwrap();
+    assert_eq!(icon_of(cx, "login-1"), ItemIcon::Lucide(IconName::Gamepad2));
+    assert_eq!(
+        store.load().item_icons.get("login-1"),
+        Some(&CustomIcon {
+            icon: "gamepad".into(),
+            color: Some("violet".into()),
+        }),
+        "guardado nas configurações"
+    );
+
+    // Switching items closes the picker.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("identity-1", window, cx));
+    })
+    .unwrap();
+    assert!(!cx.update(|cx| vault.read(cx).icon_picker_open()));
+
+    // Open the app again: the choice is still there.
+    let (handle2, app2) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let vault2 = cx.update(|cx| app2.read(cx).vault_view().cloned().unwrap());
+    let _ = handle2;
+    let again = cx.update(|cx| {
+        let item = vault2
+            .read(cx)
+            .list()
+            .read(cx)
+            .delegate()
+            .vault()
+            .items
+            .iter()
+            .find(|i| i.id == "login-1")
+            .cloned()
+            .unwrap();
+        icon_for(&item, cx)
+    });
+    assert_eq!(again, ItemIcon::Lucide(IconName::Gamepad2));
+
+    // "Default" goes back to the type icon and deletes the choice.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.select_item("login-1", window, cx);
+            v.toggle_icon_picker(cx);
+        });
+        window.render_frame(cx);
+        window.click("icon-reset", cx);
+    })
+    .unwrap();
+    assert_eq!(icon_of(cx, "login-1"), ItemIcon::Lucide(IconName::Globe));
+    assert!(store.load().item_icons.is_empty());
+
+    // Brands: choose Discord in the picker.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("icon-choice-brand-discord", cx);
+    })
+    .unwrap();
+    assert_eq!(icon_of(cx, "login-1"), ItemIcon::Brand("discord"));
+    assert_eq!(
+        store
+            .load()
+            .item_icons
+            .get("login-1")
+            .map(|c| c.icon.clone()),
+        Some("brand:discord".to_owned())
+    );
 }

@@ -1,9 +1,9 @@
-//! Menu do botão direito do ícone da bandeja, desenhado pelo próprio app.
+//! Right-click menu of the tray icon, drawn by the app itself.
 //!
-//! O menu nativo do Windows não aceita cores nem ícones do app; este é uma
-//! janelinha sem moldura, aberta no ponto do clique, com o tema e a cor de
-//! destaque do Scout Vault. Fecha ao escolher algo, com `Esc` ou ao clicar fora.
-//! Cada escolha vira um [`Command`] no mesmo canal da bandeja.
+//! The native Windows menu doesn't accept the app's colors or icons; this one is a
+//! small frameless window, opened at the click point, with Scout Vault's theme and
+//! accent color. It closes when something is chosen, with `Esc` or when clicking outside.
+//! Each choice becomes a [`Command`] on the same channel as the tray.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::*;
@@ -15,10 +15,12 @@ use crate::tray::{Command, MenuState, PinnedEntry};
 use crate::vault_view::CopyShortcut;
 use crate::{appearance, motion, ui};
 
-/// Largura do cartão.
+/// Card width.
 pub const WIDTH: f32 = 292.;
-/// Folga transparente em volta do cartão, para a sombra.
+/// Transparent margin around the card, for the shadow.
 pub const MARGIN: f32 = 12.;
+/// Card corner radius.
+const CARD_RADIUS: f32 = 12.;
 const HEADER: f32 = 60.;
 const LABEL: f32 = 26.;
 const PINNED: f32 = 40.;
@@ -26,7 +28,7 @@ const HINT: f32 = 36.;
 const ACTION: f32 = 34.;
 const SEP: f32 = 9.;
 const PAD: f32 = 6.;
-/// Mais que isso no acesso rápido rola dentro do menu (o app fixa até 10).
+/// More than this in quick access scrolls inside the menu (the app pins up to 10).
 const MAX_PINNED_VISIBLE: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,22 +67,20 @@ impl Row {
     }
 }
 
-fn rows(state: &MenuState) -> Vec<Row> {
+/// `clear`: clipboard clearing time, for the generator hint.
+fn rows(state: &MenuState, clear: Option<std::time::Duration>) -> Vec<Row> {
     let generate = Row::Action(Action {
         id: "tray-menu-generate",
         icon: IconName::WandSparkles,
-        label: "Gerar e copiar senha",
-        hint: Some(format!(
-            "some em {} s",
-            crate::clipboard::CLEAR_AFTER.as_secs()
-        )),
+        label: t!("tray.generate"),
+        hint: clear.map(|d| t!("tray.clears_in", n = d.as_secs())),
         command: Command::GeneratePassword,
         tone: Tone::Accent,
     });
     let quit = Row::Action(Action {
         id: "tray-menu-quit",
         icon: IconName::Power,
-        label: "Sair",
+        label: t!("tray.quit"),
         hint: None,
         command: Command::Quit,
         tone: Tone::Danger,
@@ -90,7 +90,7 @@ fn rows(state: &MenuState) -> Vec<Row> {
             Row::Action(Action {
                 id: "tray-menu-unlock",
                 icon: IconName::LockOpen,
-                label: "Desbloquear…",
+                label: t!("tray.unlock"),
                 hint: None,
                 command: Command::Show,
                 tone: Tone::Accent,
@@ -100,9 +100,9 @@ fn rows(state: &MenuState) -> Vec<Row> {
             quit,
         ];
     }
-    let mut out = vec![Row::Label("ACESSO RÁPIDO")];
+    let mut out = vec![Row::Label(t!("tray.quick_access"))];
     if state.pinned.is_empty() {
-        out.push(Row::Hint("Fixe itens com o alfinete para vê-los aqui."));
+        out.push(Row::Hint(t!("tray.pin_hint")));
     } else {
         out.push(Row::Pinned(state.pinned.clone()));
     }
@@ -111,7 +111,7 @@ fn rows(state: &MenuState) -> Vec<Row> {
         Row::Action(Action {
             id: "tray-menu-open",
             icon: IconName::AppWindow,
-            label: "Abrir Scout Vault",
+            label: t!("tray.open"),
             hint: None,
             command: Command::Show,
             tone: Tone::Normal,
@@ -120,7 +120,7 @@ fn rows(state: &MenuState) -> Vec<Row> {
         Row::Action(Action {
             id: "tray-menu-sync",
             icon: IconName::RefreshCw,
-            label: "Sincronizar agora",
+            label: t!("tray.sync_now"),
             hint: None,
             command: Command::Sync,
             tone: Tone::Normal,
@@ -129,7 +129,7 @@ fn rows(state: &MenuState) -> Vec<Row> {
         Row::Action(Action {
             id: "tray-menu-lock",
             icon: IconName::Lock,
-            label: "Bloquear",
+            label: t!("tray.lock"),
             hint: None,
             command: Command::Lock,
             tone: Tone::Normal,
@@ -139,10 +139,10 @@ fn rows(state: &MenuState) -> Vec<Row> {
     out
 }
 
-/// Tamanho da janela do menu (cartão + folga da sombra) para este estado.
+/// Size of the menu window (card + shadow margin) for this state.
 pub fn window_size(state: &MenuState) -> gpui_kit::Size<Pixels> {
-    let body: f32 = rows(state).iter().map(Row::height).sum();
-    // +2: borda de cima e de baixo do cartão.
+    let body: f32 = rows(state, None).iter().map(Row::height).sum();
+    // +2: top and bottom border of the card.
     let height = HEADER + PAD * 2. + body + 2. + MARGIN * 2.;
     size(px(WIDTH + MARGIN * 2.), px(height))
 }
@@ -151,7 +151,7 @@ pub struct TrayMenu {
     state: MenuState,
     tx: UnboundedSender<Command>,
     focus: FocusHandle,
-    /// Já ganhou o foco alguma vez (só então perder o foco fecha o menu).
+    /// Has gained focus at some point (only then does losing focus close the menu).
     activated: bool,
     _activation: Subscription,
 }
@@ -165,7 +165,7 @@ impl TrayMenu {
     ) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        // Clicar fora tira o foco do menu: ele fecha, como um menu de verdade.
+        // Clicking outside takes focus away from the menu: it closes, like a real menu.
         let activation = cx.observe_window_activation(window, |this, window, _| {
             if window.is_window_active() {
                 this.activated = true;
@@ -173,7 +173,7 @@ impl TrayMenu {
                 window.remove_window();
             }
         });
-        // Se o Windows não deixar o menu pegar o foco, ele não fica preso na tela.
+        // If Windows doesn't let the menu take focus, it doesn't get stuck on screen.
         cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(10))
@@ -210,13 +210,13 @@ impl TrayMenu {
         let (status, dot) = if self.state.unlocked {
             let n = self.state.pinned.len();
             let pins = match n {
-                0 => "nada fixado".to_owned(),
-                1 => "1 fixado".to_owned(),
-                n => format!("{n} fixados"),
+                0 => t!("tray.none_pinned").to_owned(),
+                1 => t!("tray.one_pinned").to_owned(),
+                n => t!("tray.n_pinned", n = n),
             };
-            (format!("Cofre aberto · {pins}"), theme.success)
+            (t!("tray.vault_open", pins = pins), theme.success)
         } else {
-            ("Cofre bloqueado".to_owned(), theme.warning)
+            (t!("app.vault_locked").to_owned(), theme.warning)
         };
         let unlocked = self.state.unlocked;
         h_flex()
@@ -226,6 +226,9 @@ impl TrayMenu {
             .gap_3()
             .border_b_1()
             .border_color(theme.border)
+            // The card clips as a rectangle, not at the rounded corner: the
+            // gradient needs the same corners (card radius minus the border).
+            .rounded_t(px(CARD_RADIUS - 1.))
             .bg(linear_gradient(
                 90.,
                 linear_color_stop(accent.opacity(0.18), 0.),
@@ -245,7 +248,7 @@ impl TrayMenu {
                             .text_color(theme.muted_foreground)
                             .child({
                                 let d = div().size(px(7.)).rounded_full().bg(dot);
-                                // Aberto: o ponto "respira" devagar.
+                                // Unlocked: the dot "breathes" slowly.
                                 if unlocked {
                                     d.with_animation(
                                         "tray-menu-dot",
@@ -339,7 +342,7 @@ impl TrayMenu {
             .flex_none()
             .overflow_y_scroll();
         for (order, item) in items.iter().enumerate() {
-            // Clicar na linha copia a senha (ou o usuário); os botões, cada campo.
+            // Clicking the row copies the password (or the username); the buttons, each field.
             let primary = if item.has_password {
                 Some(CopyShortcut::Password)
             } else if item.has_username {
@@ -351,14 +354,19 @@ impl TrayMenu {
             };
             let mut buttons = h_flex().gap_0p5();
             for (has, field, icon, label) in [
-                (item.has_username, "user", IconName::User, "Copiar usuário"),
+                (
+                    item.has_username,
+                    "user",
+                    IconName::User,
+                    t!("tray.copy_username"),
+                ),
                 (
                     item.has_password,
                     "pass",
                     IconName::KeyRound,
-                    "Copiar senha",
+                    t!("tray.copy_password"),
                 ),
-                (item.has_totp, "code", IconName::Timer, "Copiar código"),
+                (item.has_totp, "code", IconName::Timer, t!("tray.copy_code")),
             ] {
                 if !has {
                     continue;
@@ -414,7 +422,7 @@ impl TrayMenu {
                 .hover(move |s| s.bg(hover))
                 .active(|s| s.opacity(0.8))
                 .child(ui::icon_chip(
-                    item.icon.unwrap_or(IconName::Globe),
+                    item.icon.unwrap_or(IconName::Globe.into()),
                     px(26.),
                     true,
                     cx,
@@ -459,7 +467,7 @@ impl Render for TrayMenu {
         );
         let mut body = v_flex().py(px(PAD)).px_1p5();
         let mut order = 0;
-        for row in rows(&self.state) {
+        for row in rows(&self.state, crate::clipboard::clear_after(cx)) {
             let el: AnyElement = match row {
                 Row::Label(text) => div()
                     .h(px(LABEL))
@@ -505,7 +513,7 @@ impl Render for TrayMenu {
         }
         let card = v_flex()
             .size_full()
-            .rounded(px(12.))
+            .rounded(px(CARD_RADIUS))
             .border_1()
             .border_color(border)
             .bg(popover)

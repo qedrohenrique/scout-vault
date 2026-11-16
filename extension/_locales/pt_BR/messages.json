@@ -1,0 +1,123 @@
+{
+  "extName": {
+    "message": "Scout Vault"
+  },
+  "extDescription": {
+    "message": "Preenche e salva logins do app Scout Vault (compatível com Bitwarden) nos sites."
+  },
+  "cmdOpen": {
+    "message": "Abrir o Scout Vault"
+  },
+  "cmdInline": {
+    "message": "Mostrar os logins no campo de login da página"
+  },
+  "searching": {
+    "message": "Procurando logins…"
+  },
+  "popupInlineToggle": {
+    "message": "Menu nos campos de login"
+  },
+  "popupInlineSite": {
+    "message": "Voltar a mostrar o menu neste site"
+  },
+  "errAppSetup": {
+    "message": "O Scout Vault não respondeu. Abra o app e ligue \"Preencher no navegador\" nas configurações."
+  },
+  "errClosed": {
+    "message": "O Scout Vault está fechado. Abra o app e tente de novo."
+  },
+  "errLocked": {
+    "message": "O Scout Vault está bloqueado. Desbloqueie no app e tente de novo."
+  },
+  "errGeneric": {
+    "message": "Algo deu errado."
+  },
+  "popupNoForm": {
+    "message": "Não achei o formulário de login nesta página."
+  },
+  "popupOpenSite": {
+    "message": "Abra um site para preencher."
+  },
+  "popupNoLogins": {
+    "message": "Nenhum login salvo para este site."
+  },
+  "errExpired": {
+    "message": "A pergunta expirou. Envie o login de novo para salvar."
+  },
+  "captureUpdateTitle": {
+    "message": "Atualizar a senha de “$VALUE$” no Scout Vault?",
+    "placeholders": {
+      "value": {
+        "content": "$1"
+      }
+    }
+  },
+  "captureSaveTitle": {
+    "message": "Salvar este login no Scout Vault?"
+  },
+  "captureLockedDetail": {
+    "message": "O app vai pedir para você desbloquear o cofre."
+  },
+  "captureNoUser": {
+    "message": "(sem usuário)"
+  },
+  "captureNotNow": {
+    "message": "Agora não"
+  },
+  "captureUpdate": {
+    "message": "Atualizar"
+  },
+  "captureSave": {
+    "message": "Salvar"
+  },
+  "noAnswer": {
+    "message": "O Scout Vault não respondeu."
+  },
+  "captureUnlockToFinish": {
+    "message": "Desbloqueie o Scout Vault para concluir."
+  },
+  "captureUpdated": {
+    "message": "Senha atualizada no Scout Vault ✓"
+  },
+  "captureSaved": {
+    "message": "Salvo no Scout Vault ✓"
+  },
+  "inlineOpen": {
+    "message": "Abrir o Scout Vault"
+  },
+  "inlineMenuLabel": {
+    "message": "Logins do Scout Vault"
+  },
+  "inlineHide": {
+    "message": "Não mostrar neste site"
+  },
+  "inlineRetry": {
+    "message": "Tentar de novo"
+  },
+  "inlineAppHint": {
+    "message": "Abra o app e ligue \"Preencher no navegador\"."
+  },
+  "vaultLocked": {
+    "message": "Cofre bloqueado"
+  },
+  "inlineUnlockRetry": {
+    "message": "Desbloqueie o Scout Vault e tente de novo."
+  },
+  "inlineNoLogins": {
+    "message": "Nenhum login salvo"
+  },
+  "inlineForSite": {
+    "message": "para $VALUE$.",
+    "placeholders": {
+      "value": {
+        "content": "$1"
+      }
+    }
+  },
+  "inlineLockedRetry": {
+    "message": "Cofre bloqueado. Desbloqueie e tente de novo."
+  },
+  "inlineFillFailed": {
+    "message": "Não deu para preencher"
+  }
+}

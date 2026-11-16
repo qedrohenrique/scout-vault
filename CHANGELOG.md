@@ -1,86 +1,117 @@
 # Changelog
 
-Todas as mudanças que importam para quem usa o Scout Vault. O formato segue o
-[Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e as versões seguem o
-[Versionamento Semântico](https://semver.org/lang/pt-BR/). Os downloads ficam nas
-[Releases do GitHub](https://github.com/qedrohenrique/scout-vault/releases).
+Every change that matters to Scout Vault users. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
+[Semantic Versioning](https://semver.org/). Downloads are on the
+[GitHub Releases](https://github.com/qedrohenrique/scout-vault/releases) page.
 
-## [Ainda não lançado]
+## [Unreleased]
 
-### Adicionado
-- **Busca rápida global** (`Ctrl+Shift+Espaço`): em qualquer app, uma janelinha para achar um
-  item e preencher (`Enter`), copiar senha, usuário ou código (`Ctrl+P`/`Ctrl+U`/`Ctrl+T`) ou
-  abrir no Scout Vault (`Ctrl+O`). Itens que pedem a senha mestra continuam pedindo.
+## [0.4.0] - 2026-11-16
 
-### Mudado
-- Ações do GitHub atualizadas (checkout, setup-python, upload/download-artifact, CodeQL).
+### Added
+- **Global quick search** (`Ctrl+Shift+Space`): from any app, a small window to find an item
+  and fill it (`Enter`), copy the password, username or code (`Ctrl+P`/`Ctrl+U`/`Ctrl+T`) or
+  open it in Scout Vault (`Ctrl+O`). Items that ask for the vault password still ask.
+- **Menu in login fields** (extension): the Scout Vault icon shows up in the username or
+  password field; a click, `Alt+↓` or `Alt+Shift+L` show the site's logins to fill right there.
+  It can be hidden per site or turned off in the popup.
+- **English interface**: the app and the extension now speak Portuguese (pt-BR) and English. The
+  app follows the Windows language and can be switched in **Settings → Language**, instantly.
+- **Password health** (`Ctrl+Shift+H`): a score plus weak, reused and old passwords, and an
+  on-demand check against Have I Been Pwned. Only the first 5 characters of each password's SHA-1
+  hash leave the computer (k-anonymity).
+- **Item icons:** click the icon in an item's detail to pick one of 50+ icons and a color. Your
+  choice stays on this computer; the item doesn't change on the server.
+- **Brand icons:** 46 well-known services (Google, Claude, Riot Games, Valorant, Discord,
+  Instagram, Steam, Nubank…) from Simple Icons (CC0). Logins whose address belongs to one of them
+  show the brand on their own; a manual choice still wins.
+- **Clear the clipboard after** 10 s, 30 s, 1 min, 2 min or never (Settings).
+- **Lock on minimize** (Settings), also when the window closes to the tray.
+
+### Changed
+- Texts reviewed to be shorter and more direct; "master password" became **vault password**.
+- GitHub Actions updated (checkout, setup-python, upload/download-artifact, CodeQL).
+- Repository documentation, scripts and code comments translated to English.
+- New **monochrome logo**: graphite tile with a white glyph, in the app, the executable, the tray,
+  the extension and the README.
+- Item names, labels and section titles use a slightly heavier font weight.
+- The auto-type picker (`Ctrl+Alt+A`) and quick search show each item's custom icon and color.
+
+### Fixed
+- Tray menu: no more darker frame around the card, and the header's color no longer leaks past
+  the rounded corners.
+- The entry screen's animated background no longer freezes when the window loses focus (it
+  still stops while minimized).
 
 ## [0.3.0] - 2026-11-15
 
-### Adicionado
-- **Salvar logins pelo navegador:** depois de entrar num site, a extensão pergunta
-  "Salvar este login no Scout Vault?" ou "Atualizar a senha de …?". Nada é salvo sem o
-  clique; a senha antiga vai para o histórico. Com o cofre bloqueado, o app pede a senha e
-  salva em seguida. A extensão passa a rodar em todos os sites (o navegador avisa ao atualizar).
-- **Desbloquear com Windows Hello** (rosto, digital ou PIN). A chave do cofre fica cifrada por
-  uma assinatura do Windows Hello; trocar a senha mestra ou sair da conta apaga a configuração.
-- **Sync em segundo plano:** a cada minuto o app pergunta ao servidor se o cofre mudou e, se
-  mudou em outro aparelho, atualiza sozinho.
-- **Pedir a senha mestra** em itens marcados (como no Bitwarden): mostrar, copiar, editar e
-  digitar esperam a confirmação; a extensão não preenche esses itens.
-- **Bloquear junto com o Windows** (Win+L, suspensão e hibernação).
-- **Menu da bandeja** com acesso rápido aos itens fixados (copiar usuário, senha ou código),
-  "Gerar e copiar senha" e "Sincronizar agora".
-- **Itens em organizações:** escolher a organização e as coleções no formulário; coleções na
-  barra lateral.
-- **Sessão configurável:** abrir sem senha por N dias, pedir login completo a cada N dias e
-  tempo de bloqueio por inatividade.
-- **Arrastar e soltar:** itens para pastas e pastas para dentro de outras (subpastas).
-- `CHANGELOG.md` (este arquivo) e releases automáticas: enviar uma tag `vX.Y.Z` testa,
-  compila, empacota e publica a release com as notas daquela versão.
+### Added
+- **Save logins from the browser:** after signing in to a site, the extension asks
+  "Save this login in Scout Vault?" or "Update the password for …?". Nothing is saved without
+  the click; the old password goes to the history. With the vault locked, the app asks for the
+  password and saves right after. The extension now runs on all sites (the browser warns when
+  updating).
+- **Unlock with Windows Hello** (face, fingerprint or PIN). The vault key is encrypted by a
+  Windows Hello signature; changing the master password or signing out removes the setup.
+- **Background sync:** every minute the app asks the server whether the vault changed and, if it
+  changed on another device, updates on its own.
+- **Ask for the master password** on marked items (as in Bitwarden): show, copy, edit and type
+  wait for the confirmation; the extension doesn't fill these items.
+- **Lock together with Windows** (Win+L, sleep and hibernation).
+- **Tray menu** with quick access to pinned items (copy username, password or code),
+  "Generate and copy password" and "Sync now".
+- **Items in organizations:** choose the organization and the collections in the form;
+  collections in the sidebar.
+- **Configurable session:** open without a password for N days, ask for a full login every N
+  days and idle lock time.
+- **Drag and drop:** items into folders and folders into other folders (subfolders).
+- `CHANGELOG.md` (this file) and automatic releases: pushing a `vX.Y.Z` tag tests, builds,
+  packages and publishes the release with that version's notes.
 
-### Mudado
-- O menu do botão direito da bandeja é desenhado pelo próprio app, com o tema e a cor de destaque.
-- Trocar o tema, a cor de destaque, o texto ou os cantos transforma a interface no lugar: cada
-  cor vai da antiga à nova, e entre claro e escuro uma onda sai do botão clicado
-  ("Movimento: Parado" troca direto).
-- Clicar num item da lista mostra o item mesmo com um formulário aberto.
-- Roadmap refeito com um comparativo com Bitwarden, 1Password, KeePassXC e Proton Pass.
-- CI no GitHub Actions: formatação, clippy e testes no Windows, testes do núcleo contra um
-  Vaultwarden descartável, cargo-deny, CodeQL e Dependabot.
+### Changed
+- The tray's right-click menu is drawn by the app itself, with the theme and the accent color.
+- Changing the theme, accent color, text size or corners transforms the interface in place: each
+  color goes from the old one to the new one, and between light and dark a wave starts from the
+  clicked button ("Motion: Still" switches directly).
+- Clicking an item in the list shows the item even with a form open.
+- Roadmap redone with a comparison against Bitwarden, 1Password, KeePassXC and Proton Pass.
+- CI on GitHub Actions: formatting, clippy and tests on Windows, core tests against a
+  throwaway Vaultwarden, cargo-deny, CodeQL and Dependabot.
 
 ## [0.2.0] - 2026-11-14
 
-### Adicionado
-- **Pastas:** criar, renomear e apagar pela barra lateral.
-- **Acesso rápido:** itens fixados no topo da barra lateral.
-- **Anexos mais fáceis:** clicar ou arrastar arquivos no formulário e no detalhe do item;
-  mensagem clara quando a conta não pode enviar anexos (Premium).
-- **Bandeja do Windows:** fechar a janela deixa o app rodando; abrir de novo só mostra a janela.
-- **Toasts** para avisos e erros.
-- **Animações** em telas, barra lateral, seleção, sincronização e carregamento
-  (Configurações → Movimento → Parado desliga).
+### Added
+- **Folders:** create, rename and delete from the sidebar.
+- **Quick access:** items pinned to the top of the sidebar.
+- **Easier attachments:** click or drag files in the form and in the item detail; a clear
+  message when the account can't upload attachments (Premium).
+- **Windows tray:** closing the window keeps the app running; opening it again just shows the
+  window.
+- **Toasts** for notices and errors.
+- **Animations** on screens, sidebar, selection, sync and loading
+  (Settings → Motion → Still turns them off).
 
-### Mudado
-- Formulário mais compacto: campos curtos lado a lado e exemplos dentro dos campos.
+### Changed
+- More compact form: short fields side by side and examples inside the fields.
 
 ## [0.1.0] - 2026-11-14
 
-Primeira versão de teste.
+First test version.
 
-### Adicionado
-- Login com e-mail e senha mestra, 2FA (autenticador, e-mail, YubiKey, chave de
-  segurança/Windows Hello, Duo) e SSO da empresa; bitwarden.com, bitwarden.eu ou Vaultwarden.
-- Sessão lembrada: abre pedindo só a senha mestra, inclusive sem internet.
-- Busca, filtros, código do autenticador ao vivo; cópias somem em 30 s e ficam fora do Win+V.
-- Criar e editar logins, notas, cartões e identidades; lixeira; histórico de senhas; dados de
-  outros apps (passkeys, regras de URI) preservados.
-- Anexos: anexar, abrir, salvar e remover.
-- Preencher em apps do Windows com `Ctrl+Alt+A`.
-- Extensão para Chrome, Edge e Brave que preenche logins.
-- Gerador de senhas, temas claro/escuro e cor de destaque.
+### Added
+- Login with email and master password, 2FA (authenticator, email, YubiKey, security
+  key/Windows Hello, Duo) and company SSO; bitwarden.com, bitwarden.eu or Vaultwarden.
+- Remembered session: opens asking only for the master password, even without internet.
+- Search, filters, live authenticator code; copies disappear after 30 s and stay out of Win+V.
+- Create and edit logins, notes, cards and identities; trash; password history; data from
+  other apps (passkeys, URI rules) preserved.
+- Attachments: attach, open, save and remove.
+- Fill in Windows apps with `Ctrl+Alt+A`.
+- Extension for Chrome, Edge and Brave that fills logins.
+- Password generator, light/dark themes and accent color.
 
-[Ainda não lançado]: https://github.com/qedrohenrique/scout-vault/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/qedrohenrique/scout-vault/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/qedrohenrique/scout-vault/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/qedrohenrique/scout-vault/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/qedrohenrique/scout-vault/releases/tag/v0.1.0

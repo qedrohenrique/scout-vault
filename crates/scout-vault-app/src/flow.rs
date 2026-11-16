@@ -1,7 +1,7 @@
-//! Fluxos de login, desbloqueio e sincronização — sem nenhuma UI.
+//! Login, unlock and sync flows — without any UI.
 //!
-//! As telas só chamam estas funções e mostram o resultado; assim a lógica
-//! (inclusive as mensagens de erro) pode ser testada sem janela.
+//! The screens only call these functions and show the result; that way the logic
+//! (including the error messages) can be tested without a window.
 
 use std::sync::Arc;
 
@@ -18,8 +18,8 @@ use zeroize::Zeroizing;
 use crate::io;
 use crate::secrets::{remember_key, SecretStore};
 
-/// Sessão autenticada. Guarda só dados **cifrados** e tokens — continua
-/// existindo enquanto o cofre está bloqueado.
+/// Authenticated session. Holds only **encrypted** data and tokens — it keeps
+/// existing while the vault is locked.
 #[derive(Clone)]
 pub struct Session {
     pub client: Arc<Client>,
@@ -28,11 +28,11 @@ pub struct Session {
     pub access_token: String,
     pub refresh_token: String,
     pub sync: Arc<SyncResponse>,
-    /// Quando foi o último login completo (e-mail, senha, 2FA), em segundos Unix.
+    /// When the last full login (email, password, 2FA) happened, in Unix seconds.
     pub logged_in_at: u64,
 }
 
-/// Agora, em segundos Unix.
+/// Now, in Unix seconds.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -40,16 +40,16 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Cofre aberto: sessão + chaves + dados decifrados.
+/// Open vault: session + keys + decrypted data.
 pub struct Unlocked {
     pub session: Session,
     pub keys: Keys,
     pub vault: Vault,
 }
 
-/// Entrega um cofre aberto de uma tela para outra através de um evento.
-/// Eventos chegam por referência; a `Cell` permite **mover** as chaves uma
-/// única vez, sem cloná-las.
+/// Hands an open vault from one screen to another through an event.
+/// Events arrive by reference; the `Cell` allows **moving** the keys only
+/// once, without cloning them.
 pub struct Handoff(std::cell::Cell<Option<Box<Unlocked>>>);
 
 impl Handoff {
@@ -62,26 +62,26 @@ impl Handoff {
     }
 }
 
-/// Login parado à espera de um segundo fator ou do código de novo dispositivo.
-/// Mantém a master key para não refazer a KDF (lenta) a cada tentativa.
+/// Login paused waiting for a second factor or the new device code.
+/// Keeps the master key so the (slow) KDF isn't redone on every attempt.
 pub struct PendingLogin {
     client: Arc<Client>,
     email: String,
     kdf: Kdf,
     master_key: Arc<MasterKey>,
     server_hash: Zeroizing<String>,
-    /// Exigido pelo servidor oficial para reenviar o código de 2FA por e-mail.
+    /// Required by the official server to resend the 2FA code by email.
     email_session_token: Option<String>,
-    /// Métodos de 2FA que o servidor ofereceu (para voltar ao passo após um código errado).
+    /// 2FA methods the server offered (to go back to the step after a wrong code).
     providers: Vec<TwoFactorProvider>,
-    /// Método usado na última tentativa.
+    /// Method used on the last attempt.
     last_provider: Option<TwoFactorProvider>,
-    /// A última tentativa foi o código de novo dispositivo.
+    /// The last attempt was the new device code.
     new_device: bool,
-    /// Onde guardar o token de "lembrar este dispositivo" e com qual chave.
+    /// Where to store the "remember this device" token and under which key.
     secrets: SecretStore,
     remember_key: String,
-    /// Dados que o servidor mandou para cada método de 2FA.
+    /// Data the server sent for each 2FA method.
     provider_data: Vec<(TwoFactorProvider, serde_json::Value)>,
 }
 
@@ -102,7 +102,7 @@ impl PendingLogin {
         self.new_device
     }
 
-    /// Dados que o servidor mandou para um método de 2FA.
+    /// Data the server sent for a 2FA method.
     pub fn provider_data(&self, provider: TwoFactorProvider) -> Option<&serde_json::Value> {
         self.provider_data
             .iter()
@@ -118,15 +118,15 @@ pub enum LoginOutcome {
         providers: Vec<TwoFactorProvider>,
     },
     NeedsNewDeviceCode(PendingLogin),
-    /// Código de 2FA ou de novo dispositivo errado: fica no mesmo passo, sem
-    /// refazer a KDF nem pedir a senha de novo.
+    /// Wrong 2FA or new device code: stays on the same step, without
+    /// redoing the KDF or asking for the password again.
     WrongCode {
         pending: PendingLogin,
         message: String,
     },
 }
 
-/// Primeira etapa: prelogin, KDF, login.
+/// First stage: prelogin, KDF, login.
 pub async fn start_login(
     client: Arc<Client>,
     email: String,
@@ -150,7 +150,7 @@ pub async fn start_login(
             Ok::<_, CryptoError>((mk, hash))
         })
         .await
-        .map_err(|e| format!("Falha ao derivar a chave: {e}"))?
+        .map_err(|e| t!("flow.kdf_failed", e = e))?
     };
 
     let pending_client_urls = client.urls().clone();
@@ -169,7 +169,7 @@ pub async fn start_login(
         secrets,
         provider_data: Vec::new(),
     };
-    // Dispositivo lembrado: tenta pular o 2FA com o token guardado.
+    // Remembered device: try to skip 2FA with the stored token.
     let remembered = pending
         .secrets
         .get(&pending.remember_key)
@@ -181,7 +181,7 @@ pub async fn start_login(
     continue_login(pending, remembered, None).await
 }
 
-/// Reenvia o login com o segundo fator e/ou o código de novo dispositivo.
+/// Resends the login with the second factor and/or the new device code.
 pub async fn continue_login(
     mut pending: PendingLogin,
     second_factor: Option<SecondFactor>,
@@ -217,13 +217,13 @@ pub async fn continue_login(
             if email_session_token.is_some() {
                 pending.email_session_token = email_session_token;
             }
-            // O token lembrado expirou ou foi revogado: esquece e pede o código.
+            // The remembered token expired or was revoked: forget it and ask for the code.
             if pending.last_provider == Some(TwoFactorProvider::Remember) {
                 pending.secrets.delete(&pending.remember_key);
                 pending.last_provider = None;
             }
-            // O servidor oficial devolve o pedido de 2FA de novo quando um token
-            // "lembrado" expira; tratamos igual a um pedido novo.
+            // The official server returns the 2FA request again when a "remembered"
+            // token expires; we treat it like a new request.
             pending.providers = providers.clone();
             return Ok(LoginOutcome::NeedsTwoFactor { pending, providers });
         }
@@ -252,7 +252,7 @@ pub async fn continue_login(
     .await
 }
 
-/// Parte final de qualquer login: baixa o cofre e abre com a master key.
+/// Final part of any login: downloads the vault and opens it with the master key.
 async fn finish_login(
     client: Arc<Client>,
     email: String,
@@ -269,7 +269,7 @@ async fn finish_login(
     };
 
     let mut sync = sync;
-    // Reserva: se o sync não trouxer a user key, usa a que veio no login.
+    // Fallback: if the sync doesn't bring the user key, use the one that came with the login.
     if sync.profile.key.is_none() {
         sync.profile.key = tokens.key.clone();
     }
@@ -297,11 +297,11 @@ async fn finish_login(
     })))
 }
 
-/// Login por SSO da empresa: navegador → código → tokens → senha mestra.
+/// Company SSO login: browser → code → tokens → master password.
 ///
-/// O cofre continua sendo aberto com a **senha mestra** (como no CLI oficial).
-/// Contas sem senha mestra (Key Connector ou dispositivo confiável) recebem
-/// uma mensagem clara.
+/// The vault is still opened with the **master password** (as in the official CLI).
+/// Accounts without a master password (Key Connector or trusted device) get
+/// a clear message.
 pub async fn start_sso_login(
     client: Arc<Client>,
     identifier: String,
@@ -316,11 +316,7 @@ pub async fn start_sso_login(
         io::run(async move { client.login_sso(&code).await })
             .await
             .map_err(|e| match e {
-                ApiError::TwoFactorRequired(_) => {
-                    "A empresa exige um segundo fator depois do SSO, o que o Scout Vault ainda não \
-                     suporta neste caminho."
-                        .to_owned()
-                }
+                ApiError::TwoFactorRequired(_) => t!("flow.sso_2fa_unsupported").to_owned(),
                 other => describe_api_error(other),
             })?
     };
@@ -328,26 +324,18 @@ pub async fn start_sso_login(
     let options = tokens.user_decryption_options.clone().unwrap_or_default();
     if options.has_master_password == Some(false) {
         return Err(if options.key_connector.is_some() {
-            "Esta conta abre o cofre pelo Key Connector da empresa, que o Scout Vault ainda não suporta."
-                .to_owned()
+            t!("flow.key_connector_unsupported").to_owned()
         } else if options.trusted_device.is_some() {
-            "Esta conta usa \"dispositivo confiável\" em vez de senha mestra, que o Scout Vault (como o \
-             CLI oficial) não suporta."
-                .to_owned()
+            t!("flow.trusted_device_unsupported").to_owned()
         } else {
-            "Esta conta ainda não tem senha mestra. Defina uma no cofre web e tente de novo."
-                .to_owned()
+            t!("flow.no_master_password").to_owned()
         });
     }
     if password.is_empty() {
-        return Err(
-            "Informe a senha mestra: ela é necessária para abrir o cofre depois do SSO.".into(),
-        );
+        return Err(t!("flow.sso_password_required").into());
     }
 
-    let email = tokens
-        .email()
-        .ok_or("O servidor não informou o e-mail da conta no login por SSO.")?;
+    let email = tokens.email().ok_or(t!("flow.sso_no_email"))?;
     let kdf = {
         let client = client.clone();
         let email = email.clone();
@@ -359,13 +347,13 @@ pub async fn start_sso_login(
         let email = email.clone();
         io::blocking(move || MasterKey::derive(&password, &email, kdf))
             .await
-            .map_err(|e| format!("Falha ao derivar a chave: {e}"))?
+            .map_err(|e| t!("flow.kdf_failed", e = e))?
     };
     finish_login(client, email, kdf, Arc::new(master_key), tokens).await
 }
 
-/// 2FA por chave de segurança ou Windows Hello: pede a assinatura ao Windows
-/// e continua o login. Se a pessoa cancelar, fica no mesmo passo.
+/// 2FA with a security key or Windows Hello: asks Windows for the signature
+/// and continues the login. If the person cancels, it stays on the same step.
 pub async fn continue_with_webauthn(
     pending: PendingLogin,
     remember: bool,
@@ -373,7 +361,7 @@ pub async fn continue_with_webauthn(
     let Some(options) = pending.provider_data(TwoFactorProvider::WebAuthn).cloned() else {
         return Ok(LoginOutcome::WrongCode {
             pending,
-            message: "O servidor não mandou os dados da chave de segurança.".into(),
+            message: t!("flow.webauthn_no_data").into(),
         });
     };
     let origin = pending.client.urls().vault.clone();
@@ -390,8 +378,8 @@ pub async fn continue_with_webauthn(
     }
 }
 
-/// Pede o código de 2FA por e-mail. O futuro não empresta `pending`, para a
-/// tela poder continuar com ele enquanto o pedido roda.
+/// Asks for the 2FA code by email. The future doesn't borrow `pending`, so the
+/// screen can keep using it while the request runs.
 pub fn send_email_code(
     pending: &PendingLogin,
 ) -> impl std::future::Future<Output = Result<(), String>> + 'static {
@@ -410,19 +398,19 @@ pub fn send_email_code(
     }
 }
 
-/// Desbloqueio offline: refaz a KDF e decifra o sync guardado. Não usa a rede.
-/// Pesado de CPU — chame com [`io::blocking`].
+/// Offline unlock: redoes the KDF and decrypts the stored sync. Doesn't use the network.
+/// CPU heavy — call it with [`io::blocking`].
 pub fn unlock(session: &Session, password: &str) -> Result<(Keys, Vault), String> {
     let mk = MasterKey::derive(password, &session.email, session.kdf)
-        .map_err(|e| format!("Falha ao derivar a chave: {e}"))?;
+        .map_err(|e| t!("flow.kdf_failed", e = e))?;
     open_vault(&mk, &session.sync).map_err(describe_vault_error)
 }
 
-/// Renova o token e baixa o cofre de novo. Devolve a sessão atualizada e o cofre decifrado.
-/// Por que o "Sincronizar" falhou.
+/// Renews the token and downloads the vault again. Returns the updated session and the decrypted vault.
+/// Why "Sync" failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
-    /// O servidor não aceita mais o refresh token: é preciso entrar de novo.
+    /// The server no longer accepts the refresh token: you have to sign in again.
     Expired,
     Other(String),
 }
@@ -432,7 +420,7 @@ pub async fn resync(session: Session, keys: Arc<Keys>) -> Result<(Session, Vault
     Ok((w.session, w.vault))
 }
 
-/// Arquivo escolhido para anexar ao salvar o item (conteúdo só em memória).
+/// File chosen to attach when saving the item (contents in memory only).
 #[derive(Clone)]
 pub struct NewFile {
     pub name: String,
@@ -440,19 +428,19 @@ pub struct NewFile {
 }
 
 impl NewFile {
-    /// Lê um arquivo do disco, respeitando o limite de tamanho dos anexos.
+    /// Reads a file from disk, respecting the attachment size limit.
     pub fn read(path: &std::path::Path) -> Result<Self, String> {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "arquivo".into());
+            .unwrap_or_else(|| t!("flow.file").into());
         let meta =
-            std::fs::metadata(path).map_err(|e| format!("Não foi possível ler {name}: {e}"))?;
+            std::fs::metadata(path).map_err(|e| t!("flow.read_failed", name = name, e = e))?;
         if meta.len() as usize > scout_vault_core::attachment::MAX_SIZE {
-            return Err(format!("{name} passa do limite de 500 MB."));
+            return Err(t!("flow.file_too_big", name = name));
         }
         let contents =
-            std::fs::read(path).map_err(|e| format!("Não foi possível ler {name}: {e}"))?;
+            std::fs::read(path).map_err(|e| t!("flow.read_failed", name = name, e = e))?;
         Ok(Self {
             name,
             contents: Zeroizing::new(contents),
@@ -460,8 +448,8 @@ impl NewFile {
     }
 }
 
-/// Cifra e envia cada arquivo como anexo de `cipher`. Falhas viram avisos
-/// (o resto continua), já explicados em português.
+/// Encrypts and uploads each file as an attachment of `cipher`. Failures become warnings
+/// (the rest goes on), already explained for the person.
 async fn upload_files(
     client: &Client,
     token: &str,
@@ -489,7 +477,7 @@ async fn upload_files(
                 }
                 .await
                 .map_err(describe_api_error),
-                Err(e) => Err(format!("não foi possível cifrar: {e}")),
+                Err(e) => Err(t!("flow.encrypt_failed", e = e)),
             };
         if let Err(e) = result {
             warnings.push(format!("{}: {e}", file.name));
@@ -497,28 +485,28 @@ async fn upload_files(
     }
 }
 
-/// Resultado de [`write`].
+/// Result of [`write`].
 pub struct Written {
     pub session: Session,
     pub vault: Vault,
-    /// Item salvo/alterado (ou pasta criada/renomeada).
+    /// Item saved/changed (or folder created/renamed).
     pub saved_id: Option<String>,
-    /// Problemas que não desfazem a operação (ex.: um anexo recusado).
+    /// Problems that don't undo the operation (e.g. a rejected attachment).
     pub warnings: Vec<String>,
-    /// Data de revisão do cofre logo depois deste sync (base do sync em segundo plano).
+    /// Vault revision date right after this sync (basis of background sync).
     pub revision: Option<i64>,
 }
 
-/// Resultado de "o cofre mudou no servidor?".
+/// Result of "did the vault change on the server?".
 pub struct Revision {
-    /// Data de revisão (ms).
+    /// Revision date (ms).
     pub date: i64,
-    /// Tokens renovados no caminho (o access token tinha vencido).
+    /// Tokens renewed along the way (the access token had expired).
     pub tokens: Option<(String, Option<String>)>,
 }
 
-/// Pergunta ao servidor quando o cofre mudou (barato; não baixa o cofre).
-/// Usa o access token atual e só renova se ele tiver vencido.
+/// Asks the server when the vault changed (cheap; doesn't download the vault).
+/// Uses the current access token and only renews it if it has expired.
 pub async fn check_revision(session: &Session) -> Result<Revision, SyncError> {
     let client = session.client.clone();
     let (access, refresh_token) = (session.access_token.clone(), session.refresh_token.clone());
@@ -541,18 +529,18 @@ pub async fn check_revision(session: &Session) -> Result<Revision, SyncError> {
     .map_err(sync_error)
 }
 
-/// Uma alteração no cofre.
+/// A change to the vault.
 pub enum WriteOp {
-    /// Só sincronizar.
+    /// Just sync.
     Nothing,
-    /// Criar (id vazio) ou gravar um item editado, e anexar arquivos novos.
+    /// Create (empty id) or save an edited item, and attach new files.
     Save(Box<scout_vault_core::vault::Item>, Vec<NewFile>),
     Trash(String),
     Restore(String),
-    /// Apagar de vez (o item precisa estar na lixeira).
+    /// Delete permanently (the item must be in the trash).
     Delete(String),
-    /// Anexar um arquivo ao item.
-    /// Anexar arquivos a um item que já existe.
+    /// Attach a file to the item.
+    /// Attach files to an item that already exists.
     AddAttachments {
         item_id: String,
         files: Vec<NewFile>,
@@ -566,16 +554,16 @@ pub enum WriteOp {
         id: String,
         name: String,
     },
-    /// Apaga a pasta; os itens dela ficam sem pasta.
+    /// Deletes the folder; its items end up with no folder.
     DeleteFolder(String),
-    /// Leva o item para outra pasta (`None` = sem pasta).
+    /// Moves the item to another folder (`None` = no folder).
     MoveItem {
         item_id: String,
         folder_id: Option<String>,
     },
-    /// Renomeia várias pastas de uma vez (mover uma pasta, com as subpastas,
-    /// para dentro de outra: no Bitwarden a hierarquia é o nome "Pai/Filha").
-    /// O id devolvido é o da primeira.
+    /// Renames several folders at once (moving a folder, with its subfolders,
+    /// into another: in Bitwarden the hierarchy is the name "Parent/Child").
+    /// The returned id is the first one's.
     RenameFolders(Vec<(String, String)>),
 }
 
@@ -589,13 +577,11 @@ fn base_cipher(
         .iter()
         .find(|c| c.id == id)
         .cloned()
-        .ok_or_else(|| {
-            SyncError::Other("Este item não está mais no cofre. Sincronize e tente de novo.".into())
-        })
+        .ok_or_else(|| SyncError::Other(t!("flow.item_gone").into()))
 }
 
-/// Confere a senha mestra sem rede: deriva a chave e vê se ela abre a user key
-/// do perfil (para itens que pedem a senha de novo). A KDF roda fora da UI.
+/// Checks the master password without network: derives the key and sees whether it opens the
+/// profile's user key (for items that ask for the password again). The KDF runs off the UI.
 pub async fn check_master_password(session: &Session, password: Zeroizing<String>) -> bool {
     let (email, kdf, sync) = (session.email.clone(), session.kdf, session.sync.clone());
     io::blocking(move || {
@@ -606,7 +592,7 @@ pub async fn check_master_password(session: &Session, password: Zeroizing<String
     .await
 }
 
-/// Baixa e decifra um anexo. O conteúdo só existe em memória.
+/// Downloads and decrypts an attachment. The contents exist only in memory.
 pub async fn download_attachment(
     session: Session,
     keys: Arc<Keys>,
@@ -617,7 +603,7 @@ pub async fn download_attachment(
     let raw = scout_vault_core::attachment::raw_attachments(&cipher)
         .into_iter()
         .find(|a| a.id == attachment_id)
-        .ok_or_else(|| SyncError::Other("O anexo não está mais no item.".into()))?;
+        .ok_or_else(|| SyncError::Other(t!("flow.attachment_gone").into()))?;
     let bytes = {
         let client = session.client.clone();
         let refresh_token = session.refresh_token.clone();
@@ -633,12 +619,10 @@ pub async fn download_attachment(
         .map_err(sync_error)?
     };
     io::blocking(move || {
-        let key =
-            scout_vault_core::attachment::attachment_key(&cipher, &raw, &keys).map_err(|e| {
-                SyncError::Other(format!("Não foi possível abrir a chave do anexo: {e}"))
-            })?;
+        let key = scout_vault_core::attachment::attachment_key(&cipher, &raw, &keys)
+            .map_err(|e| SyncError::Other(t!("flow.attachment_key_failed", e = e)))?;
         scout_vault_core::attachment::decrypt_file(&bytes, &key)
-            .map_err(|e| SyncError::Other(format!("O anexo não pôde ser decifrado: {e}")))
+            .map_err(|e| SyncError::Other(t!("flow.attachment_decrypt_failed", e = e)))
     })
     .await
 }
@@ -650,10 +634,10 @@ fn sync_error(e: ApiError) -> SyncError {
     }
 }
 
-/// Renova o token, aplica a alteração no servidor e baixa o cofre de novo.
-/// Devolve a sessão atualizada, o cofre decifrado e o id do item salvo.
+/// Renews the token, applies the change on the server and downloads the vault again.
+/// Returns the updated session, the decrypted vault and the id of the saved item.
 pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Written, SyncError> {
-    // Cifra antes de tocar na rede: um erro aqui não deixa nada pela metade.
+    // Encrypt before touching the network: an error here leaves nothing half done.
     let attach_base = match &op {
         WriteOp::AddAttachments { item_id, .. } => Some(base_cipher(&session, item_id)?),
         _ => None,
@@ -661,7 +645,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
     let folder_name = match &op {
         WriteOp::CreateFolder(name) | WriteOp::RenameFolder { name, .. } => Some(
             scout_vault_core::edit::encrypt_folder_name(name, &keys)
-                .map_err(|e| SyncError::Other(format!("Não foi possível salvar a pasta: {e}")))?,
+                .map_err(|e| SyncError::Other(t!("flow.folder_save_failed", e = e)))?,
         ),
         _ => None,
     };
@@ -671,7 +655,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
             .map(|(id, name)| {
                 scout_vault_core::edit::encrypt_folder_name(name, &keys)
                     .map(|enc| (id.clone(), enc))
-                    .map_err(|e| SyncError::Other(format!("Não foi possível salvar a pasta: {e}")))
+                    .map_err(|e| SyncError::Other(t!("flow.folder_save_failed", e = e)))
             })
             .collect::<Result<Vec<_>, _>>()?,
         _ => Vec::new(),
@@ -687,17 +671,13 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                 .flatten()
                 .cloned();
             if !item.id.is_empty() && base.is_none() {
-                return Err(SyncError::Other(
-                    "Este item não está mais no cofre. Sincronize e tente de novo.".into(),
-                ));
+                return Err(SyncError::Other(t!("flow.item_gone").into()));
             }
             if item.organization_id.is_some() && item.collection_ids.is_empty() {
-                return Err(SyncError::Other(
-                    "Escolha pelo menos uma coleção da organização.".into(),
-                ));
+                return Err(SyncError::Other(t!("editor.collection_required").into()));
             }
             let raw = scout_vault_core::edit::encrypt_item(item, base.as_ref(), &keys)
-                .map_err(|e| SyncError::Other(format!("Não foi possível cifrar o item: {e}")))?;
+                .map_err(|e| SyncError::Other(t!("flow.item_encrypt_failed", e = e)))?;
             Some(scout_vault_core::edit::request_body(
                 &raw,
                 &session.sync.profile.id,
@@ -706,7 +686,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
         _ => None,
     };
     let file_keys = keys.clone();
-    // Item de organização editado: as coleções mudaram?
+    // Edited organization item: did the collections change?
     let collections_changed = match &op {
         WriteOp::Save(item, _) if !item.id.is_empty() => {
             let mut before: Vec<String> = session
@@ -737,7 +717,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                     let body = body.expect("cifrado acima");
                     let in_org = item.organization_id.is_some();
                     let saved = if item.id.is_empty() && in_org {
-                        // Item novo de organização: nasce já nas coleções escolhidas.
+                        // New organization item: born already in the chosen collections.
                         client
                             .create_cipher_in_org(token, &body, &item.collection_ids)
                             .await?
@@ -752,8 +732,8 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                         }
                         saved
                     };
-                    // Arquivos novos vão depois do item existir, com a chave dele.
-                    // Uma falha aqui não desfaz o item: vira aviso.
+                    // New files go after the item exists, with its key.
+                    // A failure here doesn't undo the item: it becomes a warning.
                     upload_files(&client, token, &saved, &file_keys, files, &mut warnings).await;
                     Some(saved.id)
                 }
@@ -810,7 +790,7 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                 }
             };
             let sync = client.sync(token).await?;
-            // Base para o sync em segundo plano (se falhar, a próxima checagem acerta).
+            // Basis for background sync (if it fails, the next check gets it right).
             let revision = client.revision_date(token).await.ok();
             Ok::<_, ApiError>((
                 t.access_token,
@@ -859,58 +839,42 @@ fn open_vault(mk: &MasterKey, sync: &SyncResponse) -> Result<(Keys, Vault), Vaul
 
 pub fn describe_api_error(e: ApiError) -> String {
     match e {
-        ApiError::Http(e) if e.is_connect() || e.is_timeout() => {
-            "Não foi possível conectar ao servidor. Confira o endereço e a sua conexão.".into()
-        }
-        ApiError::Http(e) => format!("Erro de rede: {e}"),
-        ApiError::InvalidCredentials(_) => "E-mail ou senha mestra incorretos.".into(),
-        ApiError::InvalidTwoFactorCode(_) => {
-            "Código incorreto ou expirado. Confira e tente de novo.".into()
-        }
-        ApiError::InvalidNewDeviceCode => {
-            "Código de verificação incorreto. Use o último que chegou no seu e-mail.".into()
-        }
-        ApiError::CaptchaRequired => "O servidor pediu um captcha, que o Scout Vault não consegue \
-             mostrar. Entre uma vez pelo cofre web (vault.bitwarden.com) e tente de novo."
-            .into(),
-        ApiError::Unauthorized => "A sessão expirou. Entre novamente.".into(),
-        ApiError::RateLimited => {
-            "Muitas tentativas seguidas. Espere um minuto e tente de novo.".into()
-        }
-        ApiError::TwoFactorRequired(_) => "O servidor pediu um segundo fator.".into(),
-        ApiError::NewDeviceVerificationRequired => {
-            "O servidor pediu o código de verificação enviado por e-mail.".into()
-        }
+        ApiError::Http(e) if e.is_connect() || e.is_timeout() => t!("flow.cant_connect").into(),
+        ApiError::Http(e) => t!("flow.network_error", e = e),
+        ApiError::InvalidCredentials(_) => t!("flow.invalid_credentials").into(),
+        ApiError::InvalidTwoFactorCode(_) => t!("flow.invalid_2fa").into(),
+        ApiError::InvalidNewDeviceCode => t!("flow.invalid_device_code").into(),
+        ApiError::CaptchaRequired => t!("flow.captcha").into(),
+        ApiError::Unauthorized => t!("flow.session_expired").into(),
+        ApiError::RateLimited => t!("flow.rate_limited").into(),
+        ApiError::TwoFactorRequired(_) => t!("flow.2fa_required").into(),
+        ApiError::NewDeviceVerificationRequired => t!("flow.device_code_required").into(),
         ApiError::Status { status, body } => {
-            // Mostra a mensagem do servidor, se houver: ajuda a diagnosticar contas reais.
+            // Shows the server's message, if any: helps diagnose real accounts.
             let detail = server_message(&body);
             let lower = detail.as_deref().unwrap_or_default().to_ascii_lowercase();
             if lower.contains("premium") {
-                return "Anexos exigem Bitwarden Premium (ou uma organização). Na conta gratuita do bitwarden.com não dá para enviar arquivos."
-                    .into();
+                return t!("flow.premium_required").into();
             }
             if lower.contains("storage") || status == 413 {
-                return "Não há espaço para esse arquivo: o limite de anexos da conta acabou."
-                    .into();
+                return t!("flow.no_storage").into();
             }
             if detail
                 .as_deref()
                 .is_some_and(|m| m.to_ascii_lowercase().contains("update your app"))
             {
-                return "O servidor do Bitwarden recusou esta versão do Scout Vault por ser antiga. \
-                        Atualize o Scout Vault para uma versão mais nova."
-                    .into();
+                return t!("flow.outdated").into();
             }
             match detail {
-                Some(m) => format!("O servidor recusou o pedido (HTTP {status}): {m}"),
-                None => format!("O servidor recusou o pedido (HTTP {status})."),
+                Some(m) => t!("flow.server_refused_detail", status = status, m = m),
+                None => t!("flow.server_refused", status = status),
             }
         }
         other => other.to_string(),
     }
 }
 
-/// Extrai uma mensagem legível do corpo de erro do servidor (oficial ou Vaultwarden).
+/// Extracts a readable message from the server's error body (official or Vaultwarden).
 fn server_message(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     let pick = |v: &serde_json::Value, keys: &[&str]| {
@@ -928,31 +892,29 @@ fn server_message(body: &str) -> Option<String> {
 
 pub fn describe_vault_error(e: VaultError) -> String {
     match e {
-        VaultError::WrongPassword => "Senha mestra incorreta.".into(),
+        VaultError::WrongPassword => t!("vault.wrong_password").into(),
         VaultError::Parse(ParseError::UnsupportedType(t)) => {
-            format!("Esta conta usa um formato de criptografia (tipo {t}) que o Scout Vault ainda não conhece.")
+            t!("flow.unsupported_crypto", t = t)
         }
-        VaultError::MissingUserKey => "O servidor não enviou a chave da conta. Contas com \
-             login só por SSO ou dispositivo confiável ainda não são suportadas."
-            .into(),
-        other => format!("Não foi possível abrir o cofre: {other}"),
+        VaultError::MissingUserKey => t!("flow.missing_user_key").into(),
+        other => t!("flow.open_failed", e = other),
     }
 }
 
-/// Nome legível de um provedor de 2FA.
+/// Readable name of a 2FA provider.
 pub fn provider_name(p: TwoFactorProvider) -> &'static str {
     match p {
-        TwoFactorProvider::Authenticator => "aplicativo autenticador",
-        TwoFactorProvider::Email => "e-mail",
+        TwoFactorProvider::Authenticator => t!("flow.provider_authenticator"),
+        TwoFactorProvider::Email => t!("flow.provider_email"),
         TwoFactorProvider::Duo | TwoFactorProvider::OrganizationDuo => "Duo",
         TwoFactorProvider::Yubikey => "YubiKey",
-        TwoFactorProvider::U2f | TwoFactorProvider::WebAuthn => "chave de segurança (FIDO)",
-        TwoFactorProvider::Remember => "dispositivo lembrado",
-        TwoFactorProvider::Other(_) => "outro método",
+        TwoFactorProvider::U2f | TwoFactorProvider::WebAuthn => t!("flow.provider_fido"),
+        TwoFactorProvider::Remember => t!("flow.provider_remember"),
+        TwoFactorProvider::Other(_) => t!("flow.provider_other"),
     }
 }
 
-/// Endereço do Duo que o servidor mandou para este login (`AuthUrl`).
+/// Duo address the server sent for this login (`AuthUrl`).
 pub fn duo_auth_url(pending: &PendingLogin, provider: TwoFactorProvider) -> Option<String> {
     let data = pending.provider_data(provider)?;
     data.get("authUrl")
@@ -961,9 +923,9 @@ pub fn duo_auth_url(pending: &PendingLogin, provider: TwoFactorProvider) -> Opti
         .map(str::to_owned)
 }
 
-/// Monta o token do Duo (`code|state`) a partir do que a pessoa colou: o
-/// endereço da página final (`…duo-redirect-connector.html?…&code=…&state=…`),
-/// o link `bitwarden://duo-callback?code=…&state=…` ou o próprio `code|state`.
+/// Builds the Duo token (`code|state`) from what the person pasted: the
+/// final page address (`…duo-redirect-connector.html?…&code=…&state=…`),
+/// the `bitwarden://duo-callback?code=…&state=…` link or the `code|state` itself.
 pub fn duo_token(input: &str) -> Option<String> {
     let input = input.trim();
     if let Some((_, query)) = input.split_once('?') {
@@ -976,20 +938,16 @@ pub fn duo_token(input: &str) -> Option<String> {
     (!code.is_empty() && !state.is_empty()).then(|| input.to_owned())
 }
 
-/// Instrução mostrada no passo de 2FA para cada método.
+/// Instruction shown at the 2FA step for each method.
 pub fn provider_prompt(p: TwoFactorProvider) -> String {
     match p {
-        TwoFactorProvider::WebAuthn | TwoFactorProvider::U2f => {
-            "Clique no botão e toque na sua chave de segurança (ou use o Windows Hello).".into()
-        }
-        TwoFactorProvider::Duo | TwoFactorProvider::OrganizationDuo => {
-            "Aprove no Duo pelo navegador e cole aqui o endereço da página final.".into()
-        }
-        other => format!("Digite o código do seu {}.", provider_name(other)),
+        TwoFactorProvider::WebAuthn | TwoFactorProvider::U2f => t!("flow.prompt_webauthn").into(),
+        TwoFactorProvider::Duo | TwoFactorProvider::OrganizationDuo => t!("flow.prompt_duo").into(),
+        other => t!("flow.prompt_code", provider = provider_name(other)),
     }
 }
 
-/// Provedores que este cliente sabe usar (código digitado).
+/// Providers this client knows how to use (typed code).
 pub fn supported_providers(providers: &[TwoFactorProvider]) -> Vec<TwoFactorProvider> {
     let mut out: Vec<_> = providers
         .iter()
@@ -1005,7 +963,7 @@ pub fn supported_providers(providers: &[TwoFactorProvider]) -> Vec<TwoFactorProv
             ) || (cfg!(windows) && *p == TwoFactorProvider::WebAuthn)
         })
         .collect();
-    // Autenticador primeiro: é o mais comum e não depende de e-mail.
+    // Authenticator first: it is the most common and doesn't depend on email.
     out.sort_by_key(|p| p.code());
     out
 }
@@ -1014,8 +972,8 @@ pub fn supported_providers(providers: &[TwoFactorProvider]) -> Vec<TwoFactorProv
 mod tests {
     use super::*;
 
-    /// Mensagens para a pessoa não podem ter um buraco de espaços no meio
-    /// (sobra de uma quebra de linha mal feita no código vira lacuna no toast).
+    /// Messages for the person can't have a hole of spaces in the middle
+    /// (leftover of a badly done line break in the code becomes a gap in the toast).
     #[test]
     fn messages_have_no_runs_of_spaces() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1030,10 +988,19 @@ mod tests {
                 if line.trim_start().starts_with("//") {
                     continue;
                 }
-                // Partes ímpares de uma linha cortada em `"` são o conteúdo das strings.
+                // Odd parts of a line split at `"` are the contents of the strings.
                 let in_string = line.split('"').skip(1).step_by(2);
                 if in_string.into_iter().any(|s| s.trim().contains("   ")) {
                     bad.push(format!("{}:{}", path.display(), n + 1));
+                }
+            }
+        }
+        // The translation catalogs too: no double spaces, not even at the ends
+        // (" ou " is the exception, on purpose).
+        for lang in crate::i18n::Language::ALL {
+            for (key, text) in crate::i18n::catalog(lang) {
+                if text.contains("  ") || (key != "login.or" && text.trim() != text) {
+                    bad.push(format!("{}: {key}", lang.code()));
                 }
             }
         }
@@ -1119,11 +1086,11 @@ mod tests {
     fn wrong_password_message() {
         assert_eq!(
             describe_vault_error(VaultError::WrongPassword),
-            "Senha mestra incorreta."
+            "Senha do cofre incorreta."
         );
         assert_eq!(
             describe_api_error(ApiError::InvalidCredentials("x".into())),
-            "E-mail ou senha mestra incorretos."
+            "E-mail ou senha do cofre incorretos."
         );
     }
 }

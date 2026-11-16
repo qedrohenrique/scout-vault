@@ -1,16 +1,16 @@
-//! Segredos pequenos que precisam sobreviver entre aberturas do app — hoje só o
-//! token de "lembrar este dispositivo" do 2FA. Ficam no **Gerenciador de
-//! Credenciais do Windows** (protegido pela conta do usuário), nunca no
+//! Small secrets that need to survive between app launches — today only the
+//! 2FA "remember this device" token. They live in **Windows Credential
+//! Manager** (protected by the user's account), never in
 //! `settings.json`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const SERVICE: &str = "Scout Vault";
-/// Nome do app antes de virar Scout Vault: segredos antigos migram ao serem lidos.
+/// The app's name before it became Scout Vault: old secrets migrate when read.
 const OLD_SERVICE: &str = "Cofre";
 
-/// Onde os segredos moram: no cofre do sistema operacional, ou na memória (testes).
+/// Where secrets live: in the operating system's credential store, or in memory (tests).
 #[derive(Clone)]
 pub enum SecretStore {
     Os,
@@ -40,7 +40,7 @@ impl SecretStore {
         }
     }
 
-    /// Falhas ao gravar não impedem o login — só custam pedir o 2FA de novo.
+    /// Write failures don't block login — they only cost asking for 2FA again.
     pub fn set(&self, key: &str, value: &str) {
         match self {
             Self::Os => {
@@ -68,7 +68,7 @@ impl SecretStore {
     }
 }
 
-/// Chave do token de "lembrar dispositivo": um por servidor e conta.
+/// Key of the "remember device" token: one per server and account.
 pub fn remember_key(identity_url: &str, email: &str) -> String {
     format!(
         "2fa-lembrar|{}|{}",

@@ -1,10 +1,10 @@
-//! Escrita: transforma um [`Item`] editado no corpo que o servidor espera,
-//! **cifrando cada campo** na máquina.
+//! Writing: turns an edited [`Item`] into the body the server expects,
+//! **encrypting every field** on the machine.
 //!
-//! Princípio: partir do item **como o servidor mandou** ([`CipherRaw`]) e só
-//! trocar o que a pessoa editou. Tudo o que o Scout Vault não conhece (passkeys,
-//! histórico de senhas, regras de URI, campos vinculados, anexos…) volta
-//! intacto — editar no Scout Vault nunca apaga dados criados por outro cliente.
+//! Principle: start from the item **as the server sent it** ([`CipherRaw`]) and only
+//! change what the person edited. Everything Scout Vault doesn't know (passkeys,
+//! password history, URI rules, linked fields, attachments…) goes back
+//! untouched — editing in Scout Vault never deletes data created by another client.
 
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -13,11 +13,11 @@ use crate::crypto::SymmetricKey;
 use crate::sync::{CardRaw, CipherRaw, FieldRaw, IdentityRaw, LoginRaw, SshKeyRaw, UriRaw};
 use crate::vault::{FieldKind, Item, ItemKind, Keys, VaultError};
 
-/// Quantas senhas antigas o histórico guarda (igual aos clientes oficiais).
+/// How many old passwords the history keeps (same as the official clients).
 const PASSWORD_HISTORY_MAX: usize = 5;
 
-/// Chaves que só existem na **resposta** do servidor. Mandá-las de volta pode
-/// ser rejeitado (ex.: `attachments` tem outro formato no pedido).
+/// Keys that only exist in the server's **response**. Sending them back may be
+/// rejected (e.g. `attachments` has a different format in the request).
 const RESPONSE_ONLY: &[&str] = &[
     "id",
     "object",
@@ -34,14 +34,14 @@ const RESPONSE_ONLY: &[&str] = &[
 ];
 
 fn now_iso() -> String {
-    // Formato do servidor: 2026-11-13T18:40:00.000Z (UTC).
+    // Server format: 2026-11-13T18:40:00.000Z (UTC).
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
-    // Conversão de dias desde 1970 para data civil (algoritmo de H. Hinnant).
+    // Conversion from days since 1970 to a civil date (H. Hinnant's algorithm).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -63,7 +63,7 @@ fn now_iso() -> String {
 struct Enc<'a>(&'a SymmetricKey);
 
 impl Enc<'_> {
-    /// Cifra; vazio vira `None` (campo ausente, como nos clientes oficiais).
+    /// Encrypts; empty becomes `None` (absent field, as in the official clients).
     fn opt(&self, value: Option<&str>) -> Result<Option<String>, VaultError> {
         match value.filter(|v| !v.is_empty()) {
             None => Ok(None),
@@ -100,8 +100,8 @@ fn field_code(kind: FieldKind) -> u8 {
     }
 }
 
-/// Monta o item cifrado a partir do editado. `base` é o item atual do
-/// servidor (edição) ou `None` (item novo).
+/// Builds the encrypted item from the edited one. `base` is the server's current
+/// item (edit) or `None` (new item).
 pub fn encrypt_item(
     item: &Item,
     base: Option<&CipherRaw>,
@@ -135,7 +135,7 @@ pub fn encrypt_item(
         },
     };
 
-    // A chave do item: a própria (se tiver) ou a do dono.
+    // The item key: its own (if it has one) or the owner's.
     let owner_key = keys.for_owner(raw.organization_id.as_deref())?;
     let item_key;
     let key: &SymmetricKey = match &raw.key {
@@ -174,7 +174,7 @@ pub fn encrypt_item(
             let changed = old_password.as_deref().filter(|p| !p.is_empty())
                 != new_password.as_deref().filter(|p| !p.is_empty());
             if changed && base.is_some() {
-                // A senha antiga vai para o histórico (já cifrada: reaproveita o texto do servidor).
+                // The old password goes to the history (already encrypted: reuses the server's text).
                 if let Some(old_enc) = login.password.clone().filter(|_| old_password.is_some()) {
                     let history = raw
                         .extra
@@ -204,14 +204,14 @@ pub fn encrypt_item(
                 .filter(|u| !u.is_empty())
                 .enumerate()
             {
-                // Mantém a regra de correspondência e o resto da URI que já existia nessa posição.
+                // Keeps the match rule and the rest of the URI that already existed at this position.
                 let mut u = old_uris.get(i).cloned().unwrap_or(UriRaw {
                     uri: None,
                     match_type: None,
                     extra: Map::new(),
                 });
                 u.uri = Some(key.encrypt_str(uri)?.to_string());
-                // Os clientes oficiais conferem este checksum para detectar URI adulterada.
+                // The official clients check this checksum to detect a tampered URI.
                 let checksum = base64::Engine::encode(
                     &base64::engine::general_purpose::STANDARD,
                     Sha256::digest(uri.as_bytes()),
@@ -303,7 +303,7 @@ pub fn encrypt_item(
     Ok(raw)
 }
 
-/// Nome de pasta cifrado com a user key (pastas são sempre pessoais).
+/// Folder name encrypted with the user key (folders are always personal).
 pub fn encrypt_folder_name(name: &str, keys: &Keys) -> Result<String, VaultError> {
     let name = name.trim();
     if name.is_empty() {
@@ -312,10 +312,10 @@ pub fn encrypt_folder_name(name: &str, keys: &Keys) -> Result<String, VaultError
     Ok(keys.user_key().encrypt_str(name)?.to_string())
 }
 
-/// Corpo JSON do `POST`/`PUT /api/ciphers`: o item sem as chaves que só
-/// existem na resposta, mais `lastKnownRevisionDate` (o servidor recusa se
-/// outro cliente mudou o item nesse meio-tempo) e `encryptedFor` (o id de
-/// quem cifrou — `profile.id`; servidores recentes exigem).
+/// JSON body of `POST`/`PUT /api/ciphers`: the item without the keys that only
+/// exist in the response, plus `lastKnownRevisionDate` (the server refuses if
+/// another client changed the item in the meantime) and `encryptedFor` (the id of
+/// whoever encrypted it — `profile.id`; recent servers require it).
 pub fn request_body(raw: &CipherRaw, user_id: &str) -> Value {
     let mut v = serde_json::to_value(raw).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut v {
@@ -326,7 +326,7 @@ pub fn request_body(raw: &CipherRaw, user_id: &str) -> Value {
         if let Some(rev) = &raw.revision_date {
             map.insert("lastKnownRevisionDate".into(), Value::String(rev.clone()));
         }
-        // `null` explícito nos tipos que não são deste item.
+        // Explicit `null` for the types that don't belong to this item.
         map.retain(|_, v| !v.is_null());
     }
     v
@@ -357,7 +357,7 @@ mod tests {
         (sync, keys, vault)
     }
 
-    /// Decifra o item cifrado de volta, como faria qualquer cliente.
+    /// Decrypts the encrypted item back, as any client would.
     fn reopen(raw: CipherRaw, sync: &SyncResponse, keys: &Keys) -> Item {
         let mut s = sync.clone();
         s.ciphers = vec![raw];
@@ -368,7 +368,7 @@ mod tests {
     fn editing_keeps_unknown_data_and_records_password_history() {
         let (mut sync, keys, vault) = open();
         let base_ix = sync.ciphers.iter().position(|c| c.id == "login-1").unwrap();
-        // Simula dados de outro cliente que o Scout Vault não entende.
+        // Simulates data from another client that Scout Vault doesn't understand.
         sync.ciphers[base_ix]
             .extra
             .insert("fido2Credentials".into(), json!([{ "credentialId": "x" }]));
@@ -390,7 +390,7 @@ mod tests {
         }
         let raw = encrypt_item(&item, Some(&base), &keys).unwrap();
 
-        // O que não foi editado continua lá.
+        // What wasn't edited is still there.
         assert_eq!(
             raw.extra["fido2Credentials"],
             json!([{ "credentialId": "x" }])
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(l.password.unwrap().expose(), "outra-senha");
         assert_eq!(l.username.as_deref(), Some("pessoa"));
         assert_eq!(l.uris, ["https://novo.example.com"]);
-        // Campo customizado preservado e ainda legível.
+        // Custom field preserved and still readable.
         assert_eq!(back.fields[0].value.as_ref().unwrap().expose(), "1234");
 
         let body = request_body(&raw, "user-1");

@@ -1,9 +1,9 @@
-//! Aparência do Scout Vault: tema claro/escuro, cor de destaque, tamanho do texto e
-//! cantos. Gera os temas do gpui-kit a partir de uma paleta própria.
+//! Scout Vault appearance: light/dark theme, accent color, text size and
+//! corners. Builds the gpui-kit themes from its own palette.
 //!
-//! A identidade visual é deliberadamente contida: neutros quentes (papel claro
-//! ou grafite profundo) e **uma** cor de destaque, usada só onde importa —
-//! seleção, foco, botão principal e a marca.
+//! The visual identity is deliberately restrained: warm neutrals (light paper
+//! or deep graphite) and **one** accent color, used only where it matters —
+//! selection, focus, primary button and the brand.
 
 use std::rc::Rc;
 
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeChoice {
-    /// Acompanha o claro/escuro do sistema operacional.
+    /// Follows the operating system's light/dark mode.
     #[default]
     System,
     Light,
@@ -33,9 +33,9 @@ impl ThemeChoice {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::System => "Sistema",
-            Self::Light => "Claro",
-            Self::Dark => "Escuro",
+            Self::System => t!("appearance.theme_system"),
+            Self::Light => t!("appearance.theme_light"),
+            Self::Dark => t!("appearance.theme_dark"),
         }
     }
 }
@@ -51,7 +51,7 @@ pub enum Accent {
     Graphite,
 }
 
-/// As cores de uma cor de destaque nos dois modos.
+/// The colors of an accent color in both modes.
 struct AccentColors {
     light: &'static str,
     on_light: &'static str,
@@ -82,16 +82,16 @@ impl Accent {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Jade => "Jade",
-            Self::Indigo => "Índigo",
-            Self::Brass => "Latão",
-            Self::Coral => "Coral",
-            Self::Plum => "Ameixa",
-            Self::Graphite => "Grafite",
+            Self::Jade => t!("appearance.accent_jade"),
+            Self::Indigo => t!("appearance.accent_indigo"),
+            Self::Brass => t!("appearance.accent_brass"),
+            Self::Coral => t!("appearance.accent_coral"),
+            Self::Plum => t!("appearance.accent_plum"),
+            Self::Graphite => t!("appearance.accent_graphite"),
         }
     }
 
-    // Tons escolhidos para o texto do botão principal passar de 4,5:1 (WCAG AA).
+    // Tones chosen so the primary button text passes 4.5:1 (WCAG AA).
     fn colors(self) -> AccentColors {
         let (light, on_light, dark, on_dark) = match self {
             Self::Jade => ("#0b7d62", "#ffffff", "#3ccf9f", "#04261b"),
@@ -109,7 +109,7 @@ impl Accent {
         }
     }
 
-    /// A cor principal no modo dado (para amostras na tela de configurações).
+    /// The main color in the given mode (for swatches on the settings screen).
     pub fn swatch(self, dark: bool) -> Hsla {
         let c = self.colors();
         hex(if dark { c.dark } else { c.light })
@@ -137,9 +137,9 @@ impl TextSize {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Small => "Pequeno",
-            Self::Medium => "Padrão",
-            Self::Large => "Grande",
+            Self::Small => t!("appearance.text_small"),
+            Self::Medium => t!("appearance.text_medium"),
+            Self::Large => t!("appearance.text_large"),
         }
     }
 
@@ -173,13 +173,13 @@ impl Corners {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Square => "Retos",
-            Self::Soft => "Suaves",
-            Self::Round => "Redondos",
+            Self::Square => t!("appearance.corners_square"),
+            Self::Soft => t!("appearance.corners_soft"),
+            Self::Round => t!("appearance.corners_round"),
         }
     }
 
-    /// (raio comum, raio de cartões e diálogos)
+    /// (common radius, radius of cards and dialogs)
     fn radii(self) -> (usize, usize) {
         match self {
             Self::Square => (2, 3),
@@ -189,7 +189,7 @@ impl Corners {
     }
 }
 
-/// Animações da arte de fundo nas telas de entrada.
+/// Background art animations on the entry screens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Motion {
     #[default]
@@ -209,13 +209,13 @@ impl Motion {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::On => "Animado",
-            Self::Off => "Parado",
+            Self::On => t!("appearance.motion_on"),
+            Self::Off => t!("appearance.motion_off"),
         }
     }
 }
 
-/// Preferências de aparência. Ficam no `settings.json` (nada sensível).
+/// Appearance preferences. They live in `settings.json` (nothing sensitive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
@@ -226,7 +226,7 @@ pub struct Appearance {
     pub motion: Motion,
 }
 
-/// Neutros de cada modo.
+/// Neutrals of each mode.
 struct Neutrals {
     background: &'static str,
     surface: &'static str,
@@ -269,8 +269,8 @@ const DARK: Neutrals = Neutrals {
     scrollbar: "#45494c",
 };
 
-/// Monta o tema de um modo a partir do tema padrão do gpui-kit, trocando as
-/// cores pela paleta do Scout Vault.
+/// Builds a mode's theme from gpui-kit's default theme, swapping the
+/// colors for Scout Vault's palette.
 fn build(base: &ThemeConfig, mode: ThemeMode, a: &Appearance) -> ThemeConfig {
     let dark = mode.is_dark();
     let n = if dark { &DARK } else { &LIGHT };
@@ -292,7 +292,7 @@ fn build(base: &ThemeConfig, mode: ThemeMode, a: &Appearance) -> ThemeConfig {
         ("selection.background", tint("4d")),
         ("muted.background", n.raised.into()),
         ("muted.foreground", n.muted.into()),
-        // "accent" do gpui-kit é o fundo de hover de menus e listas.
+        // gpui-kit's "accent" is the hover background of menus and lists.
         ("accent.background", n.hover.into()),
         ("accent.foreground", n.foreground.into()),
         ("primary.background", accent.into()),
@@ -361,7 +361,7 @@ fn build(base: &ThemeConfig, mode: ThemeMode, a: &Appearance) -> ThemeConfig {
         return base.clone();
     };
     value["name"] = name.into();
-    // Nomes das chaves como no JSON de temas do gpui-kit.
+    // Key names as in gpui-kit's theme JSON.
     value["font.size"] = a.text_size.px().into();
     value["mono_font.size"] = (a.text_size.px() - 1.).into();
     value["radius"] = radius.into();
@@ -383,7 +383,7 @@ pub fn mode_for(choice: ThemeChoice, system: WindowAppearance) -> ThemeMode {
     }
 }
 
-/// Aplica a aparência ao tema global e redesenha todas as janelas.
+/// Applies the appearance to the global theme and redraws every window.
 pub fn apply(appearance: &Appearance, window: Option<&Window>, cx: &mut App) {
     let registry = ThemeRegistry::global(cx);
     let light = build(registry.default_light_theme(), ThemeMode::Light, appearance);
@@ -396,19 +396,19 @@ pub fn apply(appearance: &Appearance, window: Option<&Window>, cx: &mut App) {
         theme.light_theme = Rc::new(light);
         theme.dark_theme = Rc::new(dark);
     });
-    // `change` recarrega o tema do modo mesmo se o modo não mudou.
+    // `change` reloads the mode's theme even if the mode didn't change.
     Theme::change(mode, None, cx);
     crate::backdrop::set_motion(appearance.motion == Motion::On, cx);
-    // Vale para todas as animações da interface (o GPUI pula direto ao estado final).
+    // Applies to every interface animation (GPUI jumps straight to the final state).
     cx.set_reduce_motion(appearance.motion == Motion::Off);
 }
 
-/// A cor de destaque em uso (para detalhes desenhados à mão).
+/// The accent color in use (for hand-drawn details).
 pub fn accent(cx: &App) -> Hsla {
     cx.global::<Theme>().primary
 }
 
-/// A cor de destaque translúcida, para fundos de seleção.
+/// The translucent accent color, for selection backgrounds.
 pub fn accent_tint(cx: &App, opacity: f32) -> Hsla {
     accent(cx).opacity(opacity)
 }
@@ -425,7 +425,7 @@ fn hex(s: &str) -> Hsla {
     .into()
 }
 
-/// Rótulo curto do tema efetivo (para testes e depuração).
+/// Short label of the effective theme (for tests and debugging).
 pub fn theme_name(cx: &App) -> SharedString {
     cx.global::<Theme>().theme_name().clone()
 }

@@ -1,9 +1,9 @@
-"""Cria uma organização de teste ("Empresa de teste", coleções Financeiro e TI)
-na conta de `dev/test-account.env`, no Vaultwarden LOCAL.
+"""Creates a test organization ("Empresa de teste", collections Financeiro and TI)
+in the account from `dev/test-account.env`, on the LOCAL Vaultwarden.
 
-Faz a parte de cliente como os apps oficiais: gera a chave da organização,
-cifra-a com a chave pública RSA do usuário e cifra os nomes das coleções com
-ela. Se a organização já existir, não faz nada.
+Does the client side like the official apps: generates the organization key,
+encrypts it with the user's RSA public key and encrypts the collection names
+with it. If the organization already exists, does nothing.
 
     python tools/dev_org.py
 """
@@ -41,7 +41,7 @@ def main() -> None:
     env = load_env()
     base = env["SCOUT_VAULT_TEST_URL"].rstrip("/")
     if urlparse(base).hostname not in {"localhost", "127.0.0.1", "::1"}:
-        sys.exit("recusado: dev_org só roda contra servidor local")
+        sys.exit("refused: dev_org only runs against a local server")
     email, password = env["SCOUT_VAULT_TEST_EMAIL"], env["SCOUT_VAULT_TEST_PASSWORD"]
 
     kdf = request(f"{base}/identity/accounts/prelogin", json_body={"email": email})
@@ -69,7 +69,7 @@ def main() -> None:
     profile = sync.get("profile") or sync.get("Profile")
     orgs = profile.get("organizations") or profile.get("Organizations") or []
     if any((o.get("name") or o.get("Name")) == ORG_NAME for o in orgs):
-        print(f"já existe: {ORG_NAME}")
+        print(f"already exists: {ORG_NAME}")
         return
 
     pub = request(f"{base}/api/users/{user_id}/public-key", token=token)
@@ -106,7 +106,7 @@ def main() -> None:
     )
     org_id = org.get("id") or org["Id"]
 
-    # Segunda coleção, com acesso para a própria conta.
+    # Second collection, with access for the account itself.
     members = request(f"{base}/api/organizations/{org_id}/users", token=token)
     members = members.get("data") or members.get("Data") or []
     me = next(m for m in members if (m.get("email") or m.get("Email", "")).lower() == email.lower())
@@ -119,7 +119,7 @@ def main() -> None:
         },
         token=token,
     )
-    print(f"criada: {ORG_NAME} (coleções Financeiro e TI)")
+    print(f"created: {ORG_NAME} (collections Financeiro and TI)")
 
 
 if __name__ == "__main__":

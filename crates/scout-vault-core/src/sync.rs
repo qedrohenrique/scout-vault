@@ -1,8 +1,8 @@
-//! Resposta de `GET /api/sync` como chega do servidor: **cifrada**.
+//! Response of `GET /api/sync` as it comes from the server: **encrypted**.
 //!
-//! Esses tipos são seguros para cache em disco (fase 3), pois todo campo
-//! sensível continua sendo um `EncString` em texto. As chaves do JSON já
-//! chegam normalizadas para camelCase (ver `api::parse_normalized`).
+//! These types are safe to cache on disk, since every sensitive field is
+//! still an `EncString` in text form. The JSON keys arrive already
+//! normalized to camelCase (see `api::parse_normalized`).
 
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ pub struct SyncResponse {
     pub folders: Vec<FolderRaw>,
     #[serde(default)]
     pub ciphers: Vec<CipherRaw>,
-    /// Coleções das organizações (nome cifrado com a chave da organização).
+    /// The organizations' collections (name encrypted with the organization key).
     #[serde(default)]
     pub collections: Vec<CollectionRaw>,
 }
@@ -25,13 +25,13 @@ pub struct CollectionRaw {
     pub id: String,
     pub organization_id: String,
     pub name: String,
-    /// A pessoa só pode ler (não pode pôr itens nela).
+    /// The person can only read (can't put items in it).
     #[serde(default)]
     pub read_only: bool,
 }
 
 impl SyncResponse {
-    /// Lê o JSON do sync (por exemplo, de um cache em disco), aceitando PascalCase ou camelCase.
+    /// Reads the sync JSON (for example, from a disk cache), accepting PascalCase or camelCase.
     pub fn from_json(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         crate::json::from_slice_normalized(bytes)
     }
@@ -57,14 +57,14 @@ pub struct Profile {
     pub id: String,
     #[serde(default)]
     pub email: Option<String>,
-    /// User key cifrada com a master key esticada.
+    /// User key encrypted with the stretched master key.
     #[serde(default)]
     pub key: Option<String>,
-    /// Chave privada RSA (PKCS#8) cifrada com a user key.
+    /// RSA private key (PKCS#8) encrypted with the user key.
     #[serde(default)]
     pub private_key: Option<String>,
-    /// Formato novo das chaves da conta (contas v2). Só usado como reserva
-    /// quando `private_key` não vem.
+    /// New format of the account keys (v2 accounts). Only used as a fallback
+    /// when `private_key` is missing.
     #[serde(default)]
     pub account_keys: Option<AccountKeys>,
     #[serde(default)]
@@ -75,10 +75,10 @@ pub struct Profile {
 #[serde(rename_all = "camelCase")]
 pub struct OrganizationRaw {
     pub id: String,
-    /// Nome em texto claro.
+    /// Name in plain text.
     #[serde(default)]
     pub name: Option<String>,
-    /// Chave da organização cifrada com a chave pública RSA do usuário (`4.…`).
+    /// Organization key encrypted with the user's RSA public key (`4.…`).
     #[serde(default)]
     pub key: Option<String>,
 }
@@ -98,19 +98,19 @@ pub struct CipherRaw {
     pub organization_id: Option<String>,
     #[serde(default)]
     pub folder_id: Option<String>,
-    /// 1 = login, 2 = nota segura, 3 = cartão, 4 = identidade, 5 = chave SSH.
+    /// 1 = login, 2 = secure note, 3 = card, 4 = identity, 5 = SSH key.
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
-    /// Chave própria do item, cifrada com a user key ou a chave da organização.
+    /// The item's own key, encrypted with the user key or the organization key.
     #[serde(default)]
     pub key: Option<String>,
     #[serde(default)]
     pub favorite: bool,
-    /// 1 = pedir senha mestra antes de mostrar.
+    /// 1 = ask for the master password before showing.
     #[serde(default)]
     pub reprompt: Option<u8>,
     #[serde(default)]
@@ -127,8 +127,8 @@ pub struct CipherRaw {
     pub ssh_key: Option<SshKeyRaw>,
     #[serde(default)]
     pub fields: Option<Vec<FieldRaw>>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -144,8 +144,8 @@ pub struct LoginRaw {
     pub totp: Option<String>,
     #[serde(default)]
     pub uris: Option<Vec<UriRaw>>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -155,11 +155,11 @@ pub struct LoginRaw {
 pub struct UriRaw {
     #[serde(default)]
     pub uri: Option<String>,
-    /// Regra de correspondência (domínio, host, exata...). Texto claro.
+    /// Match rule (domain, host, exact...). Plain text.
     #[serde(default, rename = "match")]
     pub match_type: Option<u8>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -179,8 +179,8 @@ pub struct CardRaw {
     pub exp_year: Option<String>,
     #[serde(default)]
     pub code: Option<String>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -206,8 +206,8 @@ pub struct IdentityRaw {
     pub username: Option<String>,
     pub passport_number: Option<String>,
     pub license_number: Option<String>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -219,11 +219,11 @@ pub struct SshKeyRaw {
     pub private_key: Option<String>,
     #[serde(default)]
     pub public_key: Option<String>,
-    /// O servidor oficial chama de `keyFingerprint`; servidores antigos, de `fingerprint`.
+    /// The official server calls it `keyFingerprint`; old servers, `fingerprint`.
     #[serde(default, alias = "fingerprint")]
     pub key_fingerprint: Option<String>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -231,15 +231,15 @@ pub struct SshKeyRaw {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldRaw {
-    /// 0 = texto, 1 = oculto, 2 = booleano, 3 = vinculado.
+    /// 0 = text, 1 = hidden, 2 = boolean, 3 = linked.
     #[serde(default, rename = "type")]
     pub kind: Option<u8>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub value: Option<String>,
-    /// Campos que o Scout Vault não usa (passkeys, histórico de senhas, anexos…),
-    /// guardados para voltarem intactos ao servidor quando o item é salvo.
+    /// Fields Scout Vault doesn't use (passkeys, password history, attachments…),
+    /// kept so they go back to the server untouched when the item is saved.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }

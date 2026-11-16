@@ -1,8 +1,8 @@
-//! Ícones embutidos no binário.
+//! Icons embedded in the binary.
 //!
-//! O `Assets` padrão do gpui-kit só traz os ~100 ícones dos componentes. Os
-//! ícones Lucide extras que o Scout Vault usa precisam ser listados aqui — senão
-//! aparecem como um espaço vazio (sem erro). O teste abaixo confere todos.
+//! gpui-kit's default `Assets` only brings the ~100 icons of its components. The
+//! extra Lucide icons Scout Vault uses have to be listed here — otherwise they
+//! show up as an empty space (no error). The test below checks all of them.
 
 use std::borrow::Cow;
 
@@ -37,11 +37,56 @@ gpui_kit::assets::icon_assets!(
         WandSparkles,
         Timer,
         AppWindow,
-        ScanFace
+        ScanFace,
+        ShieldCheck,
+        ShieldAlert,
+        TriangleAlert,
+        CircleCheck,
+        ChevronRight,
+        // Icons that can be chosen for an item (item_icons.rs).
+        Gamepad2,
+        Swords,
+        Trophy,
+        Landmark,
+        Wallet,
+        PiggyBank,
+        ShoppingCart,
+        ShoppingBag,
+        Mail,
+        MessageCircle,
+        Phone,
+        Smartphone,
+        Laptop,
+        Server,
+        Wifi,
+        Cloud,
+        Code,
+        Terminal,
+        Briefcase,
+        GraduationCap,
+        HeartPulse,
+        Plane,
+        Car,
+        House,
+        Shield,
+        Music,
+        Film,
+        Tv,
+        Camera,
+        Coffee,
+        Users,
+        Sparkles,
+        Zap,
+        Rocket,
+        Gift,
+        Bitcoin,
+        Dumbbell,
+        Utensils,
+        Database
     ]
 );
 
-/// Glifo da marca (cadeado de chapéu), pintado com a cor do tema.
+/// Brand glyph (padlock with a hat), painted with the theme color.
 pub const BRAND_MARK: &str = "brand/mark.svg";
 const BRAND_MARK_SVG: &[u8] = include_bytes!("../assets/brand/mark.svg");
 
@@ -51,6 +96,9 @@ impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == BRAND_MARK {
             return Ok(Some(Cow::Borrowed(BRAND_MARK_SVG)));
+        }
+        if let Some(svg) = crate::item_icons::brand_svg(path) {
+            return Ok(Some(Cow::Borrowed(svg)));
         }
         if let Some(bytes) = ExtraIcons.load(path)? {
             return Ok(Some(bytes));
@@ -77,7 +125,7 @@ mod tests {
 
     use super::AppAssets;
 
-    /// Todos os ícones que o código usa. Ao usar um novo, acrescente aqui.
+    /// Every icon the code uses. When you use a new one, add it here.
     const USED: &[IconName] = &[
         IconName::LockKeyhole,
         IconName::Lock,
@@ -123,9 +171,14 @@ mod tests {
         IconName::AppWindow,
         IconName::ScanFace,
         IconName::User,
+        IconName::ShieldCheck,
+        IconName::ShieldAlert,
+        IconName::TriangleAlert,
+        IconName::CircleCheck,
+        IconName::ChevronRight,
     ];
 
-    /// Nenhum ícone usado no código (`IconName::…`) pode faltar em `USED` (e, portanto, no binário).
+    /// No icon used in code (`IconName::…`) may be missing from `USED` (and therefore from the binary).
     #[test]
     fn used_list_covers_the_source() {
         let listed: Vec<String> = USED.iter().map(|i| format!("{i:?}")).collect();
@@ -151,9 +204,9 @@ mod tests {
 
     #[test]
     fn default_bundle_lacks_extras() {
-        // Garante que o teste abaixo não passa à toa: o padrão não tem estes.
+        // Makes sure the test below doesn't pass for nothing: the default doesn't have these.
         let path = IconName::LockKeyhole.path();
-        // `load` devolve erro (não `None`) para ícone ausente.
+        // `load` returns an error (not `None`) for a missing icon.
         assert!(!matches!(gpui_kit::assets::Assets.load(&path), Ok(Some(_))));
     }
 

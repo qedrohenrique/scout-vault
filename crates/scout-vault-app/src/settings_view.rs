@@ -1,5 +1,5 @@
-//! Tela de configurações. Por enquanto só aparência; novas seções entram como
-//! mais um `group` em [`SettingsView::render`].
+//! Settings screen. New sections go in as another `group` in
+//! [`SettingsView::render`].
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{button::*, *};
@@ -14,17 +14,36 @@ use gpui_kit::component::switch::Switch;
 
 pub enum SettingsEvent {
     Close,
-    /// Ligou/desligou o Windows Hello (o app cria ou apaga a chave).
+    /// Turned Windows Hello on/off (the app creates or deletes the key).
     WindowsHello(bool),
+    /// Changed the interface language (already applied; the app rebuilds what holds text).
+    Language,
+}
+
+/// Options of a [`SettingsView::number_choice`].
+struct NumberChoice {
+    id: &'static str,
+    /// Prefix of each option's id (`{prefix}-{value}`).
+    prefix: &'static str,
+    options: &'static [u32],
+    /// Label for 0 ("Always", "Never").
+    zero: &'static str,
+    label: fn(u32) -> SharedString,
+    current: u32,
+    set: fn(&mut SettingsView, u32, &mut Context<SettingsView>),
 }
 
 pub struct SettingsView {
     store: SettingsStore,
     appearance: Appearance,
+    /// Code of the chosen language; empty = the system's.
+    language: String,
     autotype: AutoTypeSettings,
     remember_session: bool,
     close_to_tray: bool,
     lock_with_windows: bool,
+    lock_on_minimize: bool,
+    clipboard_clear_secs: u32,
     windows_hello: bool,
     background_sync: bool,
     quick_search: bool,
@@ -43,10 +62,13 @@ impl SettingsView {
         Self {
             store,
             appearance: loaded.appearance,
+            language: loaded.language,
             autotype: loaded.autotype,
             remember_session: loaded.remember_session,
             close_to_tray: loaded.close_to_tray,
             lock_with_windows: loaded.lock_with_windows,
+            lock_on_minimize: loaded.lock_on_minimize,
+            clipboard_clear_secs: loaded.clipboard_clear_secs,
             windows_hello: loaded.windows_hello,
             background_sync: loaded.background_sync,
             quick_search: loaded.quick_search,
@@ -62,7 +84,7 @@ impl SettingsView {
         self.appearance
     }
 
-    /// Aplica na hora e grava.
+    /// Applies right away and saves.
     pub fn set_appearance(
         &mut self,
         next: Appearance,
@@ -77,13 +99,28 @@ impl SettingsView {
         let mut settings = self.store.load();
         settings.appearance = next;
         self.store.save(&settings);
-        // Com transição: claro↔escuro "pinta" a janela a partir do clique; o resto, fade.
+        // With a transition: light↔dark "paints" the window from the click; the rest, a fade.
         let origin = window.mouse_position();
         crate::theme_fx::change(&prev, &next, origin, window, cx);
         cx.notify();
     }
 
-    /// Abrir sem senha por N dias (0 = pedir sempre). Desligar apaga a chave guardada.
+    /// Switches the language right away (`""` = the system's), saves and redraws the windows.
+    pub fn set_language(&mut self, code: &str, cx: &mut Context<Self>) {
+        if code == self.language {
+            return;
+        }
+        self.language = code.to_string();
+        let mut settings = self.store.load();
+        settings.language = self.language.clone();
+        self.store.save(&settings);
+        crate::i18n::set(crate::i18n::Language::from_setting(&self.language));
+        cx.emit(SettingsEvent::Language);
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    /// Open without a password for N days (0 = always ask). Turning it off deletes the stored key.
     pub fn set_unlock_memory_days(&mut self, days: u32, cx: &mut Context<Self>) {
         self.unlock_memory_days = days;
         let mut settings = self.store.load();
@@ -111,30 +148,31 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Controle segmentado de opções numéricas (dias, minutos).
-    fn number_choice(
-        &self,
-        id: &'static str,
-        prefix: &'static str,
-        options: &'static [(u32, &'static str)],
-        current: u32,
-        set: fn(&mut Self, u32, &mut Context<Self>),
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    /// Segmented control for numeric options (days, minutes).
+    fn number_choice(&self, choice: NumberChoice, cx: &mut Context<Self>) -> impl IntoElement {
+        let NumberChoice {
+            id,
+            prefix,
+            options,
+            zero,
+            label,
+            current,
+            set,
+        } = choice;
         let this = cx.entity().downgrade();
         ui::segmented_compact(
             id,
             options
                 .iter()
-                .map(|(v, label)| Segment {
+                .map(|v| Segment {
                     id: format!("{prefix}-{v}").into(),
-                    label: (*label).into(),
+                    label: if *v == 0 { zero.into() } else { label(*v) },
                     icon: None,
                     selected: *v == current,
                 })
                 .collect(),
             move |ix, _, cx| {
-                let value = options[ix].0;
+                let value = options[ix];
                 this.update(cx, |v, cx| set(v, value, cx)).ok();
             },
             cx,
@@ -157,7 +195,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Liga/desliga o desbloqueio com Windows Hello (o app faz o resto).
+    /// Turns Windows Hello unlock on/off (the app does the rest).
     pub fn set_windows_hello(&mut self, on: bool, cx: &mut Context<Self>) {
         self.show_windows_hello(on, cx);
         let mut settings = self.store.load();
@@ -166,7 +204,7 @@ impl SettingsView {
         cx.emit(SettingsEvent::WindowsHello(on));
     }
 
-    /// Só atualiza a chave na tela (o app desfez a opção, por exemplo).
+    /// Only updates the switch on screen (the app undid the option, for example).
     pub fn show_windows_hello(&mut self, on: bool, cx: &mut Context<Self>) {
         self.windows_hello = on;
         cx.notify();
@@ -180,6 +218,24 @@ impl SettingsView {
         cx.notify();
     }
 
+    pub fn set_lock_on_minimize(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.lock_on_minimize = on;
+        let mut settings = self.store.load();
+        settings.lock_on_minimize = on;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
+    /// Time until the clipboard is cleared; applies from the next copy.
+    pub fn set_clipboard_clear_secs(&mut self, secs: u32, cx: &mut Context<Self>) {
+        self.clipboard_clear_secs = secs;
+        let mut settings = self.store.load();
+        settings.clipboard_clear_secs = secs;
+        self.store.save(&settings);
+        crate::clipboard::set_clear_after_secs(secs, cx);
+        cx.notify();
+    }
+
     pub fn set_close_to_tray(&mut self, on: bool, cx: &mut Context<Self>) {
         self.close_to_tray = on;
         let mut settings = self.store.load();
@@ -188,7 +244,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Liga/desliga a sessão lembrada; desligar apaga o que estava guardado.
+    /// Turns the remembered session on/off; turning it off deletes what was stored.
     pub fn set_remember_session(&mut self, on: bool, cx: &mut Context<Self>) {
         self.remember_session = on;
         let mut settings = self.store.load();
@@ -200,8 +256,8 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Liga/desliga a extensão do navegador. No app real, registra o Scout Vault
-    /// no Chrome/Edge/Brave (só no usuário atual) ou desfaz o registro.
+    /// Turns the browser extension on/off. In the real app, registers Scout Vault
+    /// in Chrome/Edge/Brave (current user only) or undoes the registration.
     pub fn set_browser_fill(&mut self, on: bool, cx: &mut Context<Self>) {
         self.browser_error = None;
         if crate::browser::system_enabled() {
@@ -262,7 +318,7 @@ impl SettingsView {
                 v_flex()
                     .min_w_0()
                     .gap_0p5()
-                    .child(div().text_sm().font_medium().child(title))
+                    .child(div().text_sm().font_semibold().child(title))
                     .child(
                         div()
                             .text_xs()
@@ -330,7 +386,7 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.update(|a| a.accent = accent, window, cx)
                 }))
-                // O anel da cor escolhida aparece crescendo de dentro.
+                // The chosen color's ring appears growing from the inside.
                 .with_animation(
                     crate::motion::key("cor", format!("{}:{selected}", accent.id())),
                     Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
@@ -343,6 +399,33 @@ impl SettingsView {
                     },
                 )
         }))
+    }
+}
+
+/// "1 day", "7 days"…
+pub(crate) fn days_label(n: u32) -> SharedString {
+    if n == 1 {
+        t!("duration.days_one").into()
+    } else {
+        t!("duration.days", n = n).into()
+    }
+}
+
+/// "5 min", "1 h"…
+pub(crate) fn minutes_label(n: u32) -> SharedString {
+    if n >= 60 && n.is_multiple_of(60) {
+        t!("duration.hours", n = n / 60).into()
+    } else {
+        t!("duration.minutes", n = n).into()
+    }
+}
+
+/// "10 s", "2 min"…
+pub(crate) fn seconds_label(n: u32) -> SharedString {
+    if n >= 60 && n.is_multiple_of(60) {
+        minutes_label(n / 60)
+    } else {
+        t!("duration.seconds", n = n).into()
     }
 }
 
@@ -445,36 +528,74 @@ impl Render for SettingsView {
             )
         };
 
+        let language_control = {
+            let this = this.clone();
+            // "System" first; then each language by its own name.
+            let mut codes = vec![""];
+            codes.extend(crate::i18n::Language::ALL.iter().map(|l| l.code()));
+            let current = self.language.clone();
+            ui::segmented(
+                "settings-language",
+                codes
+                    .iter()
+                    .map(|code| Segment {
+                        id: format!("language-{}", if code.is_empty() { "system" } else { code })
+                            .into(),
+                        label: match crate::i18n::Language::from_code(code) {
+                            Some(l) => l.native_name().into(),
+                            None => t!("settings.language_system").into(),
+                        },
+                        icon: code.is_empty().then_some(IconName::Monitor),
+                        selected: crate::i18n::Language::from_code(&current)
+                            .map(|l| l.code())
+                            .unwrap_or("")
+                            == *code,
+                    })
+                    .collect(),
+                move |ix, _, cx| {
+                    let code = codes[ix];
+                    this.update(cx, |v, cx| v.set_language(code, cx)).ok();
+                },
+                cx,
+            )
+        };
+
         let appearance_group = Self::group(
-            "APARÊNCIA",
+            t!("settings.group_appearance"),
             vec![
                 Self::row(
-                    "Tema",
-                    "Claro, escuro ou igual ao do sistema.",
+                    t!("settings.language"),
+                    t!("settings.language_desc"),
+                    language_control,
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.theme"),
+                    t!("settings.theme_desc"),
                     theme_control,
                     cx,
                 ),
                 Self::row(
-                    "Cor de destaque",
-                    "Usada na seleção, no foco e nos botões principais.",
+                    t!("settings.accent"),
+                    t!("settings.accent_desc"),
                     self.render_accents(window, cx),
                     cx,
                 ),
                 Self::row(
-                    "Tamanho do texto",
-                    "Vale para todas as telas.",
+                    t!("settings.text_size"),
+                    t!("settings.text_size_desc"),
                     text_control,
                     cx,
                 ),
                 Self::row(
-                    "Cantos",
-                    "Arredondamento de botões e cartões.",
+                    t!("settings.corners"),
+                    t!("settings.corners_desc"),
                     corners_control,
                     cx,
                 ),
                 Self::row(
-                    "Movimento",
-                    "Animações da interface e a arte de fundo do login. \"Parado\" desliga tudo.",
+                    t!("settings.motion"),
+                    t!("settings.motion_desc"),
                     motion_control,
                     cx,
                 ),
@@ -484,11 +605,11 @@ impl Render for SettingsView {
 
         let at = self.autotype;
         let autotype_group = Self::group(
-            "PREENCHER EM OUTROS APPS",
+            t!("settings.group_autotype"),
             vec![
                 Self::row(
-                    "Atalho global",
-                    "Com o cofre aberto, Ctrl+Alt+A em qualquer janela digita usuário ⇥ senha.",
+                    t!("settings.autotype"),
+                    t!("settings.autotype_desc"),
                     Switch::new("autotype-enabled")
                         .checked(at.enabled)
                         .on_click(cx.listener(move |this, v: &bool, _, cx| {
@@ -497,8 +618,8 @@ impl Render for SettingsView {
                     cx,
                 ),
                 Self::row(
-                    "Apertar Enter no final",
-                    "Envia o formulário depois de digitar a senha.",
+                    t!("settings.autotype_enter"),
+                    t!("settings.autotype_enter_desc"),
                     Switch::new("autotype-enter")
                         .checked(at.press_enter)
                         .disabled(!at.enabled)
@@ -519,8 +640,8 @@ impl Render for SettingsView {
         let _ = autotype::HOTKEY_LABEL;
         let browser_group = {
             let mut rows = vec![Self::row(
-                "Preencher no navegador",
-                "Deixa a extensão do Scout Vault (Chrome, Edge, Brave) pedir logins a este app. Só funciona com o cofre desbloqueado.",
+                t!("settings.browser_fill"),
+                t!("settings.browser_fill_desc"),
                 Switch::new("browser-enabled")
                     .checked(self.browser_fill)
                     .on_click(cx.listener(|this, v: &bool, _, cx| this.set_browser_fill(*v, cx))),
@@ -534,16 +655,16 @@ impl Render for SettingsView {
                         .px_4()
                         .py_3p5()
                         .text_sm()
-                        .child(div().font_medium().child("Instalar a extensão"))
+                        .child(
+                            div()
+                                .font_semibold()
+                                .child(t!("settings.install_extension")),
+                        )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    "No navegador, abra chrome://extensions (ou edge://extensions), ligue o \
-                                     Modo do desenvolvedor, clique em \"Carregar sem compactação\" e escolha a \
-                                     pasta abaixo. Depois, num site, clique no ícone do Scout Vault ou use Ctrl+Shift+L.",
-                                ),
+                                .child(t!("settings.install_extension_desc")),
                         )
                         .child(
                             h_flex()
@@ -561,8 +682,10 @@ impl Render for SettingsView {
                                     Button::new("browser-open-folder")
                                         .outline()
                                         .small()
-                                        .label("Abrir pasta")
-                                        .on_click(move |_, _, cx| cx.reveal_path(&dir.join("manifest.json"))),
+                                        .label(t!("settings.open_folder"))
+                                        .on_click(move |_, _, cx| {
+                                            cx.reveal_path(&dir.join("manifest.json"))
+                                        }),
                                 ),
                         ),
                 );
@@ -577,127 +700,159 @@ impl Render for SettingsView {
                         .child(e.clone()),
                 );
             }
-            Self::group("NAVEGADOR", rows, cx)
+            Self::group(t!("settings.group_browser"), rows, cx)
         };
         let unlock_control = self.number_choice(
-            "settings-unlock-memory",
-            "unlock",
-            &[(0, "Sempre"), (1, "1 dia"), (7, "7 dias"), (30, "30 dias")],
-            self.unlock_memory_days,
-            Self::set_unlock_memory_days,
+            NumberChoice {
+                id: "settings-unlock-memory",
+                prefix: "unlock",
+                options: &[0, 1, 7, 30],
+                zero: t!("settings.always"),
+                label: days_label,
+                current: self.unlock_memory_days,
+                set: Self::set_unlock_memory_days,
+            },
             cx,
         );
         let relogin_control = self.number_choice(
-            "settings-relogin",
-            "relogin",
-            &[
-                (7, "7 dias"),
-                (30, "30 dias"),
-                (90, "90 dias"),
-                (0, "Nunca"),
-            ],
-            self.relogin_days,
-            Self::set_relogin_days,
+            NumberChoice {
+                id: "settings-relogin",
+                prefix: "relogin",
+                options: &[7, 30, 90, 0],
+                zero: t!("settings.never"),
+                label: days_label,
+                current: self.relogin_days,
+                set: Self::set_relogin_days,
+            },
             cx,
         );
         let lock_control = self.number_choice(
-            "settings-auto-lock",
-            "lock",
-            &[
-                (1, "1 min"),
-                (5, "5 min"),
-                (15, "15 min"),
-                (60, "1 h"),
-                (0, "Nunca"),
-            ],
-            self.auto_lock_minutes,
-            Self::set_auto_lock_minutes,
+            NumberChoice {
+                id: "settings-auto-lock",
+                prefix: "lock",
+                options: &[1, 5, 15, 60, 0],
+                zero: t!("settings.never"),
+                label: minutes_label,
+                current: self.auto_lock_minutes,
+                set: Self::set_auto_lock_minutes,
+            },
+            cx,
+        );
+        let clipboard_control = self.number_choice(
+            NumberChoice {
+                id: "settings-clipboard-clear",
+                prefix: "clip",
+                options: &[10, 30, 60, 120, 0],
+                zero: t!("settings.never"),
+                label: seconds_label,
+                current: self.clipboard_clear_secs,
+                set: Self::set_clipboard_clear_secs,
+            },
             cx,
         );
         let session_group = Self::group(
-            "SESSÃO",
+            t!("settings.group_session"),
             vec![
                 Self::row(
-                    "Pedir a senha mestra ao abrir",
-                    "Depois de digitar a senha, o app abre direto por esse tempo. Quem usar este computador com o seu usuário do Windows abre o cofre sem senha nesse período. Se a senha mudar, ela volta a ser pedida.",
+                    t!("settings.unlock_memory"),
+                    t!("settings.unlock_memory_desc"),
                     unlock_control,
                     cx,
                 ),
                 Self::row(
-                    "Pedir login completo a cada",
-                    "E-mail, senha mestra e 2FA de novo depois desse tempo. Trocar a senha ou encerrar a sessão em outro lugar também pede login.",
+                    t!("settings.relogin"),
+                    t!("settings.relogin_desc"),
                     relogin_control,
                     cx,
                 ),
                 Self::row(
-                    "Bloquear sem uso após",
-                    "Tempo sem mexer no teclado ou no mouse até o cofre bloquear.",
+                    t!("settings.auto_lock"),
+                    t!("settings.auto_lock_desc"),
                     lock_control,
                     cx,
                 ),
                 Self::row(
-                    "Busca rápida (Ctrl+Shift+Espaço)",
-                    "Em qualquer app, abre uma janelinha para achar um item e preencher, copiar o usuário, a senha ou o código, sem abrir o Scout Vault.",
+                    t!("settings.quick_search"),
+                    t!("settings.quick_search_desc"),
                     Switch::new("quick-search-setting")
                         .checked(self.quick_search)
-                        .on_click(cx.listener(|this, v: &bool, _, cx| {
-                            this.set_quick_search(*v, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_quick_search(*v, cx)),
+                        ),
                     cx,
                 ),
                 Self::row(
-                    "Sincronizar em segundo plano",
-                    "A cada minuto o app pergunta ao servidor se o cofre mudou (no celular, no cofre web…) e, se mudou, atualiza sozinho. A pergunta não baixa o cofre.",
+                    t!("settings.background_sync"),
+                    t!("settings.background_sync_desc"),
                     Switch::new("background-sync")
                         .checked(self.background_sync)
-                        .on_click(cx.listener(|this, v: &bool, _, cx| {
-                            this.set_background_sync(*v, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_background_sync(*v, cx)),
+                        ),
                     cx,
                 ),
                 Self::row(
-                    "Desbloquear com Windows Hello",
+                    t!("settings.windows_hello"),
                     if crate::hello::available(cx) {
-                        "Rosto, digital ou PIN do Windows no lugar da senha mestra. A chave fica cifrada pelo Windows Hello; se a senha mestra mudar, ligue de novo."
+                        t!("settings.windows_hello_desc")
                     } else {
-                        "O Windows Hello não está configurado neste computador (Configurações do Windows › Contas › Opções de entrada)."
+                        t!("settings.windows_hello_unavailable")
                     },
                     Switch::new("windows-hello")
                         .checked(self.windows_hello)
                         .disabled(!crate::hello::available(cx) && !self.windows_hello)
-                        .on_click(cx.listener(|this, v: &bool, _, cx| {
-                            this.set_windows_hello(*v, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_windows_hello(*v, cx)),
+                        ),
                     cx,
                 ),
                 Self::row(
-                    "Bloquear junto com o Windows",
-                    "Ao bloquear o computador (Win+L) ou ao suspender/hibernar, o cofre também bloqueia.",
+                    t!("settings.lock_with_windows"),
+                    t!("settings.lock_with_windows_desc"),
                     Switch::new("lock-with-windows")
                         .checked(self.lock_with_windows)
-                        .on_click(cx.listener(|this, v: &bool, _, cx| {
-                            this.set_lock_with_windows(*v, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_lock_with_windows(*v, cx)),
+                        ),
                     cx,
                 ),
                 Self::row(
-                    "Ao fechar, continuar na bandeja",
-                    "O app segue rodando perto do relógio: Ctrl+Alt+A e o navegador continuam funcionando. Para sair de vez, use Sair no ícone.",
+                    t!("settings.lock_on_minimize"),
+                    t!("settings.lock_on_minimize_desc"),
+                    Switch::new("lock-on-minimize")
+                        .checked(self.lock_on_minimize)
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_lock_on_minimize(*v, cx)),
+                        ),
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.clipboard_clear"),
+                    t!("settings.clipboard_clear_desc"),
+                    clipboard_control,
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.close_to_tray"),
+                    t!("settings.close_to_tray_desc"),
                     Switch::new("tray-on-close")
                         .checked(self.close_to_tray)
-                        .on_click(cx.listener(|this, v: &bool, _, cx| this.set_close_to_tray(*v, cx))),
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_close_to_tray(*v, cx)),
+                        ),
                     cx,
                 ),
                 Self::row(
-                "Lembrar sessão",
-                "Ao abrir o app, pede só a senha mestra. O cofre fica guardado cifrado neste computador e abre mesmo sem internet.",
-                Switch::new("remember-session")
-                    .checked(self.remember_session)
-                    .on_click(cx.listener(|this, v: &bool, _, cx| {
-                        this.set_remember_session(*v, cx)
-                    })),
-                cx,
-            )],
+                    t!("settings.remember_session"),
+                    t!("settings.remember_session_desc"),
+                    Switch::new("remember-session")
+                        .checked(self.remember_session)
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_remember_session(*v, cx)),
+                        ),
+                    cx,
+                ),
+            ],
             cx,
         );
 
@@ -706,12 +861,12 @@ impl Render for SettingsView {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_2xl().font_semibold().child("Configurações"))
+                    .child(div().text_2xl().font_semibold().child(t!("settings.title")))
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("As mudanças valem na hora e ficam salvas neste computador."),
+                            .child(t!("settings.subtitle")),
                     ),
             )
             .child(
@@ -719,7 +874,7 @@ impl Render for SettingsView {
                     .ghost()
                     .small()
                     .icon(IconName::Close)
-                    .tooltip("Fechar (Esc)")
+                    .tooltip(t!("common.close_esc"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close))),
             );
 

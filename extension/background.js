@@ -1,7 +1,7 @@
-// Fundo da extensão: recebe o login enviado num site (capture.js), pergunta ao
-// app se é novo ou uma senha nova e, depois do "Salvar" da pessoa na página,
-// manda o app salvar. O login pendente fica só na memória do navegador
-// (chrome.storage.session) e expira em 2 minutos.
+// Extension background: receives the login submitted on a site (capture.js), asks the
+// app whether it is new or a new password and, after the person's "Save" on the page,
+// tells the app to save it. The pending login lives only in the browser's memory
+// (chrome.storage.session) and expires in 2 minutes.
 const HOST = "com.scoutvault.desktop";
 const TTL_MS = 2 * 60 * 1000;
 
@@ -32,7 +32,7 @@ async function getPending(tabId) {
 
 const clearPending = (tabId) => chrome.storage.session.remove(key(tabId));
 
-// O que a página precisa para mostrar a pergunta (sem a senha).
+// What the page needs to show the question (without the password).
 const promptOf = (p) => ({
   type: "prompt",
   action: p.action,
@@ -48,7 +48,7 @@ async function captured(tabId, msg) {
     username: msg.username,
     password: msg.password,
   });
-  // App fechado ou integração desligada: não incomoda.
+  // App closed or integration turned off: don't bother the person.
   if (answer.error) return;
   const action = answer.locked ? "save-locked" : answer.action;
   if (action !== "save" && action !== "update" && action !== "save-locked") return;
@@ -62,7 +62,7 @@ async function captured(tabId, msg) {
     at: Date.now(),
   };
   await chrome.storage.session.set({ [key(tabId)]: pending });
-  // Página que não recarrega (SPA): pergunta já. Se a página mudou, a nova pergunta ao abrir.
+  // Page that doesn't reload (SPA): ask right away. If the page changed, the new one asks when it opens.
   chrome.tabs.sendMessage(tabId, promptOf(pending)).catch(() => {});
 }
 
@@ -80,7 +80,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "confirm") {
     getPending(tabId).then(async (p) => {
       if (!p) {
-        sendResponse({ error: "A pergunta expirou. Envie o login de novo para salvar." });
+        sendResponse({ error: chrome.i18n.getMessage("errExpired") });
         return;
       }
       await clearPending(tabId);
@@ -92,6 +92,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "dismiss") {
     clearPending(tabId);
+    return;
+  }
+  // Inline menu: the address is ALWAYS the one of the frame that asked (sender.url), never
+  // one that comes in the message — a page can't ask for another site's logins.
+  const frameUrl = sender.url || "";
+  if (!/^https?:\/\//.test(frameUrl)) return;
+  if (msg.type === "inline-list") {
+    ask({ type: "list", url: frameUrl }).then(sendResponse);
+    return true;
+  }
+  if (msg.type === "inline-fill" && typeof msg.id === "string") {
+    ask({ type: "fill", id: msg.id, url: frameUrl }).then(sendResponse);
+    return true;
+  }
+});
+
+// "Open the menu in the login field" shortcut (Alt+Shift+L by default).
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "inline-menu") return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab && tab.id != null) {
+    chrome.tabs.sendMessage(tab.id, { type: "open-inline" }, { frameId: 0 }).catch(() => {});
   }
 });
 

@@ -1,14 +1,14 @@
-//! Núcleo do Scout Vault: tudo que fala com o servidor compatível com Bitwarden
-//! e tudo que cifra/decifra. Não depende de UI, para ser testável isoladamente.
+//! Scout Vault core: everything that talks to the Bitwarden-compatible server
+//! and everything that encrypts/decrypts. It doesn't depend on the UI, so it can be tested on its own.
 //!
-//! - [`api`]        — cliente HTTP: prelogin, login (2FA, novo dispositivo), refresh, sync
+//! - [`api`]        — HTTP client: prelogin, login (2FA, new device), refresh, sync
 //! - [`crypto`]     — master key (PBKDF2/Argon2id), stretch (HKDF), AES-CBC + HMAC, RSA-OAEP
-//! - [`edit`]       — escrita: item editado → corpo cifrado para o servidor
-//! - [`enc_string`] — formato `EncString` (`2.iv|ct|mac`, `4.data`)
-//! - [`kdf`]        — parâmetros de derivação de chave
-//! - [`sync`]       — resposta do sync, ainda cifrada (segura para cache)
-//! - [`totp`]       — códigos do autenticador (RFC 6238, Steam)
-//! - [`vault`]      — cofre decifrado: itens, pastas, organizações, busca
+//! - [`edit`]       — writing: edited item → encrypted body for the server
+//! - [`enc_string`] — `EncString` format (`2.iv|ct|mac`, `4.data`)
+//! - [`kdf`]        — key derivation parameters
+//! - [`sync`]       — sync response, still encrypted (safe to cache)
+//! - [`totp`]       — authenticator codes (RFC 6238, Steam)
+//! - [`vault`]      — decrypted vault: items, folders, organizations, search
 
 pub mod api;
 pub mod attachment;
@@ -17,6 +17,7 @@ pub mod crypto;
 pub mod edit;
 pub mod enc_string;
 pub mod generator;
+pub mod health;
 mod json;
 pub mod kdf;
 pub mod secret;

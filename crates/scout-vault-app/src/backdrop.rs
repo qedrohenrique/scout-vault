@@ -1,11 +1,11 @@
-//! Arte vetorial animada do fundo das telas de entrada (login e desbloqueio).
+//! Animated vector art for the background of the entry screens (login and unlock).
 //!
-//! Duas faixas onduladas nas laterais, como fumaça ou algas, balançando devagar,
-//! e pequenas formas (bolhas, seixos, arcos, pontos) subindo pelo meio. Tudo em
-//! traços finos na cor de destaque, bem transparente, para não competir com o
-//! formulário. Sem imagens: só caminhos calculados a cada quadro.
+//! Two wavy bands on the sides, like smoke or seaweed, swaying slowly,
+//! and small shapes (bubbles, pebbles, arcs, dots) rising through the middle. All in
+//! thin strokes in the accent color, very transparent, so as not to compete with the
+//! form. No images: only paths computed every frame.
 //!
-//! Com as animações desligadas (Configurações → Movimento), a arte fica parada.
+//! With animations off (Settings → Motion), the art stays still.
 
 use std::f32::consts::TAU;
 use std::sync::OnceLock;
@@ -13,13 +13,13 @@ use std::time::Instant;
 
 use gpui_kit::*;
 
-/// Preferência de movimento, guardada no estado do app (não no processo:
-/// assim cada janela/teste tem a sua).
+/// Motion preference, kept in the app state (not in the process:
+/// that way each window/test has its own).
 struct MotionSetting(bool);
 
 impl Global for MotionSetting {}
 
-/// Liga/desliga o movimento (chamado ao aplicar a aparência).
+/// Turns motion on/off (called when applying the appearance).
 pub fn set_motion(on: bool, cx: &mut App) {
     cx.set_global(MotionSetting(on));
 }
@@ -31,7 +31,7 @@ pub fn motion(cx: &App) -> bool {
 fn seconds(animated: bool) -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     if !animated {
-        // Parado num instante bonito (as faixas já com curvas).
+        // Frozen at a nice moment (the bands already curved).
         return 7.0;
     }
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
@@ -39,33 +39,33 @@ fn seconds(animated: bool) -> f32 {
 
 #[derive(Clone, Copy)]
 enum Shape {
-    /// Bolha: círculo vazado.
+    /// Bubble: hollow circle.
     Ring,
-    /// Seixo: quadrado bem arredondado.
+    /// Pebble: very rounded square.
     Pebble,
-    /// Bolinha cheia.
+    /// Filled dot.
     Dot,
-    /// Polígono regular vazado com `n` lados (triângulo, quadrado, losango, hexágono…).
+    /// Hollow regular polygon with `n` sides (triangle, square, diamond, hexagon…).
     Polygon(u8),
-    /// Polígono regular cheio, pequeno.
+    /// Small filled regular polygon.
     SolidPolygon(u8),
 }
 
 struct Particle {
     shape: Shape,
-    /// Posição horizontal, fração da largura.
+    /// Horizontal position, fraction of the width.
     x: f32,
-    /// Fase vertical inicial, fração da altura.
+    /// Initial vertical phase, fraction of the height.
     y: f32,
     size: f32,
-    /// Pixels por segundo, para cima.
+    /// Pixels per second, upwards.
     speed: f32,
     phase: f32,
 }
 
 const PARTICLES: usize = 32;
 
-/// Gerador pseudoaleatório fixo: o desenho é sempre o mesmo, sem depender de semente do sistema.
+/// Fixed pseudo-random generator: the drawing is always the same, with no system seed.
 fn particles() -> &'static [Particle] {
     static LIST: OnceLock<Vec<Particle>> = OnceLock::new();
     LIST.get_or_init(|| {
@@ -76,7 +76,7 @@ fn particles() -> &'static [Particle] {
             state ^= state << 5;
             (state % 10_000) as f32 / 10_000.0
         };
-        // Só formas fechadas: bolhas, bolinhas e figuras geométricas.
+        // Only closed shapes: bubbles, dots and geometric figures.
         let shapes = [
             Shape::Ring,
             Shape::Polygon(3),
@@ -96,7 +96,7 @@ fn particles() -> &'static [Particle] {
                 let shape = shapes[i % shapes.len()];
                 Particle {
                     shape,
-                    // Faixa central, longe das ondas das laterais.
+                    // Central band, away from the waves on the sides.
                     x: 0.2 + next() * 0.6,
                     y: next(),
                     size: match shape {
@@ -116,7 +116,7 @@ fn pt(x: f32, y: f32) -> Point<Pixels> {
     point(px(x), px(y))
 }
 
-/// Contorno ondulado de uma lateral: distância da borda em função de `y`.
+/// Wavy outline of a side: distance from the edge as a function of `y`.
 fn edge_offset(y: f32, height: f32, width: f32, t: f32, layer: f32) -> f32 {
     let base = (width * 0.07).clamp(40.0, 110.0) + layer * (width * 0.022).clamp(12.0, 26.0);
     let big = (width * 0.04).clamp(22.0, 52.0);
@@ -133,7 +133,7 @@ fn paint_edges(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Window
     let steps = (h / step).ceil() as usize + 1;
 
     for right in [false, true] {
-        // Lado direito em contrafase, para não ficar espelhado.
+        // Right side in antiphase, so it doesn't look mirrored.
         let t = if right { t + 11.0 } else { t };
         let x_at = |y: f32, layer: f32| {
             let d = edge_offset(y, h, w, t, layer);
@@ -144,7 +144,7 @@ fn paint_edges(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Window
             }
         };
 
-        // Faixa preenchida, bem clara.
+        // Filled band, very light.
         let mut fill = PathBuilder::fill();
         let edge = if right { ox + w } else { ox };
         fill.move_to(pt(edge, oy));
@@ -158,7 +158,7 @@ fn paint_edges(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Window
             window.paint_path(path, accent.opacity(0.07));
         }
 
-        // Contornos: o da faixa e dois mais para dentro, cada vez mais leves.
+        // Outlines: the band's and two more further in, each lighter.
         for (layer, alpha, width) in [(0.0, 0.30, 1.6), (1.0, 0.18, 1.3), (2.0, 0.10, 1.1)] {
             let mut line = PathBuilder::stroke(px(width));
             line.move_to(pt(x_at(0.0, layer), oy));
@@ -173,7 +173,7 @@ fn paint_edges(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Window
     }
 }
 
-/// Polígono fechado ou aberto a partir de uma curva paramétrica em `[a, b]`.
+/// Closed or open polygon from a parametric curve over `[a, b]`.
 fn param_path(
     stroke: Option<f32>,
     a: f32,
@@ -203,10 +203,10 @@ fn paint_particles(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Wi
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let travel = h + 60.0;
     for p in particles() {
-        // Sobe e recomeça embaixo.
+        // Rises and starts again at the bottom.
         let y = (p.y * travel - p.speed * t).rem_euclid(travel) - 30.0;
         let x = p.x * w + 10.0 * (t * 0.5 + p.phase).sin();
-        // Some suavemente perto do topo e da base.
+        // Fades out smoothly near the top and bottom.
         let edge_fade = (y / 90.0).clamp(0.0, 1.0) * ((h - y) / 90.0).clamp(0.0, 1.0);
         let alpha = 0.5 * edge_fade;
         if alpha <= 0.01 {
@@ -229,7 +229,7 @@ fn paint_particles(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Wi
                 TAU,
                 32,
                 |a| {
-                    // Superelipse: quadrado de cantos bem redondos, levemente inclinado.
+                    // Superellipse: square with very round corners, slightly tilted.
                     let (c, s) = (a.cos(), a.sin());
                     let ex = c.signum() * c.abs().powf(0.5) * r * 1.15;
                     let ey = s.signum() * s.abs().powf(0.5) * r * 0.9;
@@ -240,7 +240,7 @@ fn paint_particles(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Wi
             ),
             Shape::Polygon(n) | Shape::SolidPolygon(n) => {
                 let stroke = matches!(p.shape, Shape::Polygon(_)).then_some(1.5);
-                // Gira devagar; os vértices ficam no círculo de raio `r`.
+                // Spins slowly; the vertices stay on the circle of radius `r`.
                 param_path(
                     stroke,
                     spin * 0.6,
@@ -265,13 +265,17 @@ fn paint_particles(bounds: Bounds<Pixels>, accent: Hsla, t: f32, window: &mut Wi
     }
 }
 
-/// Camada de fundo: ocupa o pai inteiro (que deve ser `relative`).
+/// Background layer: fills the whole parent (which must be `relative`).
 pub fn backdrop(accent: Hsla, cx: &App) -> impl IntoElement {
     let animated = motion(cx);
     div()
         .id("entry-backdrop")
         .test_support()
-        .aria_label(if animated { "animado" } else { "parado" })
+        .aria_label(if animated {
+            t!("appearance.motion_on_lower")
+        } else {
+            t!("appearance.motion_off_lower")
+        })
         .absolute()
         .top_0()
         .left_0()
@@ -283,9 +287,9 @@ pub fn backdrop(accent: Hsla, cx: &App) -> impl IntoElement {
                     let t = seconds(animated);
                     paint_edges(bounds, accent, t, window);
                     paint_particles(bounds, accent, t, window);
-                    // Só anima com a janela em foco: em segundo plano (ex.: durante
-                    // um jogo) a arte fica parada e não gasta processador.
-                    if animated && window.is_window_active() {
+                    // Animates even without focus (the window is still visible); only stops
+                    // when minimized, when nobody sees it and it isn't worth spending CPU.
+                    if animated && !crate::tray::is_minimized(window) {
                         window.request_animation_frame();
                     }
                 },
@@ -296,7 +300,7 @@ pub fn backdrop(accent: Hsla, cx: &App) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    // Sem `use super::*`: o `gpui_kit::*` traz outro atributo `test`.
+    // No `use super::*`: `gpui_kit::*` brings in another `test` attribute.
     use super::{edge_offset, particles, PARTICLES};
 
     #[test]
@@ -308,7 +312,7 @@ mod tests {
                 while y <= h {
                     for layer in [0.0, 1.0, 2.0] {
                         let d = edge_offset(y, h, w, t, layer);
-                        // Nunca invade o meio (o cartão do formulário tem ~400 px).
+                        // Never invades the middle (the form card is ~400 px).
                         assert!(d > 0.0 && d < w * 0.5 - 220.0, "w={w} y={y} t={t} d={d}");
                     }
                     y += 37.0;

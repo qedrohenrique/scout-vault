@@ -1,13 +1,13 @@
-//! Sessão lembrada: abrir o app direto no desbloqueio, sem e-mail nem 2FA.
+//! Remembered session: open the app straight to unlock, without email or 2FA.
 //!
-//! O que fica guardado e onde:
-//! - `%APPDATA%\Scout Vault\sessao.json`: servidor, e-mail, KDF e o **sync cifrado**
-//!   exatamente como o servidor mandou. Sem a senha mestra não dá para ler
-//!   nada dele — é o mesmo que o servidor guarda.
-//! - **Gerenciador de Credenciais do Windows**: o refresh token (é ele que
-//!   permite sincronizar sem login). O access token não é guardado.
+//! What is stored and where:
+//! - `%APPDATA%\Scout Vault\sessao.json`: server, email, KDF and the **encrypted sync**
+//!   exactly as the server sent it. Without the master password nothing in it
+//!   can be read — it is the same thing the server stores.
+//! - **Windows Credential Manager**: the refresh token (that is what
+//!   allows syncing without logging in). The access token is not stored.
 //!
-//! "Sair da conta", sessão expirada ou desligar a opção apagam os dois.
+//! "Sign out", an expired session or turning the option off deletes both.
 
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ struct Saved {
     email: String,
     kdf: Kdf,
     sync: SyncResponse,
-    /// Último login completo (0 = desconhecido: sessões salvas antes desta opção).
+    /// Last full login (0 = unknown: sessions saved before this option existed).
     #[serde(default)]
     logged_in_at: u64,
 }
@@ -42,7 +42,7 @@ fn token_key(urls: &ServerUrls, email: &str) -> String {
     )
 }
 
-/// Guarda a sessão (se a opção estiver ligada).
+/// Stores the session (if the option is on).
 pub fn save(store: &SettingsStore, session: &Session) {
     if !store.load().remember_session || session.refresh_token.is_empty() {
         return;
@@ -66,8 +66,8 @@ pub fn save(store: &SettingsStore, session: &Session) {
     store.write_session_blob(Some(&bytes));
 }
 
-/// Sessão guardada, pronta para o desbloqueio offline. `None` se não houver,
-/// se a opção estiver desligada ou se faltar o refresh token.
+/// Stored session, ready for offline unlock. `None` if there is none,
+/// if the option is off or if the refresh token is missing.
 pub fn load(store: &SettingsStore) -> Option<Session> {
     let settings = store.load();
     if !settings.remember_session {
@@ -77,7 +77,7 @@ pub fn load(store: &SettingsStore) -> Option<Session> {
     if saved.version != VERSION {
         return None;
     }
-    // "Pedir login completo a cada N dias": passou do prazo, esquece a sessão.
+    // "Ask for a full login every N days": past the deadline, forget the session.
     let logged_in_at = if saved.logged_in_at == 0 {
         crate::flow::now_secs()
     } else {
@@ -101,7 +101,7 @@ pub fn load(store: &SettingsStore) -> Option<Session> {
         client: Arc::new(client),
         email: saved.email,
         kdf: saved.kdf,
-        // Vencido de qualquer jeito: o primeiro sync renova com o refresh token.
+        // Expired either way: the first sync renews it with the refresh token.
         access_token: String::new(),
         refresh_token,
         sync: Arc::new(saved.sync),
@@ -109,7 +109,7 @@ pub fn load(store: &SettingsStore) -> Option<Session> {
     })
 }
 
-/// Esquece a sessão: apaga o arquivo e o refresh token.
+/// Forgets the session: deletes the file and the refresh token.
 pub fn clear(store: &SettingsStore) {
     if let Some(saved) = store
         .read_session_blob()
@@ -128,7 +128,7 @@ pub fn clear(store: &SettingsStore) {
     store.write_session_blob(None);
 }
 
-/// Mesmo nome que [`crate::quick_unlock`] usa para a chave guardada.
+/// Same name that [`crate::quick_unlock`] uses for the stored key.
 fn quick_key(urls: &ServerUrls, email: &str) -> String {
     format!(
         "desbloqueio|{}|{}",
@@ -137,7 +137,7 @@ fn quick_key(urls: &ServerUrls, email: &str) -> String {
     )
 }
 
-/// Apaga só a chave de "abrir sem senha" da sessão lembrada (a opção foi desligada).
+/// Deletes only the remembered session's "open without password" key (the option was turned off).
 pub fn forget_quick_unlock(store: &SettingsStore) {
     if let Some(saved) = store
         .read_session_blob()

@@ -1,4 +1,4 @@
-//! Cofre decifrado, pronto para a UI. Vive só em memória.
+//! Decrypted vault, ready for the UI. Lives only in memory.
 
 use std::collections::HashMap;
 
@@ -23,17 +23,17 @@ pub enum VaultError {
     Unsupported(String),
 }
 
-/// Chaves da sessão desbloqueada.
+/// Keys of the unlocked session.
 #[derive(Debug)]
 pub struct Keys {
     user: SymmetricKey,
     orgs: HashMap<String, SymmetricKey>,
-    /// Organizações cuja chave não abriu (o resto do cofre continua acessível).
+    /// Organizations whose key didn't open (the rest of the vault stays accessible).
     pub failed_orgs: Vec<(String, VaultError)>,
 }
 
 impl Keys {
-    /// Abre a user key com a master key e, a partir dela, as chaves de organização.
+    /// Opens the user key with the master key and, from it, the organization keys.
     pub fn unlock(master_key: &MasterKey, profile: &Profile) -> Result<Self, VaultError> {
         let protected = profile.key.as_deref().ok_or(VaultError::MissingUserKey)?;
         let protected: EncString = protected.parse()?;
@@ -48,17 +48,17 @@ impl Keys {
         Self::from_user_key(user, profile)
     }
 
-    /// Monta as chaves a partir da user key já aberta (ex.: guardada para abrir
-    /// sem senha por alguns dias). Confere que ela ainda abre o perfil: se a
-    /// senha mestra mudou e a chave foi trocada, falha com [`VaultError::WrongPassword`].
+    /// Builds the keys from an already opened user key (e.g. stored to open
+    /// without a password for a few days). Checks that it still opens the profile: if the
+    /// master password changed and the key was rotated, fails with [`VaultError::WrongPassword`].
     pub fn from_user_key(user: SymmetricKey, profile: &Profile) -> Result<Self, VaultError> {
         let mut keys = Keys {
             user,
             orgs: HashMap::new(),
             failed_orgs: Vec::new(),
         };
-        // A chave privada do perfil é cifrada com a user key: se não abre, a
-        // chave não é mais desta conta (ex.: a senha mestra mudou e ela foi trocada).
+        // The profile's private key is encrypted with the user key: if it doesn't open, the
+        // key no longer belongs to this account (e.g. the master password changed and it was rotated).
         if let Some(pk) = profile.private_key.as_deref() {
             if keys.user.decrypt(&pk.parse()?).is_err() {
                 return Err(VaultError::WrongPassword);
@@ -109,7 +109,7 @@ impl Keys {
         &self.user
     }
 
-    /// Chave que cifra itens do dono indicado (`None` = cofre pessoal).
+    /// Key that encrypts items of the given owner (`None` = personal vault).
     pub fn for_owner(&self, organization_id: Option<&str>) -> Result<&SymmetricKey, VaultError> {
         match organization_id {
             None => Ok(&self.user),
@@ -133,7 +133,7 @@ pub struct Organization {
     pub name: String,
 }
 
-/// Coleção de uma organização (onde os itens da organização ficam).
+/// An organization's collection (where the organization's items live).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Collection {
     pub id: String,
@@ -142,7 +142,7 @@ pub struct Collection {
     pub read_only: bool,
 }
 
-/// Arquivo anexado ao item (o conteúdo fica no servidor, cifrado).
+/// File attached to the item (the contents stay on the server, encrypted).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
     pub id: String,
@@ -158,15 +158,15 @@ pub struct Item {
     pub name: String,
     pub notes: Option<Secret>,
     pub favorite: bool,
-    /// Exige digitar a senha mestra de novo antes de revelar.
+    /// Requires typing the master password again before revealing.
     pub reprompt: bool,
-    /// Está na lixeira.
+    /// It is in the trash.
     pub deleted: bool,
     pub revision_date: Option<String>,
     pub fields: Vec<Field>,
     pub kind: ItemKind,
     pub attachments: Vec<Attachment>,
-    /// Coleções do item (só itens de organização).
+    /// The item's collections (organization items only).
     pub collection_ids: Vec<String>,
 }
 
@@ -177,7 +177,7 @@ pub enum ItemKind {
     Card(Card),
     Identity(Box<Identity>),
     SshKey(SshKey),
-    /// Tipo que este cliente ainda não conhece — mantido para não sumir da lista.
+    /// Type this client doesn't know yet — kept so it doesn't vanish from the list.
     Unknown(u8),
 }
 
@@ -185,7 +185,7 @@ pub enum ItemKind {
 pub struct Login {
     pub username: Option<String>,
     pub password: Option<Secret>,
-    /// Chave/URI `otpauth://` do autenticador.
+    /// Authenticator key/`otpauth://` URI.
     pub totp: Option<Secret>,
     pub uris: Vec<String>,
 }
@@ -246,7 +246,7 @@ pub struct Field {
 }
 
 impl Item {
-    /// Busca simples, sem diferenciar maiúsculas: nome, usuário e URIs.
+    /// Simple case-insensitive search: name, username and URIs.
     pub fn matches(&self, query: &str) -> bool {
         let q = query.trim().to_lowercase();
         if q.is_empty() {
@@ -273,7 +273,7 @@ pub struct Vault {
     pub collections: Vec<Collection>,
     pub folders: Vec<Folder>,
     pub items: Vec<Item>,
-    /// Itens/pastas que não abriram, com o motivo. Um item corrompido não derruba o cofre.
+    /// Items/folders that didn't open, with the reason. A corrupted item doesn't take down the vault.
     pub errors: Vec<(String, VaultError)>,
 }
 
@@ -333,7 +333,7 @@ impl Vault {
         vault
     }
 
-    /// Itens ativos (fora da lixeira) que batem com a busca.
+    /// Active items (not in the trash) that match the search.
     pub fn search(&self, query: &str) -> impl Iterator<Item = &Item> + '_ {
         let query = query.to_owned();
         self.items
@@ -344,7 +344,7 @@ impl Vault {
 
 fn decrypt_item(c: &CipherRaw, keys: &Keys) -> Result<Item, VaultError> {
     let owner_key = keys.for_owner(c.organization_id.as_deref())?;
-    // Itens novos têm chave própria, cifrada com a chave do dono.
+    // New items have their own key, encrypted with the owner's key.
     let item_key;
     let key = match &c.key {
         Some(k) => {
@@ -488,8 +488,8 @@ fn secret(key: &SymmetricKey, field: &Option<String>) -> Result<Option<Secret>, 
     }
 }
 
-/// Campo não tão sensível (nome, usuário, URI): decifrado para `String` comum,
-/// para a UI poder buscar e ordenar.
+/// Not-so-sensitive field (name, username, URI): decrypted into a plain `String`,
+/// so the UI can search and sort.
 fn plain(key: &SymmetricKey, field: &Option<String>) -> Result<Option<String>, VaultError> {
     Ok(secret(key, field)?.map(|s| s.expose().to_owned()))
 }

@@ -1,141 +1,148 @@
 # Roadmap — Scout Vault
 
-Cliente desktop nativo (Rust + GPUI) para servidores compatíveis com Bitwarden
-(Bitwarden oficial e Vaultwarden). Objetivo: um app **leve, rápido e agradável** que substitua o
-desktop Electron no uso diário — e que vá além dele onde um app nativo de desktop brilha
-(teclado, Windows, privacidade local).
+Native desktop client (Rust + GPUI) for Bitwarden-compatible servers (official Bitwarden and
+Vaultwarden). Goal: a **light, fast and pleasant** app that replaces the Electron desktop app for
+daily use — and goes beyond it where a native desktop app shines (keyboard, Windows, local
+privacy).
 
-**Princípios**
-- Nada decifrado vai para o disco (exceção explícita e opcional: a user key no Gerenciador de
-  Credenciais para "abrir sem senha por N dias"; com Windows Hello ela fica cifrada pelo Hello).
-  Segredos vivem em memória com `zeroize`.
-- `scout-vault-core` não conhece UI: protocolo e criptografia testáveis sozinhos.
-- Desenvolvimento contra um **Vaultwarden local** (`dev/`); conta real só para validação manual.
-- Implementar a partir das especificações e de projetos MIT (ex.: [`rbw`](https://github.com/doy/rbw));
-  **não copiar código do SDK oficial** (licença restritiva).
-- Interoperar sem perder dados: o que o Scout Vault não entende volta intacto ao servidor.
+**Principles**
+- Nothing decrypted goes to disk (explicit, optional exception: the user key in Credential
+  Manager for "open without password for N days"; with Windows Hello it is encrypted by Hello).
+  Secrets live in memory with `zeroize`.
+- `scout-vault-core` knows nothing about the UI: protocol and cryptography are testable on their own.
+- Development against a **local Vaultwarden** (`dev/`); a real account only for manual validation.
+- Implement from the specifications and from MIT projects (e.g. [`rbw`](https://github.com/doy/rbw));
+  **do not copy code from the official SDK** (restrictive license).
+- Interoperate without losing data: whatever Scout Vault doesn't understand goes back to the
+  server untouched.
 
 ---
 
-## Onde estamos (0.2.x)
+## Where we are (0.2.x)
 
-| Área | Feito |
+| Area | Done |
 |---|---|
-| **Conta** | Login (PBKDF2/Argon2id), 2FA (autenticador, e-mail, YubiKey, FIDO2/Windows Hello, Duo), novo dispositivo, "lembrar dispositivo", SSO com senha mestra, contas v2 (COSE), captcha/limite de tentativas explicados |
-| **Sessão** | Sessão lembrada e cache cifrado (abre offline), abrir sem senha por N dias, login completo a cada N dias, desbloqueio com Windows Hello, sync em segundo plano, bloqueio por inatividade configurável, bloqueio junto com o Windows (Win+L e suspensão), troca de senha detectada |
-| **Cofre** | Todos os tipos de item, busca, filtros, pastas (CRUD), organizações e coleções (criar/escolher/trocar), acesso rápido (itens fixados), TOTP ao vivo, lixeira, anexos (enviar/abrir/salvar, arrastar e soltar), histórico de senha preservado |
-| **Escrita** | Criar/editar/lixeira/restaurar/apagar, preservando passkeys, regras de URI e campos desconhecidos |
-| **Windows** | Preencher em apps (`Ctrl+Alt+A`), bandeja (fechar ≠ sair), instância única, área de transferência fora do Win+V, ícone/recursos do executável |
-| **Navegador** | Extensão MV3 (Chrome/Edge/Brave) com native messaging e pipe restrito ao usuário |
-| **Interface** | Tema claro/escuro, cor de destaque, animações (com "Parado"), toasts, gerador de senhas, atalhos |
-| **Qualidade** | Testes de UI headless (inclusive de layout), vetores públicos de cripto, testes ao vivo no Vaultwarden |
+| **Account** | Login (PBKDF2/Argon2id), 2FA (authenticator, email, YubiKey, FIDO2/Windows Hello, Duo), new device, "remember device", SSO with master password, v2 accounts (COSE), captcha/rate limits explained |
+| **Session** | Remembered session and encrypted cache (opens offline), open without password for N days, full login every N days, Windows Hello unlock, background sync, configurable idle lock, lock together with Windows (Win+L and sleep), password change detected |
+| **Vault** | All item types, search, filters, folders (CRUD), organizations and collections (create/choose/change), quick access (pinned items), live TOTP, trash, attachments (upload/open/save, drag and drop), password history preserved |
+| **Writing** | Create/edit/trash/restore/delete, preserving passkeys, URI rules and unknown fields |
+| **Windows** | Fill in apps (`Ctrl+Alt+A`), tray (close ≠ quit), single instance, clipboard kept out of Win+V, executable icon/resources |
+| **Browser** | MV3 extension (Chrome/Edge/Brave) with native messaging and a pipe restricted to the user |
+| **Interface** | Light/dark theme, accent color, animations (with "Still"), toasts, password generator, shortcuts |
+| **Quality** | Headless UI tests (including layout), public crypto test vectors, live tests against Vaultwarden |
 
-Validação manual com conta real: roteiro em [TESTE-CONTA-REAL.md](TESTE-CONTA-REAL.md).
+Manual validation with a real account: test plan in [REAL-ACCOUNT-TESTING.md](REAL-ACCOUNT-TESTING.md).
 
 ---
 
-## Comparativo com o mercado
+## Market comparison
 
-Visão geral (nov/2026) a partir da documentação pública de cada produto, olhando só o **app de
-desktop + extensão** no Windows. Recursos variam por plano; ✅ tem, 🟡 parcial, ❌ não tem.
+Overview (Nov 2026) based on each product's public documentation, looking only at the **desktop
+app + extension** on Windows. Features vary by plan; ✅ has it, 🟡 partial, ❌ doesn't have it.
 
-| Recurso | Scout Vault | Bitwarden (oficial) | 1Password | KeePassXC | Proton Pass |
+| Feature | Scout Vault | Bitwarden (official) | 1Password | KeePassXC | Proton Pass |
 |---|:-:|:-:|:-:|:-:|:-:|
-| App nativo leve (sem Electron) | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Sincronização na nuvem / multi-dispositivo | ✅ (servidor Bitwarden) | ✅ | ✅ | ❌ (arquivo) | ✅ |
-| Preenchimento no navegador | 🟡 popup | ✅ inline + automático | ✅ | ✅ | ✅ |
-| Salvar/atualizar login pelo navegador | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Preencher em apps do desktop (auto-type) | ✅ | ❌ | 🟡 | ✅ | ❌ |
-| Passkeys (criar e usar) | ❌ (preserva) | ✅ | ✅ | ✅ | ✅ |
-| Busca rápida global (atalho no sistema) | ✅ | ❌ | ✅ Quick Access | 🟡 | ❌ |
-| Desbloquear com Windows Hello | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Bloquear junto com o Windows | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Re-prompt da senha em itens sensíveis | ✅ | ✅ | 🟡 | ❌ | ❌ |
-| Saúde das senhas (fracas, repetidas, vazadas) | ❌ | ✅ relatórios | ✅ Watchtower | ✅ | ✅ |
-| Gerador de passphrase e de usuário | 🟡 só senha | ✅ | ✅ | ✅ | ✅ |
-| Aliases de e-mail (esconder e-mail) | ❌ | ✅ via serviços | ✅ | ❌ | ✅ nativo |
-| Compartilhamento seguro (Send / link) | ❌ | ✅ Send | ✅ | ❌ | ✅ |
-| Mover item para organização / compartilhar | ❌ | ✅ | ✅ | ❌ | ✅ |
-| Histórico de versões do item | 🟡 só senha | 🟡 só senha | ✅ | ✅ | ❌ |
-| Várias contas ao mesmo tempo | ❌ | ✅ | ✅ | ✅ (vários arquivos) | ✅ |
-| Agente SSH | ❌ (guarda chaves) | ✅ | ✅ | ✅ | ❌ |
-| Importar / exportar | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Acesso de emergência | ❌ | ✅ | 🟡 | ❌ | ❌ |
-| Ícones dos sites na lista | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Light native app (no Electron) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Cloud sync / multi-device | ✅ (Bitwarden server) | ✅ | ✅ | ❌ (file) | ✅ |
+| Browser autofill | 🟡 popup | ✅ inline + automatic | ✅ | ✅ | ✅ |
+| Save/update login from the browser | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Fill in desktop apps (auto-type) | ✅ | ❌ | 🟡 | ✅ | ❌ |
+| Passkeys (create and use) | ❌ (preserved) | ✅ | ✅ | ✅ | ✅ |
+| Global quick search (system shortcut) | ✅ | ❌ | ✅ Quick Access | 🟡 | ❌ |
+| Unlock with Windows Hello | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Lock together with Windows | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Password re-prompt on sensitive items | ✅ | ✅ | 🟡 | ❌ | ❌ |
+| Password health (weak, reused, leaked) | ✅ | ✅ reports | ✅ Watchtower | ✅ | ✅ |
+| Passphrase and username generator | 🟡 password only | ✅ | ✅ | ✅ | ✅ |
+| Email aliases (hide my email) | ❌ | ✅ via services | ✅ | ❌ | ✅ native |
+| Secure sharing (Send / link) | ❌ | ✅ Send | ✅ | ❌ | ✅ |
+| Move item to organization / share | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Item version history | 🟡 password only | 🟡 password only | ✅ | ✅ | ❌ |
+| Several accounts at once | ❌ | ✅ | ✅ | ✅ (several files) | ✅ |
+| SSH agent | ❌ (stores keys) | ✅ | ✅ | ✅ | ❌ |
+| Import / export | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Emergency access | ❌ | ✅ | 🟡 | ❌ | ❌ |
+| Website icons in the list | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Firefox | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Instalador / atualização automática | ❌ (zip) | ✅ | ✅ | ✅ | ✅ |
+| Installer / automatic updates | ❌ (zip) | ✅ | ✅ | ✅ | ✅ |
 | Linux / macOS | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Auditoria de segurança externa | ❌ | ✅ | ✅ | ✅ | ✅ |
+| External security audit | ❌ | ✅ | ✅ | ✅ | ✅ |
 
-**Onde já nos destacamos:** leveza e rapidez, auto-type de verdade, bandeja/instância única,
-área de transferência fora do histórico, interface animada e acessível pelo teclado, Vaultwarden
-como cidadão de primeira classe.
+**Where we already stand out:** lightness and speed, real auto-type, tray/single instance,
+clipboard kept out of history, animated and keyboard-accessible interface, Vaultwarden as a
+first-class citizen.
 
-**Lacunas que mais pesam no dia a dia:** preenchimento inline no navegador, passkeys, saúde das
-senhas, instalador (Windows Hello, bloqueio com o Windows, re-prompt e salvar logins já entraram).
-
----
-
-## Próximas fases (prioridade de cima para baixo)
-
-### Fase A — Segurança do dia a dia
-- ~~Desbloquear com Windows Hello~~ — feito: a user key fica cifrada por uma assinatura do Hello (chave no TPM), com a senha mestra como alternativa.
-- ~~Bloquear ao bloquear/suspender o Windows~~ — feito (opção "Bloquear junto com o Windows", ligada por padrão).
-- ~~Re-prompt da senha mestra~~ — feito: itens marcados pedem a senha para revelar, copiar, editar e digitar; o navegador não recebe esses itens.
-- Bloquear ao minimizar (opcional) e "limpar área de transferência" com tempo configurável.
-- ~~Sync em segundo plano~~ — feito: a cada minuto o app consulta `accounts/revision-date` (barato) e sincroniza só se o cofre mudou. Próximo passo: notificações em tempo real (`/notifications/hub`, SignalR via WebSocket).
-
-### Fase B — Navegador de primeira linha
-- ~~Salvar e atualizar logins~~ — feito: barra "Salvar/Atualizar no Scout Vault?" depois do envio do formulário; o app decide entre novo e atualização.
-- **Menu inline** no campo (ícone do Scout Vault dentro do input) e atalho de teclado na página.
-- Preenchimento de **cartões e identidades**; copiar TOTP automaticamente após preencher.
-- **Firefox** (manifest próprio, `allowed_extensions`).
-- Publicar nas lojas (Chrome Web Store, Edge Add-ons) para não precisar do modo desenvolvedor.
-
-### Fase C — Produtividade de desktop
-- ~~Busca rápida global~~ — feito: `Ctrl+Shift+Espaço` abre uma janela flutuante para achar, copiar e preencher sem abrir o app.
-- **Ícones dos sites** na lista (serviço de ícones do servidor, com cache e opção de desligar).
-- Auto-type: **sequência por item** (`{USERNAME}{TAB}{PASSWORD}{ENTER}`, `{TOTP}`, atrasos) e janelas de admin.
-- Atalhos configuráveis; paleta de comandos (`Ctrl+K`).
-- Barra de título própria que acompanha o tema.
-
-### Fase D — Saúde e geração
-- **Relatório de saúde**: senhas fracas, repetidas, antigas e **vazadas** (HIBP por k-anonymity — só um
-  prefixo do hash sai da máquina); sites que aceitam 2FA e o item não tem.
-- **Passphrases** (lista EFF, CC BY 3.0) e **gerador de usuário**.
-- **Aliases de e-mail** via SimpleLogin, addy.io, Fastmail e DuckDuckGo (como o Bitwarden faz).
-
-### Fase E — Passkeys
-- Guardar e usar **passkeys** pela extensão (WebAuthn com credenciais do cofre, formato `fido2Credentials`).
-- Mais tarde: provedor de passkeys do Windows (API de plugins do Windows 11), se estável.
-
-### Fase F — Compartilhar e colaborar
-- **Mover item para organização** (recifrar com a chave da org, inclusive anexos).
-- **Bitwarden Send** (texto e arquivo, com prazo, senha e limite de acessos).
-- **Várias contas** abertas e troca rápida entre elas.
-- Acesso de emergência (aceitar/conceder) — depende do suporte do servidor.
-- Novos tipos de item do servidor (conta bancária, CNH, passaporte) quando estáveis.
-
-### Fase G — Dados
-- **Importar**: Bitwarden JSON/CSV, 1Password `.1pux`, KeePass `.kdbx`/CSV, Chrome/Edge CSV, Proton Pass.
-- **Exportar**: JSON cifrado com senha (formato do Bitwarden) e CSV (com aviso).
-- Histórico de versões do item (local, com restauração).
-
-### Fase H — Distribuição e confiança
-- **Instalador** (MSI/winget), **atualização automática** com assinatura das atualizações.
-- **Assinatura de código** do executável (remove o aviso do SmartScreen).
-- Builds para **Linux** e **macOS** (GPUI já roda nelas).
-- **Revisão de segurança externa** e política de divulgação de falhas.
-- Interface em inglês (i18n) e revisão de acessibilidade (leitor de tela, contraste).
-- Agente SSH (o cofre já guarda as chaves).
+**Gaps that matter most day to day:** inline browser autofill, passkeys, password health,
+installer (Windows Hello, locking with Windows, re-prompt and saving logins are already in).
 
 ---
 
-## Riscos e decisões em aberto
-- **API não documentada formalmente** — o servidor muda requisitos (ex.: versão mínima de
-  cliente, `encryptedFor`); acompanhar `rbw`, o changelog do Vaultwarden e os clientes oficiais.
-- **Envio de anexos para a nuvem oficial (Azure)** ainda não validado com conta real.
-- **Revisão de segurança** — antes de recomendar para uso amplo.
-- **Marca** — não usar nome/logo "Bitwarden"; "compatível com Bitwarden", projeto não oficial.
-- **"Abrir sem senha por N dias"** troca conveniência por risco local; fica desligado por padrão
-  e é descartado quando a senha muda.
+## Next phases (priority from top to bottom)
+
+### Phase A — Everyday security
+- ~~Unlock with Windows Hello~~ — done: the user key is encrypted by a Hello signature (key in the TPM), with the master password as a fallback.
+- ~~Lock when Windows locks/sleeps~~ — done (option "Lock together with Windows", on by default).
+- ~~Master password re-prompt~~ — done: marked items ask for the password to reveal, copy, edit and type; the browser doesn't receive these items.
+- ~~Lock on minimize and clipboard timeout~~ — done: "Lock on minimize" (also when closing to the tray) and "Clear the clipboard after" 10 s to 2 min, or never.
+- ~~Background sync~~ — done: every minute the app queries `accounts/revision-date` (cheap) and syncs only if the vault changed. Next step: real-time notifications (`/notifications/hub`, SignalR over WebSocket).
+
+### Phase B — First-class browser
+- ~~Save and update logins~~ — done: a "Save/Update in Scout Vault?" bar after the form is submitted; the app decides between new and update.
+- ~~Inline menu~~ — done: icon on the edge of the login field with the number of logins; click,
+  `Alt+↓` or `Alt+Shift+L` open the list; "Don't show on this site" and a switch in the popup.
+  Missing: forms inside iframes (today only the main page).
+- Filling **cards and identities**; copy the TOTP automatically after filling.
+- **Firefox** (its own manifest, `allowed_extensions`).
+- Publish to the stores (Chrome Web Store, Edge Add-ons) so developer mode isn't needed.
+
+### Phase C — Desktop productivity
+- ~~Global quick search~~ — done: `Ctrl+Shift+Space` opens a floating window to find, copy and fill without opening the app.
+- **Website icons** in the list (the server's icon service, with a cache and an option to turn it off).
+- Auto-type: **per-item sequence** (`{USERNAME}{TAB}{PASSWORD}{ENTER}`, `{TOTP}`, delays) and admin windows.
+- Configurable shortcuts; command palette (`Ctrl+K`).
+- Custom title bar that follows the theme.
+
+### Phase D — Health and generation
+- ~~Health report~~ — done: "Password health" screen (`Ctrl+Shift+H`) with a score, weak,
+  reused, old (no change in over a year) and **leaked** passwords (Have I Been Pwned with
+  k-anonymity: only 5 characters of the SHA-1 leave the machine, and only when the person asks).
+  Missing: sites that support 2FA where the item has none (2fa.directory list).
+- **Passphrases** (EFF list, CC BY 3.0) and **username generator**.
+- **Email aliases** via SimpleLogin, addy.io, Fastmail and DuckDuckGo (as Bitwarden does).
+
+### Phase E — Passkeys
+- Store and use **passkeys** through the extension (WebAuthn with vault credentials, `fido2Credentials` format).
+- Later: Windows passkey provider (Windows 11 plugin API), if stable.
+
+### Phase F — Sharing and collaboration
+- **Move item to organization** (re-encrypt with the org key, attachments included).
+- **Bitwarden Send** (text and file, with expiry, password and access limit).
+- **Several accounts** open with quick switching between them.
+- Emergency access (accept/grant) — depends on server support.
+- New server item types (bank account, driver's license, passport) once stable.
+
+### Phase G — Data
+- **Import**: Bitwarden JSON/CSV, 1Password `.1pux`, KeePass `.kdbx`/CSV, Chrome/Edge CSV, Proton Pass.
+- **Export**: password-encrypted JSON (Bitwarden format) and CSV (with a warning).
+- Item version history (local, with restore).
+
+### Phase H — Distribution and trust
+- **Installer** (MSI/winget), **automatic updates** with signed updates.
+- **Code signing** of the executable (removes the SmartScreen warning).
+- Builds for **Linux** and **macOS** (GPUI already runs there).
+- **External security review** and vulnerability disclosure policy.
+- ~~English interface (i18n)~~ — done: pt-BR and English in the app and the extension, with
+  catalogs that accept new languages.
+- Accessibility review (screen reader, contrast).
+- SSH agent (the vault already stores the keys).
+
+---
+
+## Risks and open decisions
+- **API not formally documented** — the server changes requirements (e.g. minimum client
+  version, `encryptedFor`); follow `rbw`, the Vaultwarden changelog and the official clients.
+- **Uploading attachments to the official cloud (Azure)** not yet validated with a real account.
+- **Security review** — before recommending it for wide use.
+- **Branding** — don't use the "Bitwarden" name/logo; "Bitwarden compatible", unofficial project.
+- **"Open without password for N days"** trades convenience for local risk; it is off by default
+  and discarded when the password changes.
