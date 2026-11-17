@@ -104,23 +104,7 @@ impl ProfileInfo {
 
     /// Up to two initials: from the name, or else from the email.
     pub fn initials(&self) -> String {
-        let source = self
-            .name
-            .clone()
-            .unwrap_or_else(|| self.email.split('@').next().unwrap_or_default().to_owned());
-        let words: Vec<&str> = source
-            .split(|c: char| c.is_whitespace() || c == '.' || c == '_' || c == '-')
-            .filter(|w| !w.is_empty())
-            .collect();
-        let mut out: String = words
-            .iter()
-            .take(2)
-            .filter_map(|w| w.chars().next())
-            .collect();
-        if out.chars().count() < 2 {
-            out = source.chars().take(2).collect();
-        }
-        out.to_uppercase()
+        initials_of(self.name.as_deref(), &self.email)
     }
 }
 
@@ -153,6 +137,50 @@ fn parse_hex(hex: &str) -> Option<Hsla> {
     Some(rgb(n).into())
 }
 
+/// Up to two initials: from the name, or else from the email.
+pub fn initials_of(name: Option<&str>, email: &str) -> String {
+    let source = name
+        .filter(|n| !n.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| email.split('@').next().unwrap_or_default().to_owned());
+    let words: Vec<&str> = source
+        .split(|c: char| c.is_whitespace() || c == '.' || c == '_' || c == '-')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mut out: String = words
+        .iter()
+        .take(2)
+        .filter_map(|w| w.chars().next())
+        .collect();
+    if out.chars().count() < 2 {
+        out = source.chars().take(2).collect();
+    }
+    out.to_uppercase()
+}
+
+/// The avatar's color: the one chosen in the web vault, or the accent.
+pub fn avatar_color(chosen: Option<&str>, cx: &App) -> Hsla {
+    chosen
+        .and_then(parse_hex)
+        .unwrap_or_else(|| crate::appearance::accent(cx))
+}
+
+/// Round avatar with the initials.
+pub fn avatar(initials: String, color: Hsla, size: Pixels) -> Div {
+    div()
+        .size(size)
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(color)
+        .text_color(gpui_kit::white())
+        .text_size(size * 0.38)
+        .font_semibold()
+        .child(initials)
+}
+
 pub struct ProfileView {
     info: ProfileInfo,
     /// "Sign out" asks for a second click.
@@ -160,6 +188,11 @@ pub struct ProfileView {
 }
 
 impl EventEmitter<ProfileEvent> for ProfileView {}
+
+/// A color from the item icon palette (`blue`, `amber`…), adjusted to the theme.
+fn hue(id: &str, cx: &App) -> Hsla {
+    crate::item_icons::color_by_id(id, cx).unwrap_or_else(|| crate::appearance::accent(cx))
+}
 
 impl ProfileView {
     pub fn new(info: ProfileInfo) -> Self {
@@ -186,14 +219,8 @@ impl ProfileView {
         id: &'static str,
         icon: IconName,
         text: SharedString,
-        on: bool,
-        cx: &App,
+        color: Hsla,
     ) -> impl IntoElement {
-        let color = if on {
-            crate::appearance::accent(cx)
-        } else {
-            cx.theme().muted_foreground
-        };
         h_flex()
             .id(id)
             .test_support()
@@ -203,12 +230,27 @@ impl ProfileView {
             .py_0p5()
             .rounded_full()
             .border_1()
-            .border_color(color.opacity(0.4))
-            .bg(color.opacity(0.1))
+            .border_color(color.opacity(0.45))
+            .bg(color.opacity(0.14))
             .text_xs()
+            .font_semibold()
             .text_color(color)
             .child(Icon::new(icon).xsmall())
             .child(text)
+    }
+
+    /// Small colored square with an icon, at the start of a row.
+    fn chip(icon: IconName, color: Hsla) -> impl IntoElement {
+        div()
+            .size(px(28.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .bg(color.opacity(0.16))
+            .text_color(color)
+            .child(Icon::new(icon).small())
     }
 
     fn card(title: SharedString, rows: Vec<AnyElement>, cx: &App) -> impl IntoElement {
@@ -226,26 +268,50 @@ impl ProfileView {
                     .children(rows.into_iter().enumerate().map(move |(ix, row)| {
                         div()
                             .px_4()
-                            .py_3()
+                            .py_2p5()
                             .when(ix + 1 < count, |el| el.border_b_1().border_color(border))
                             .child(row)
                     })),
             )
     }
 
-    fn row(label: SharedString, value: SharedString, cx: &App) -> AnyElement {
+    fn row(icon: IconName, color: Hsla, label: SharedString, value: AnyElement) -> AnyElement {
         h_flex()
             .justify_between()
             .gap_4()
-            .child(div().text_sm().child(label))
             .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(value),
+                h_flex()
+                    .gap_3()
+                    .child(Self::chip(icon, color))
+                    .child(div().text_sm().child(label)),
             )
+            .child(value)
+            .into_any_element()
+    }
+
+    fn text_value(value: SharedString, cx: &App) -> AnyElement {
+        div()
+            .min_w_0()
+            .truncate()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(value)
+            .into_any_element()
+    }
+
+    /// "On" in green, "Off" in gray (or any text with its color).
+    fn pill(text: SharedString, color: Hsla) -> AnyElement {
+        h_flex()
+            .gap_1p5()
+            .px_2()
+            .py_0p5()
+            .rounded_full()
+            .bg(color.opacity(0.14))
+            .text_xs()
+            .font_semibold()
+            .text_color(color)
+            .child(div().size(px(6.)).rounded_full().bg(color))
+            .child(text)
             .into_any_element()
     }
 }
@@ -253,136 +319,206 @@ impl ProfileView {
 impl Render for ProfileView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let info = self.info.clone();
-        let accent = crate::appearance::accent(cx);
-        let avatar_bg = info
-            .avatar_color
-            .as_deref()
-            .and_then(parse_hex)
-            .unwrap_or(accent);
-        let muted = cx.theme().muted_foreground;
+        let theme = cx.theme();
+        let (muted, border, success, warning) = (
+            theme.muted_foreground,
+            theme.border,
+            theme.success,
+            theme.warning,
+        );
+        let color = avatar_color(info.avatar_color.as_deref(), cx);
+        let (c_blue, c_violet, c_amber, c_teal, c_green, c_orange, c_pink) = (
+            hue("blue", cx),
+            hue("violet", cx),
+            hue("amber", cx),
+            hue("teal", cx),
+            hue("green", cx),
+            hue("orange", cx),
+            hue("pink", cx),
+        );
 
         let display_name: SharedString = info
             .name
             .clone()
             .unwrap_or_else(|| info.email.split('@').next().unwrap_or_default().to_owned())
             .into();
-        let hero = h_flex()
-            .gap_4()
+        // Header: a band in the avatar's color, the avatar and the badges.
+        let hero = v_flex()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(border)
+            .overflow_hidden()
+            .bg(linear_gradient(
+                160.,
+                linear_color_stop(color.opacity(0.30), 0.),
+                linear_color_stop(color.opacity(0.04), 1.),
+            ))
+            .p_5()
             .child(
-                div()
-                    .id("profile-avatar")
-                    .size(px(64.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(avatar_bg)
-                    .text_color(gpui_kit::white())
-                    .text_xl()
-                    .font_semibold()
-                    .child(info.initials()),
-            )
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .gap_1()
+                h_flex()
+                    .gap_4()
                     .child(
                         div()
-                            .id("profile-name")
-                            .test_support()
-                            .aria_label(display_name.clone())
-                            .text_2xl()
-                            .font_semibold()
-                            .truncate()
-                            .child(display_name),
+                            .id("profile-avatar")
+                            .p_1()
+                            .rounded_full()
+                            .bg(color.opacity(0.35))
+                            .child(avatar(info.initials(), color, px(68.))),
                     )
                     .child(
-                        div()
-                            .id("profile-email")
-                            .test_support()
-                            .aria_label(SharedString::from(info.email.clone()))
-                            .text_sm()
-                            .text_color(muted)
-                            .truncate()
-                            .child(info.email.clone()),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_1p5()
-                            .pt_1()
-                            .child(Self::badge(
-                                "profile-premium",
-                                IconName::Star,
-                                if info.premium && info.premium_from_organization {
-                                    t!("profile.premium_org").into()
-                                } else if info.premium {
-                                    t!("profile.premium").into()
-                                } else {
-                                    t!("profile.free").into()
-                                },
-                                info.premium,
-                                cx,
-                            ))
-                            .child(Self::badge(
-                                "profile-email-verified",
-                                if info.email_verified {
-                                    IconName::CircleCheck
-                                } else {
-                                    IconName::TriangleAlert
-                                },
-                                if info.email_verified {
-                                    t!("profile.email_verified").into()
-                                } else {
-                                    t!("profile.email_not_verified").into()
-                                },
-                                info.email_verified,
-                                cx,
-                            ))
-                            .child(Self::badge(
-                                "profile-2fa",
-                                if info.two_factor {
-                                    IconName::ShieldCheck
-                                } else {
-                                    IconName::ShieldAlert
-                                },
-                                if info.two_factor {
-                                    t!("profile.two_factor_on").into()
-                                } else {
-                                    t!("profile.two_factor_off").into()
-                                },
-                                info.two_factor,
-                                cx,
-                            )),
+                        v_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("profile-name")
+                                    .test_support()
+                                    .aria_label(display_name.clone())
+                                    .text_2xl()
+                                    .font_semibold()
+                                    .truncate()
+                                    .child(display_name),
+                            )
+                            .child(
+                                div()
+                                    .id("profile-email")
+                                    .test_support()
+                                    .aria_label(SharedString::from(info.email.clone()))
+                                    .text_sm()
+                                    .text_color(muted)
+                                    .truncate()
+                                    .child(info.email.clone()),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_wrap()
+                                    .gap_1p5()
+                                    .pt_1()
+                                    .child(Self::badge(
+                                        "profile-premium",
+                                        IconName::Star,
+                                        if info.premium && info.premium_from_organization {
+                                            t!("profile.premium_org").into()
+                                        } else if info.premium {
+                                            t!("profile.premium").into()
+                                        } else {
+                                            t!("profile.free").into()
+                                        },
+                                        if info.premium { c_amber } else { muted },
+                                    ))
+                                    .child(Self::badge(
+                                        "profile-email-verified",
+                                        if info.email_verified {
+                                            IconName::CircleCheck
+                                        } else {
+                                            IconName::TriangleAlert
+                                        },
+                                        if info.email_verified {
+                                            t!("profile.email_verified").into()
+                                        } else {
+                                            t!("profile.email_not_verified").into()
+                                        },
+                                        if info.email_verified {
+                                            success
+                                        } else {
+                                            warning
+                                        },
+                                    ))
+                                    .child(Self::badge(
+                                        "profile-2fa",
+                                        if info.two_factor {
+                                            IconName::ShieldCheck
+                                        } else {
+                                            IconName::ShieldAlert
+                                        },
+                                        if info.two_factor {
+                                            t!("profile.two_factor_on").into()
+                                        } else {
+                                            t!("profile.two_factor_off").into()
+                                        },
+                                        if info.two_factor { success } else { warning },
+                                    )),
+                            ),
                     ),
             );
 
         let account = Self::card(
             t!("profile.group_account").into(),
             vec![
-                Self::row(t!("profile.server").into(), info.server.clone().into(), cx),
                 Self::row(
+                    IconName::Server,
+                    c_blue,
+                    t!("profile.server").into(),
+                    Self::text_value(info.server.clone().into(), cx),
+                ),
+                Self::row(
+                    IconName::KeyRound,
+                    c_violet,
                     t!("profile.sign_in").into(),
-                    if info.sso {
-                        t!("profile.sign_in_sso").into()
-                    } else {
-                        t!("profile.sign_in_password").into()
-                    },
-                    cx,
+                    Self::text_value(
+                        if info.sso {
+                            t!("profile.sign_in_sso").into()
+                        } else {
+                            t!("profile.sign_in_password").into()
+                        },
+                        cx,
+                    ),
                 ),
                 Self::row(
+                    IconName::Calendar,
+                    c_orange,
                     t!("profile.created").into(),
-                    info.created
-                        .map(format_date)
-                        .unwrap_or_else(|| "—".into())
-                        .into(),
-                    cx,
+                    Self::text_value(
+                        info.created
+                            .map(format_date)
+                            .unwrap_or_else(|| "—".into())
+                            .into(),
+                        cx,
+                    ),
                 ),
-                Self::row(t!("profile.device").into(), info.device.clone().into(), cx),
+                Self::row(
+                    IconName::Laptop,
+                    c_teal,
+                    t!("profile.device").into(),
+                    Self::text_value(info.device.clone().into(), cx),
+                ),
             ],
             cx,
         );
+
+        // The vault in numbers: one color per kind of item.
+        let tiles = [
+            (t!("profile.logins"), IconName::Globe, c_blue),
+            (t!("profile.cards"), IconName::CreditCard, c_amber),
+            (t!("profile.identities"), IconName::IdCard, c_violet),
+            (t!("profile.notes"), IconName::StickyNote, c_green),
+            (t!("profile.ssh_keys"), IconName::KeyRound, c_teal),
+            (t!("profile.folders"), IconName::Folder, c_orange),
+        ];
+        let mut stats = h_flex().flex_wrap().gap_2();
+        for (ix, ((label, icon, tint), n)) in tiles.into_iter().zip(info.counts).enumerate() {
+            stats = stats.child(
+                v_flex()
+                    .id(SharedString::from(format!("profile-count-{ix}")))
+                    .test_support()
+                    .aria_label(SharedString::from(format!("{label}: {n}")))
+                    .w(px(98.))
+                    .gap_1()
+                    .px_3()
+                    .py_2p5()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(tint.opacity(0.25))
+                    .bg(tint.opacity(0.08))
+                    .child(div().text_color(tint).child(Icon::new(icon).small()))
+                    .child(div().text_xl().font_semibold().child(n.to_string()))
+                    .child(div().text_xs().text_color(muted).child(label)),
+            );
+        }
+        let vault = v_flex()
+            .gap_2()
+            .child(ui::section_label(t!("profile.group_vault"), cx).px_0())
+            .child(stats);
 
         let organizations = Self::card(
             t!("profile.group_organizations").into(),
@@ -397,10 +533,9 @@ impl Render for ProfileView {
                     .iter()
                     .map(|name| {
                         h_flex()
-                            .gap_2()
-                            .text_sm()
-                            .child(Icon::new(IconName::Building2).small().text_color(muted))
-                            .child(name.clone())
+                            .gap_3()
+                            .child(Self::chip(IconName::Building2, c_pink))
+                            .child(div().text_sm().child(name.clone()))
                             .into_any_element()
                     })
                     .collect()
@@ -408,86 +543,54 @@ impl Render for ProfileView {
             cx,
         );
 
-        let labels = [
-            t!("profile.logins"),
-            t!("profile.cards"),
-            t!("profile.identities"),
-            t!("profile.notes"),
-            t!("profile.ssh_keys"),
-            t!("profile.folders"),
-        ];
-        let mut stats = h_flex().flex_wrap().gap_2();
-        for (ix, (label, n)) in labels.iter().zip(info.counts).enumerate() {
-            stats = stats.child(
-                v_flex()
-                    .id(SharedString::from(format!("profile-count-{ix}")))
-                    .test_support()
-                    .aria_label(SharedString::from(format!("{label}: {n}")))
-                    .w(px(100.))
-                    .px_3()
-                    .py_2()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().secondary)
-                    .child(div().text_xl().font_semibold().child(n.to_string()))
-                    .child(div().text_xs().text_color(muted).child(*label)),
-            );
-        }
-        let vault = v_flex()
-            .gap_2()
-            .child(ui::section_label(t!("profile.group_vault"), cx).px_0())
-            .child(stats);
-
-        let yes_no = |on: bool| -> SharedString {
+        let on_off = |on: bool| -> AnyElement {
             if on {
-                t!("profile.on").into()
+                Self::pill(t!("profile.on").into(), success)
             } else {
-                t!("profile.off").into()
+                Self::pill(t!("profile.off").into(), muted)
             }
         };
         let computer = Self::card(
             t!("profile.group_computer").into(),
             vec![
                 Self::row(
+                    IconName::RefreshCw,
+                    c_blue,
                     t!("profile.remember_session").into(),
-                    yes_no(info.remember_session),
-                    cx,
+                    on_off(info.remember_session),
                 ),
                 Self::row(
+                    IconName::Lock,
+                    c_amber,
                     t!("profile.unlock_memory").into(),
-                    if info.unlock_memory_days == 0 {
-                        t!("profile.always").into()
-                    } else {
-                        t!("profile.every_days", n = info.unlock_memory_days).into()
-                    },
-                    cx,
+                    Self::pill(
+                        if info.unlock_memory_days == 0 {
+                            t!("profile.always").into()
+                        } else {
+                            t!("profile.every_days", n = info.unlock_memory_days).into()
+                        },
+                        c_amber,
+                    ),
                 ),
                 Self::row(
+                    IconName::ScanFace,
+                    c_violet,
                     t!("profile.windows_hello").into(),
-                    yes_no(info.windows_hello),
-                    cx,
+                    on_off(info.windows_hello),
                 ),
                 Self::row(
+                    IconName::Timer,
+                    c_teal,
                     t!("profile.auto_lock").into(),
                     if info.auto_lock_minutes == 0 {
-                        t!("profile.never").into()
+                        Self::pill(t!("profile.never").into(), warning)
                     } else {
-                        crate::settings_view::minutes_label(info.auto_lock_minutes)
+                        Self::pill(
+                            crate::settings_view::minutes_label(info.auto_lock_minutes),
+                            success,
+                        )
                     },
-                    cx,
                 ),
-                h_flex()
-                    .justify_end()
-                    .child(
-                        Button::new("profile-open-settings")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Settings)
-                            .label(t!("profile.open_settings"))
-                            .on_click(
-                                cx.listener(|_, _, _, cx| cx.emit(ProfileEvent::OpenSettings)),
-                            ),
-                    )
-                    .into_any_element(),
             ],
             cx,
         );

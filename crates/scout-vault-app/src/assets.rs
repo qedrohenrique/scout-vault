@@ -11,6 +11,7 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
+        Calendar,
         LogOut,
         CreditCard,
         IdCard,
@@ -128,6 +129,12 @@ mod tests {
 
     /// Every icon the code uses. When you use a new one, add it here.
     const USED: &[IconName] = &[
+        IconName::Server,
+        IconName::Laptop,
+        IconName::Code,
+        IconName::Sparkles,
+        IconName::MessageCircle,
+        IconName::Calendar,
         IconName::LogOut,
         IconName::ArrowLeft,
         IconName::LockKeyhole,

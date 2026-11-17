@@ -900,6 +900,89 @@ impl Render for SettingsView {
             ],
             cx,
         );
+        // About the project: version, links, license and credits.
+        let link = |id: &'static str, icon: IconName, label: SharedString, url: &'static str| {
+            Button::new(id)
+                .ghost()
+                .small()
+                .icon(icon)
+                .label(label)
+                .on_click(move |_, _, cx| {
+                    if let Err(e) = crate::sso::open_browser(url) {
+                        crate::toast::error(e, cx);
+                    }
+                })
+        };
+        let about_hero = h_flex().gap_3().child(ui::brand_mark(px(40.), cx)).child(
+            v_flex()
+                .gap_0p5()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_baseline()
+                        .child(div().text_base().font_semibold().child("Scout Vault"))
+                        .child(
+                            div()
+                                .id("about-version")
+                                .test_support()
+                                .aria_label(SharedString::from(env!("CARGO_PKG_VERSION")))
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("about.version", v = env!("CARGO_PKG_VERSION"))),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("about.tagline")),
+                ),
+        );
+        let about_links = h_flex()
+            .flex_wrap()
+            .gap_1()
+            .child(link(
+                "about-source",
+                IconName::Code,
+                t!("about.source").into(),
+                "https://github.com/qedrohenrique/scout-vault",
+            ))
+            .child(link(
+                "about-releases",
+                IconName::Sparkles,
+                t!("about.releases").into(),
+                "https://github.com/qedrohenrique/scout-vault/releases",
+            ))
+            .child(link(
+                "about-issues",
+                IconName::MessageCircle,
+                t!("about.issues").into(),
+                "https://github.com/qedrohenrique/scout-vault/issues/new/choose",
+            ));
+        let about_group = Self::group(
+            t!("settings.group_about"),
+            vec![
+                div().px_4().py_3p5().child(about_hero),
+                div().px_3().py_2().child(about_links),
+                Self::row(
+                    t!("about.license"),
+                    t!("about.license_desc"),
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("MIT"),
+                    cx,
+                ),
+                Self::row(t!("about.credits"), t!("about.credits_desc"), div(), cx),
+                div()
+                    .px_4()
+                    .py_3()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("about.disclaimer")),
+            ],
+            cx,
+        );
         let shortcuts_group = Self::group(
             t!("settings.group_shortcuts"),
             vec![
@@ -1186,7 +1269,8 @@ impl Render for SettingsView {
                         .child(session_group)
                         .child(browser_group)
                         .child(autotype_group)
-                        .child(shortcuts_group),
+                        .child(shortcuts_group)
+                        .child(about_group),
                 ),
             )
             .child(back)

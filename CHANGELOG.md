@@ -7,6 +7,18 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-17
+
+### Added
+- **About** in Settings: version, links to the source code, release notes and issue reporting,
+  license, credits and the unofficial-project notice.
+
+### Changed
+- The account at the bottom of the sidebar shows an avatar with your initials, your name and
+  email, and an arrow — clearly a button to the profile screen.
+- Profile screen with more color: a header in your avatar's color, colored icons on each row,
+  colored tiles for the vault counts and on/off pills. The "Open settings" button left it.
+
 ## [0.6.0] - 2026-11-17
 
 ### Added

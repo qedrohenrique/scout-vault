@@ -2525,41 +2525,74 @@ impl VaultView {
             ))
             .child(div().h_3());
 
-        let footer = v_flex()
-            .gap_2()
-            .px_3()
-            .py_3()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(h_flex().gap_1().child({
-                // Email truncated in the bar; full on hover.
-                let email = SharedString::from(self.session.email.clone());
-                // Click: the profile screen.
-                div()
-                    .id("vault-email")
-                    .test_support()
-                    .role(Role::Button)
-                    .aria_label(email.clone())
-                    .flex_1()
-                    .min_w_0()
-                    .px_1()
-                    .py_0p5()
-                    .rounded(cx.theme().radius)
-                    .truncate()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(cx.theme().secondary_hover))
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(t!(
-                            "vault.profile_tooltip",
-                            email = email.clone()
-                        ))
-                        .build(window, cx)
-                    })
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenProfile)))
-                    .child(self.session.email.clone())
-            }));
+        // The account: avatar, name and email — click for the profile screen.
+        let footer = {
+            let profile = &self.session.sync.profile;
+            let email = SharedString::from(self.session.email.clone());
+            let name = profile.name.clone().filter(|n| !n.trim().is_empty());
+            let initials = crate::profile_view::initials_of(name.as_deref(), &self.session.email);
+            let color = crate::profile_view::avatar_color(profile.avatar_color.as_deref(), cx);
+            let title: SharedString = name
+                .clone()
+                .unwrap_or_else(|| {
+                    self.session
+                        .email
+                        .split('@')
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .into();
+            let (muted, hover) = (cx.theme().muted_foreground, cx.theme().secondary_hover);
+            div()
+                .px_2()
+                .py_2()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(
+                    h_flex()
+                        .id("vault-email")
+                        .test_support()
+                        .role(Role::Button)
+                        .aria_label(email.clone())
+                        .w_full()
+                        .gap_2p5()
+                        .items_center()
+                        .px_2()
+                        .py_2()
+                        .rounded(cx.theme().radius_lg)
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover))
+                        .active(|s| s.opacity(0.8))
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(t!(
+                                "vault.profile_tooltip",
+                                email = email.clone()
+                            ))
+                            .build(window, cx)
+                        })
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenProfile)))
+                        .child(crate::profile_view::avatar(initials, color, px(32.)))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().text_sm().font_semibold().truncate().child(title))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .truncate()
+                                        .child(self.session.email.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_color(muted)
+                                .child(Icon::new(IconName::ChevronRight).small()),
+                        ),
+                )
+        };
 
         v_flex()
             .w(px(SIDEBAR_WIDTH))
