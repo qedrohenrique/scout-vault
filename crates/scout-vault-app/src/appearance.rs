@@ -53,10 +53,10 @@ pub enum Accent {
 
 /// The colors of an accent color in both modes.
 struct AccentColors {
-    light: &'static str,
-    on_light: &'static str,
-    dark: &'static str,
-    on_dark: &'static str,
+    light: String,
+    on_light: String,
+    dark: String,
+    on_dark: String,
 }
 
 impl Accent {
@@ -102,17 +102,17 @@ impl Accent {
             Self::Graphite => ("#2a2926", "#ffffff", "#e6e4df", "#151514"),
         };
         AccentColors {
-            light,
-            on_light,
-            dark,
-            on_dark,
+            light: light.into(),
+            on_light: on_light.into(),
+            dark: dark.into(),
+            on_dark: on_dark.into(),
         }
     }
 
     /// The main color in the given mode (for swatches on the settings screen).
     pub fn swatch(self, dark: bool) -> Hsla {
         let c = self.colors();
-        hex(if dark { c.dark } else { c.light })
+        hex(if dark { &c.dark } else { &c.light })
     }
 }
 
@@ -224,6 +224,32 @@ pub struct Appearance {
     pub text_size: TextSize,
     pub corners: Corners,
     pub motion: Motion,
+    /// A free accent color (color picker); `None` uses [`Self::accent`].
+    pub custom_accent: Option<crate::colors::Rgb>,
+}
+
+impl Appearance {
+    fn accent_colors(&self) -> AccentColors {
+        match self.custom_accent {
+            Some(rgb) => {
+                let (light, on_light, dark, on_dark) = crate::colors::accent_tones(rgb);
+                AccentColors {
+                    light,
+                    on_light,
+                    dark,
+                    on_dark,
+                }
+            }
+            None => self.accent.colors(),
+        }
+    }
+
+    /// The free accent color as it shows in the given mode.
+    pub fn custom_swatch(&self, dark: bool) -> Option<Hsla> {
+        self.custom_accent?;
+        let c = self.accent_colors();
+        Some(hex(if dark { &c.dark } else { &c.light }))
+    }
 }
 
 /// Neutrals of each mode.
@@ -274,11 +300,11 @@ const DARK: Neutrals = Neutrals {
 fn build(base: &ThemeConfig, mode: ThemeMode, a: &Appearance) -> ThemeConfig {
     let dark = mode.is_dark();
     let n = if dark { &DARK } else { &LIGHT };
-    let c = a.accent.colors();
-    let (accent, on_accent) = if dark {
-        (c.dark, c.on_dark)
+    let c = a.accent_colors();
+    let (accent, on_accent): (&str, &str) = if dark {
+        (&c.dark, &c.on_dark)
     } else {
-        (c.light, c.on_light)
+        (&c.light, &c.on_light)
     };
     let tint = |alpha: &str| format!("{accent}{alpha}");
 

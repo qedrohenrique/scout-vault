@@ -1,4 +1,8 @@
-//! Password generator using system randomness (`getrandom`), without modulo bias.
+//! Password, passphrase and username generator using system randomness
+//! (`getrandom`), without modulo bias.
+//!
+//! Passphrases use the EFF large wordlist (7,776 words, CC BY 3.0,
+//! <https://www.eff.org/dice>): each word adds log2(7776) ≈ 12.9 bits.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -113,6 +117,169 @@ pub fn password(opts: &PasswordOptions) -> Zeroizing<String> {
     Zeroizing::new(chars.iter().collect())
 }
 
+/// The EFF large wordlist, one `ddddd\tword` per line.
+const EFF_LIST: &str = include_str!("../assets/eff_large_wordlist.txt");
+
+/// The 7,776 words (parsed once).
+pub fn words() -> &'static [&'static str] {
+    static WORDS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    WORDS.get_or_init(|| {
+        EFF_LIST
+            .lines()
+            .filter_map(|l| l.split_once('\t').map(|(_, w)| w.trim()))
+            .filter(|w| !w.is_empty())
+            .collect()
+    })
+}
+
+pub const MIN_WORDS: usize = 3;
+pub const MAX_WORDS: usize = 20;
+
+/// What the generator makes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratorKind {
+    #[default]
+    Password,
+    Passphrase,
+    Username,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PassphraseOptions {
+    pub words: usize,
+    pub separator: String,
+    pub capitalize: bool,
+    /// One digit appended to one of the words.
+    pub include_number: bool,
+}
+
+impl Default for PassphraseOptions {
+    fn default() -> Self {
+        Self {
+            words: 6,
+            separator: "-".into(),
+            capitalize: false,
+            include_number: false,
+        }
+    }
+}
+
+impl PassphraseOptions {
+    fn clamped_words(&self) -> usize {
+        self.words.clamp(MIN_WORDS, MAX_WORDS)
+    }
+
+    /// Entropy in bits; the separator and capitals are known, so they add nothing.
+    pub fn entropy_bits(&self) -> f64 {
+        let n = self.clamped_words() as f64;
+        let mut bits = n * (words().len() as f64).log2();
+        if self.include_number {
+            bits += (n * 10.0).log2();
+        }
+        bits
+    }
+}
+
+/// Generates a passphrase (`correct-horse-battery-staple`).
+pub fn passphrase(opts: &PassphraseOptions) -> Zeroizing<String> {
+    let list = words();
+    let n = opts.clamped_words();
+    let mut parts: Zeroizing<Vec<String>> = Zeroizing::new(
+        (0..n)
+            .map(|_| {
+                let w = list[uniform(list.len())];
+                if opts.capitalize {
+                    capitalize(w)
+                } else {
+                    w.to_string()
+                }
+            })
+            .collect(),
+    );
+    if opts.include_number {
+        let ix = uniform(n);
+        parts[ix].push(char::from(b'0' + uniform(10) as u8));
+    }
+    // The separator is a single character (or none).
+    let separator: String = opts.separator.chars().take(1).collect();
+    Zeroizing::new(parts.join(&separator))
+}
+
+fn capitalize(w: &str) -> String {
+    let mut c = w.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
+/// Which kind of username.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsernameKind {
+    /// A random word (`dolphin4821`).
+    #[default]
+    Word,
+    /// The account email with a `+word` tag (`name+dolphin@example.com`).
+    PlusEmail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsernameOptions {
+    pub kind: UsernameKind,
+    pub capitalize: bool,
+    /// Four digits at the end of the word.
+    pub include_number: bool,
+}
+
+impl Default for UsernameOptions {
+    fn default() -> Self {
+        Self {
+            kind: UsernameKind::Word,
+            capitalize: false,
+            include_number: true,
+        }
+    }
+}
+
+/// Generates a username. `email` is the account's, used by [`UsernameKind::PlusEmail`];
+/// if it isn't a usable address, falls back to a word.
+pub fn username(opts: &UsernameOptions, email: &str) -> String {
+    let list = words();
+    let word = list[uniform(list.len())];
+    match opts.kind {
+        UsernameKind::PlusEmail => {
+            if let Some((local, domain)) = email.trim().split_once('@') {
+                let local = local.split('+').next().unwrap_or(local);
+                if !local.is_empty() && domain.contains('.') {
+                    return format!("{local}+{word}@{domain}");
+                }
+            }
+            username(
+                &UsernameOptions {
+                    kind: UsernameKind::Word,
+                    ..*opts
+                },
+                "",
+            )
+        }
+        UsernameKind::Word => {
+            let mut s = if opts.capitalize {
+                capitalize(word)
+            } else {
+                word.to_string()
+            };
+            if opts.include_number {
+                s.push_str(&format!("{:04}", uniform(10_000)));
+            }
+            s
+        }
+    }
+}
+
 /// Strength in words, from the entropy.
 pub fn strength_label(bits: f64) -> &'static str {
     match bits {
@@ -198,5 +365,75 @@ mod tests {
         assert!((opts.entropy_bits() - 20.0 * 70f64.log2()).abs() < 1e-9);
         assert_eq!(strength_label(opts.entropy_bits()), "Muito forte");
         assert_eq!(strength_label(30.0), "Fraca");
+    }
+
+    #[test]
+    fn wordlist_is_the_eff_large_list() {
+        let w = words();
+        assert_eq!(w.len(), 7776);
+        assert_eq!(w[0], "abacus");
+        assert_eq!(w[7775], "zoom");
+        assert!(w
+            .iter()
+            .all(|w| w.chars().all(|c| c.is_ascii_lowercase() || c == '-')));
+    }
+
+    #[test]
+    fn passphrases_follow_the_options() {
+        let opts = PassphraseOptions::default();
+        let p = passphrase(&opts);
+        assert!(p.split('-').count() >= 6, "{:?}", p.as_str()); // a few EFF words contain '-'
+        assert!((opts.entropy_bits() - 6.0 * 7776f64.log2()).abs() < 1e-9);
+
+        let opts = PassphraseOptions {
+            words: 4,
+            separator: " ".into(),
+            capitalize: true,
+            include_number: true,
+        };
+        for _ in 0..50 {
+            let p = passphrase(&opts);
+            let parts: Vec<&str> = p.split(' ').collect();
+            assert_eq!(parts.len(), 4);
+            assert!(parts
+                .iter()
+                .all(|w| w.chars().next().unwrap().is_ascii_uppercase()));
+            assert_eq!(p.chars().filter(char::is_ascii_digit).count(), 1);
+        }
+
+        let few = PassphraseOptions {
+            words: 1,
+            separator: String::new(),
+            ..Default::default()
+        };
+        assert!(!passphrase(&few).is_empty());
+        assert!((few.entropy_bits() - 3.0 * 7776f64.log2()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn usernames_follow_the_options() {
+        let word = username(&UsernameOptions::default(), "");
+        assert!(word.ends_with(|c: char| c.is_ascii_digit()));
+        assert!(word[..word.len() - 4]
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '-'));
+
+        let plus = UsernameOptions {
+            kind: UsernameKind::PlusEmail,
+            ..Default::default()
+        };
+        let u = username(&plus, "ana+old@example.com");
+        assert!(u.starts_with("ana+") && u.ends_with("@example.com"), "{u}");
+        let fallback = username(&plus, "not-an-email");
+        assert!(!fallback.contains('@'));
+
+        let caps = UsernameOptions {
+            capitalize: true,
+            include_number: false,
+            ..Default::default()
+        };
+        let u = username(&caps, "");
+        assert!(u.chars().next().unwrap().is_ascii_uppercase());
+        assert!(!u.chars().any(|c| c.is_ascii_digit()));
     }
 }

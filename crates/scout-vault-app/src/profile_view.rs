@@ -165,8 +165,27 @@ pub fn avatar_color(chosen: Option<&str>, cx: &App) -> Hsla {
         .unwrap_or_else(|| crate::appearance::accent(cx))
 }
 
-/// Round avatar with the initials.
-pub fn avatar(initials: String, color: Hsla, size: Pixels) -> Div {
+/// Round avatar: the chosen photo, or the initials on the account color.
+pub fn avatar(
+    initials: String,
+    color: Hsla,
+    size: Pixels,
+    photo: Option<std::sync::Arc<Image>>,
+) -> Div {
+    if let Some(photo) = photo {
+        return div()
+            .size(size)
+            .flex_shrink_0()
+            .rounded_full()
+            .overflow_hidden()
+            .bg(color)
+            .child(
+                img(photo)
+                    .size(size)
+                    .rounded_full()
+                    .object_fit(ObjectFit::Cover),
+            );
+    }
     div()
         .size(size)
         .flex_shrink_0()
@@ -204,6 +223,38 @@ impl ProfileView {
 
     pub fn info(&self) -> &ProfileInfo {
         &self.info
+    }
+
+    /// Opens Windows' file picker to choose the photo.
+    pub fn pick_photo(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t!("profile.photo_prompt").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                if let Some(path) = paths.into_iter().next() {
+                    this.update(cx, |this, cx| this.set_photo(&path, cx)).ok();
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Makes the image at `path` the photo (copied into the app folder).
+    pub fn set_photo(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        match crate::profile_photo::set_from_file(&self.info.email, path, cx) {
+            Ok(()) => crate::toast::success(t!("profile.photo_saved"), cx),
+            Err(e) => crate::toast::error(e.message(), cx),
+        }
+        cx.notify();
+    }
+
+    pub fn remove_photo(&mut self, cx: &mut Context<Self>) {
+        crate::profile_photo::remove(&self.info.email, cx);
+        cx.notify();
     }
 
     pub fn sign_out(&mut self, cx: &mut Context<Self>) {
@@ -327,6 +378,7 @@ impl Render for ProfileView {
             theme.warning,
         );
         let color = avatar_color(info.avatar_color.as_deref(), cx);
+        let photo = crate::profile_photo::get(&info.email, cx);
         let (c_blue, c_violet, c_amber, c_teal, c_green, c_orange, c_pink) = (
             hue("blue", cx),
             hue("violet", cx),
@@ -360,10 +412,39 @@ impl Render for ProfileView {
                     .child(
                         div()
                             .id("profile-avatar")
+                            .test_support()
+                            .role(Role::Button)
+                            .aria_label(SharedString::from(t!("profile.photo_choose")))
+                            .relative()
                             .p_1()
                             .rounded_full()
                             .bg(color.opacity(0.35))
-                            .child(avatar(info.initials(), color, px(68.))),
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.85))
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(t!(
+                                    "profile.photo_choose"
+                                ))
+                                .build(window, cx)
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_photo(cx)))
+                            .child(avatar(info.initials(), color, px(68.), photo.clone()))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .right_0()
+                                    .bottom_0()
+                                    .size(px(22.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_full()
+                                    .bg(cx.theme().background)
+                                    .border_1()
+                                    .border_color(border)
+                                    .text_color(muted)
+                                    .child(Icon::new(IconName::Pencil).xsmall()),
+                            ),
                     )
                     .child(
                         v_flex()
@@ -438,6 +519,37 @@ impl Render for ProfileView {
                                         },
                                         if info.two_factor { success } else { warning },
                                     )),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .pt_1()
+                                    .child(
+                                        Button::new("profile-photo")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Pencil)
+                                            .label(if photo.is_some() {
+                                                t!("profile.photo_change")
+                                            } else {
+                                                t!("profile.photo_choose")
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.pick_photo(cx)),
+                                            ),
+                                    )
+                                    .when(photo.is_some(), |el| {
+                                        el.child(
+                                            Button::new("profile-photo-remove")
+                                                .ghost()
+                                                .xsmall()
+                                                .icon(IconName::Trash)
+                                                .label(t!("profile.photo_remove"))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.remove_photo(cx)
+                                                })),
+                                        )
+                                    }),
                             ),
                     ),
             );

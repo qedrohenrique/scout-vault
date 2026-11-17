@@ -65,6 +65,8 @@ pub struct QuickItem {
     pub icon: crate::item_icons::ItemIcon,
     /// Color chosen for the icon (id from `item_icons::COLORS`).
     pub color: Option<String>,
+    /// Domain of the website icon to show, when it has one (no chosen icon or brand).
+    pub site: Option<String>,
     /// Saved addresses (for search only).
     pub uris: Vec<String>,
     pub favorite: bool,
@@ -102,6 +104,7 @@ impl QuickItem {
             detail,
             icon: kind_icon(&item.kind).into(),
             color: None,
+            site: None,
             uris,
             favorite: item.favorite,
             has_username,
@@ -535,15 +538,24 @@ impl QuickSearch {
             .cursor_pointer()
             .when(selected, |el| el.bg(accent.opacity(0.14)))
             .when(!selected, |el| el.hover(|el| el.bg(hover)))
-            .child(crate::item_icons::chip_with(
-                item.icon,
-                item.color
+            .child(
+                match item
+                    .site
                     .as_deref()
-                    .and_then(|c| crate::item_icons::color_by_id(c, cx)),
-                px(30.),
-                selected,
-                cx,
-            ))
+                    .and_then(|h| crate::site_icons::image(h, cx))
+                {
+                    Some(image) => crate::item_icons::site_chip(image, px(30.), selected, cx),
+                    None => crate::item_icons::chip_with(
+                        item.icon,
+                        item.color
+                            .as_deref()
+                            .and_then(|c| crate::item_icons::color_by_id(c, cx)),
+                        px(30.),
+                        selected,
+                        cx,
+                    ),
+                },
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -895,6 +907,7 @@ mod tests {
             detail: detail.into(),
             icon: IconName::Globe.into(),
             color: None,
+            site: None,
             uris: vec![format!("https://{id}.example")],
             favorite,
             has_username: true,

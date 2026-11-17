@@ -9,6 +9,7 @@ use gpui_kit::*;
 use crate::appearance::{Accent, Appearance, Corners, Motion, TextSize, ThemeChoice};
 use crate::settings::{AutoTypeSettings, SettingsStore};
 use crate::ui::{self, Segment};
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
 
@@ -68,6 +69,7 @@ pub struct SettingsView {
     hud_opacity: u32,
     windows_hello: bool,
     background_sync: bool,
+    site_icons: bool,
     quick_search: bool,
     unlock_memory_days: u32,
     relogin_days: u32,
@@ -83,13 +85,34 @@ pub struct SettingsView {
     shortcut_error: Option<(HotkeyKind, SharedString)>,
     focus: FocusHandle,
     _hud_slider: Subscription,
+    /// "Any color" for the accent.
+    accent_picker: Entity<ColorPickerState>,
+    _accent_picker: Subscription,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
-    pub fn new(store: SettingsStore, cx: &mut Context<Self>) -> Self {
+    pub fn new(store: SettingsStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let loaded = store.load();
+        let accent_picker = cx.new(|cx| {
+            let state = ColorPickerState::new(window, cx);
+            match loaded.appearance.custom_accent {
+                Some(rgb) => state.default_value(rgb.to_hsla()),
+                None => state,
+            }
+        });
+        let _accent_picker = cx.subscribe_in(
+            &accent_picker,
+            window,
+            |this, _, event: &ColorPickerEvent, window, cx| {
+                let ColorPickerEvent::Change(Some(color)) = event else {
+                    return;
+                };
+                let rgb = crate::colors::Rgb::from_hsla(*color);
+                this.set_custom_accent(Some(rgb), window, cx);
+            },
+        );
         let hud_slider = cx.new(|_| {
             SliderState::new()
                 .min(1.)
@@ -119,6 +142,7 @@ impl SettingsView {
             hud_opacity: loaded.hud_opacity,
             windows_hello: loaded.windows_hello,
             background_sync: loaded.background_sync,
+            site_icons: loaded.site_icons,
             quick_search: loaded.quick_search,
             unlock_memory_days: loaded.unlock_memory_days,
             relogin_days: loaded.relogin_days,
@@ -127,6 +151,8 @@ impl SettingsView {
             browser_error: None,
             hud_slider,
             _hud_slider,
+            accent_picker,
+            _accent_picker,
             hotkeys: loaded.hotkeys.clone(),
             recording: None,
             shortcut_error: None,
@@ -238,6 +264,16 @@ impl SettingsView {
         let mut settings = self.store.load();
         settings.quick_search = on;
         self.store.save(&settings);
+        cx.notify();
+    }
+
+    /// Website icons on/off (applied at once; downloading happens when settings close).
+    pub fn set_site_icons(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.site_icons = on;
+        let mut settings = self.store.load();
+        settings.site_icons = on;
+        self.store.save(&settings);
+        crate::site_icons::set_enabled(on, cx);
         cx.notify();
     }
 
@@ -528,6 +564,16 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// A free accent color (`None` goes back to the chosen built-in one).
+    pub fn set_custom_accent(
+        &mut self,
+        rgb: Option<crate::colors::Rgb>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update(|a| a.custom_accent = rgb, window, cx);
+    }
+
     fn update(
         &mut self,
         edit: impl FnOnce(&mut Appearance),
@@ -588,53 +634,85 @@ impl SettingsView {
     fn render_accents(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = cx.theme().is_dark();
         let current = self.appearance.accent;
+        let custom = self.appearance.custom_swatch(dark);
         let _ = window;
-        h_flex().gap_2().children(Accent::ALL.map(|accent| {
-            let selected = accent == current;
+        let presets: Vec<Hsla> = Accent::ALL.iter().map(|a| a.swatch(dark)).collect();
+        let picker = ColorPicker::new(&self.accent_picker)
+            .featured_colors(presets)
+            .icon(IconName::Plus)
+            .small()
+            .accessibility_label(t!("settings.custom_accent"));
+        let custom_swatch = custom.map(|color| {
             div()
-                .id(SharedString::from(format!("accent-{}", accent.id())))
+                .id("accent-custom")
                 .test_support()
                 .role(Role::Button)
-                .aria_label(SharedString::from(accent.label()))
-                .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(accent.label()).build(window, cx)
-                })
+                .aria_label(SharedString::from(t!("settings.custom_accent")))
                 .size(px(26.))
                 .p(px(3.))
                 .rounded_full()
                 .border_2()
-                .border_color(if selected {
-                    accent.swatch(dark)
-                } else {
-                    transparent_black()
-                })
-                .cursor_pointer()
-                .active(|el| el.opacity(0.7))
-                .child(
-                    div()
-                        .size_full()
-                        .rounded_full()
-                        .bg(accent.swatch(dark))
-                        .flex()
-                        .items_center()
-                        .justify_center(),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.update(|a| a.accent = accent, window, cx)
-                }))
-                // The chosen color's ring appears growing from the inside.
-                .with_animation(
-                    crate::motion::key("cor", format!("{}:{selected}", accent.id())),
-                    Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
-                    move |el, t| {
-                        if selected {
-                            el.p(px(3. + 3. * (1.0 - t)))
-                        } else {
-                            el
-                        }
-                    },
-                )
-        }))
+                .border_color(color)
+                .child(div().size_full().rounded_full().bg(color))
+        });
+        h_flex()
+            .gap_2()
+            .items_center()
+            .children(Accent::ALL.map(|accent| {
+                let selected = accent == current && custom.is_none();
+                div()
+                    .id(SharedString::from(format!("accent-{}", accent.id())))
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(accent.label()))
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(accent.label()).build(window, cx)
+                    })
+                    .size(px(26.))
+                    .p(px(3.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(if selected {
+                        accent.swatch(dark)
+                    } else {
+                        transparent_black()
+                    })
+                    .cursor_pointer()
+                    .active(|el| el.opacity(0.7))
+                    .child(
+                        div()
+                            .size_full()
+                            .rounded_full()
+                            .bg(accent.swatch(dark))
+                            .flex()
+                            .items_center()
+                            .justify_center(),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.update(
+                            |a| {
+                                a.accent = accent;
+                                a.custom_accent = None;
+                            },
+                            window,
+                            cx,
+                        )
+                    }))
+                    // The chosen color's ring appears growing from the inside.
+                    .with_animation(
+                        crate::motion::key("cor", format!("{}:{selected}", accent.id())),
+                        Animation::new(crate::motion::NORMAL).with_easing(ease_out_quint()),
+                        move |el, t| {
+                            if selected {
+                                el.p(px(3. + 3. * (1.0 - t)))
+                            } else {
+                                el
+                            }
+                        },
+                    )
+            }))
+            .children(custom_swatch)
+            .child(picker)
     }
 }
 
@@ -1142,6 +1220,14 @@ impl Render for SettingsView {
                         .on_click(
                             cx.listener(|this, v: &bool, _, cx| this.set_quick_search(*v, cx)),
                         ),
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.site_icons"),
+                    t!("settings.site_icons_desc"),
+                    Switch::new("site-icons-setting")
+                        .checked(self.site_icons)
+                        .on_click(cx.listener(|this, v: &bool, _, cx| this.set_site_icons(*v, cx))),
                     cx,
                 ),
                 Self::row(

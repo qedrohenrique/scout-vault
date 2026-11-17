@@ -140,6 +140,25 @@ impl ScoutVaultApp {
             v.set_pinned(settings.pinned_items.clone());
             v.set_background_sync(settings.background_sync);
         });
+        crate::site_icons::set_enabled(settings.site_icons, cx);
+        Self::prefetch_site_icons(view, cx);
+        let email = view.read(cx).session().email.clone();
+        crate::profile_photo::load(&email, cx);
+    }
+
+    /// Downloads the website icons the open vault needs (only the missing ones).
+    fn prefetch_site_icons(view: &Entity<VaultView>, cx: &mut App) {
+        if !crate::site_icons::enabled(cx) {
+            return;
+        }
+        let (urls, hosts) = {
+            let v = view.read(cx);
+            (
+                v.session().client.urls().clone(),
+                crate::site_icons::hosts_of(v.list().read(cx).delegate().vault()),
+            )
+        };
+        crate::site_icons::prefetch(&urls, hosts, cx);
     }
 
     /// Idle lock timeout, from the settings (0 = never).
@@ -169,6 +188,11 @@ impl ScoutVaultApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::profile_photo::init(store.dir(), cx);
+        if let Screen::Vault(view) = &screen {
+            let email = view.read(cx).session().email.clone();
+            crate::profile_photo::load(&email, cx);
+        }
         let idle_task = cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(IDLE_CHECK_EVERY).await;
             let alive = this.update_in(cx, |this, window, cx| {
@@ -924,6 +948,7 @@ impl ScoutVaultApp {
                 let mut q = crate::quick_search::QuickItem::from_item(i);
                 q.icon = crate::item_icons::icon_for(i, cx);
                 q.color = crate::item_icons::choice(&i.id, cx).and_then(|c| c.color);
+                q.site = crate::item_icons::site_host(i, cx);
                 q
             })
             .collect();
@@ -1148,7 +1173,7 @@ impl ScoutVaultApp {
         }
         self.generator = None;
         self.health = None;
-        let view = cx.new(|cx| SettingsView::new(self.store.clone(), cx));
+        let view = cx.new(|cx| SettingsView::new(self.store.clone(), window, cx));
         let sub = cx.subscribe_in(
             &view,
             window,
@@ -1164,6 +1189,7 @@ impl ScoutVaultApp {
                     if let Screen::Vault(view) = &this.screen {
                         let on = this.store.load().background_sync;
                         view.update(cx, |v, _| v.set_background_sync(on));
+                        Self::prefetch_site_icons(view, cx);
                     }
                 }
                 SettingsEvent::WindowsHello(on) => this.windows_hello_changed(*on, window, cx),
@@ -1299,7 +1325,11 @@ impl ScoutVaultApp {
             return;
         }
         self.settings = None;
-        let view = cx.new(|_| GeneratorView::new(self.store.clone()));
+        let email = self
+            .current_session(cx)
+            .map(|s| s.email)
+            .unwrap_or_default();
+        let view = cx.new(|cx| GeneratorView::new(self.store.clone(), email, cx));
         let sub =
             cx.subscribe_in(
                 &view,
@@ -1728,6 +1758,9 @@ impl ScoutVaultApp {
                     }
                     VaultEvent::Synced(session) => {
                         crate::saved_session::save(&this.store, session);
+                        if let Screen::Vault(view) = &this.screen {
+                            Self::prefetch_site_icons(&view.clone(), cx);
+                        }
                         if crate::hello::password_changed(&this.store, session) {
                             let mut settings = this.store.load();
                             settings.windows_hello = false;

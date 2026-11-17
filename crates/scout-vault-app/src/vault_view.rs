@@ -17,6 +17,7 @@ use crate::item_editor::{EditorEvent, ItemEditor, NewKind, Places};
 use crate::item_list::{Filter, ItemList, KindFilter};
 use crate::{appearance, clipboard, motion, ui};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use scout_vault_core::generator::PasswordOptions;
 
@@ -446,6 +447,15 @@ pub struct VaultView {
     /// When a click outside closed the picker: the click on the item's icon
     /// that follows it must not open it again.
     icon_picker_closed_at: Option<std::time::Instant>,
+    /// The picker is collapsing (still drawn until the animation ends).
+    icon_picker_closing: bool,
+    /// Counts openings/closings: restarts the animation and ignores stale timers.
+    icon_picker_anim: u32,
+    /// Last measured height of the picker (for the expand/collapse animation).
+    icon_picker_height: std::rc::Rc<std::cell::Cell<f32>>,
+    /// "Any color" of the icon picker.
+    icon_color: Entity<ColorPickerState>,
+    _icon_color_sub: Subscription,
     /// Generator options, for the generate password button in the editor.
     password_options: PasswordOptions,
     /// "Remove attachment" asks for a second click.
@@ -541,11 +551,24 @@ impl VaultView {
                 break;
             }
         });
+        let icon_color = cx.new(|cx| ColorPickerState::new(window, cx));
+        let _icon_color_sub = cx.subscribe(&icon_color, |this, _, event: &ColorPickerEvent, cx| {
+            let ColorPickerEvent::Change(Some(color)) = event else {
+                return;
+            };
+            let hex = crate::colors::Rgb::from_hsla(*color).to_hex();
+            this.choose_icon_color(Some(hex), cx);
+        });
         let mut this = Self {
             editor: None,
             confirm_delete: false,
             icon_picker: false,
             icon_picker_closed_at: None,
+            icon_picker_closing: false,
+            icon_picker_anim: 0,
+            icon_picker_height: Default::default(),
+            icon_color,
+            _icon_color_sub,
             confirm_remove_attachment: None,
             copied: None,
             sidebar_order: std::cell::Cell::new(0),
@@ -723,6 +746,7 @@ impl VaultView {
         self.forget_reprompt();
         self.confirm_delete = false;
         self.icon_picker = false;
+        self.icon_picker_closing = false;
         self.confirm_remove_attachment = None;
         if let Some((editor, _)) = &self.editor {
             if !editor.read(cx).is_saving() {
@@ -1294,21 +1318,49 @@ impl VaultView {
         if just_closed {
             return;
         }
-        self.icon_picker = !self.icon_picker;
-        cx.notify();
-    }
-
-    /// A click outside the picker closes it.
-    fn close_icon_picker_outside(&mut self, cx: &mut Context<Self>) {
-        if self.icon_picker {
-            self.icon_picker = false;
-            self.icon_picker_closed_at = Some(std::time::Instant::now());
+        if self.icon_picker_open() {
+            self.close_icon_picker(cx);
+        } else {
+            self.icon_picker = true;
+            self.icon_picker_closing = false;
+            self.icon_picker_anim += 1;
             cx.notify();
         }
     }
 
+    /// Collapses the picker; it leaves the screen when the animation ends.
+    fn close_icon_picker(&mut self, cx: &mut Context<Self>) {
+        if !self.icon_picker_open() {
+            return;
+        }
+        self.icon_picker_closing = true;
+        self.icon_picker_anim += 1;
+        let anim = self.icon_picker_anim;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::NORMAL).await;
+            let _ = this.update(cx, |v, cx| {
+                if v.icon_picker_closing && v.icon_picker_anim == anim {
+                    v.icon_picker = false;
+                    v.icon_picker_closing = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// A click outside the picker closes it (but not one inside the color popup,
+    /// which is drawn outside the picker).
+    fn close_icon_picker_outside(&mut self, cx: &mut Context<Self>) {
+        if self.icon_picker_open() && !self.icon_color.read(cx).is_open() {
+            self.close_icon_picker(cx);
+            self.icon_picker_closed_at = Some(std::time::Instant::now());
+        }
+    }
+
     pub fn icon_picker_open(&self) -> bool {
-        self.icon_picker
+        self.icon_picker && !self.icon_picker_closing
     }
 
     /// Chooses the icon (`Some(name)`), the color (`color`) or goes back to the default
@@ -1467,8 +1519,10 @@ impl VaultView {
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.choose_icon_color(None, cx))),
             );
+        let mut presets = vec![accent];
         for (id, label, _) in crate::item_icons::COLORS {
             let color = crate::item_icons::color_by_id(id, cx).unwrap_or(accent);
+            presets.push(color);
             let selected = current_color.as_deref() == Some(*id);
             let id = *id;
             colors = colors.child(
@@ -1484,8 +1538,31 @@ impl VaultView {
             );
         }
 
+        // A free color already chosen shows as its own (selected) swatch.
+        if let Some(custom) = current_color
+            .as_deref()
+            .filter(|c| c.starts_with('#'))
+            .and_then(|c| crate::item_icons::color_by_id(c, cx))
+        {
+            colors = colors.child(swatch(
+                "icon-color-custom".into(),
+                custom,
+                true,
+                t!("icons.custom_color").into(),
+            ));
+        }
+        colors = colors.child(
+            ColorPicker::new(&self.icon_color)
+                .featured_colors(presets)
+                .icon(IconName::Plus)
+                .small()
+                .accessibility_label(t!("icons.custom_color")),
+        );
+
+        let measured = self.icon_picker_height.clone();
         let panel = v_flex()
             .id("icon-picker")
+            .relative()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_icon_picker_outside(cx)))
             .gap_3()
             .p_4()
@@ -1538,8 +1615,40 @@ impl VaultView {
                     .text_color(muted)
                     .child(t!("icons.brands")),
             )
-            .child(brands_grid);
-        motion::rise(panel, motion::key("icone-painel", &item.id), 6.)
+            .child(brands_grid)
+            // Measures the panel, so the next animation knows how tall it is.
+            .child(
+                canvas(
+                    move |bounds, _, _| measured.set(f32::from(bounds.size.height)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+
+        // Expands when opening and collapses when closing.
+        let closing = self.icon_picker_closing;
+        let full = match self.icon_picker_height.get() {
+            h if h > 0. => h,
+            _ => 520.,
+        };
+        div().child(panel).with_animation(
+            motion::key(
+                "icone-painel",
+                format!("{}:{}", item.id, self.icon_picker_anim),
+            ),
+            Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
+            move |el, t| {
+                let shown = if closing { 1. - t } else { t };
+                if !closing && t >= 1. {
+                    // Open: no clipping, so the color popup and new rows fit.
+                    return el;
+                }
+                el.overflow_hidden().max_h(px(full * shown)).opacity(shown)
+            },
+        )
     }
 
     /// Moves an item (dragged from the list) to the `folder` folder (`None` = no folder).
@@ -2572,7 +2681,12 @@ impl VaultView {
                             .build(window, cx)
                         })
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenProfile)))
-                        .child(crate::profile_view::avatar(initials, color, px(32.)))
+                        .child(crate::profile_view::avatar(
+                            initials,
+                            color,
+                            px(32.),
+                            crate::profile_photo::get(&self.session.email, cx),
+                        ))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -3010,7 +3124,7 @@ impl VaultView {
                 );
         }
 
-        let picker_open = self.icon_picker;
+        let picker_open = self.icon_picker_open();
         let header = h_flex()
             .gap_4()
             .child(
@@ -3236,7 +3350,7 @@ impl VaultView {
                     .py_8()
                     .gap_6()
                     .child(header)
-                    .when(picker_open, |el| {
+                    .when(self.icon_picker, |el| {
                         el.child(self.render_icon_picker(item, cx))
                     })
                     .when(has_badges, |el| el.child(badges))

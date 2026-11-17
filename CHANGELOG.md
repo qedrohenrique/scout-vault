@@ -7,6 +7,29 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-17
+
+### Added
+- **Passphrases** in the generator (`Ctrl+G`): 3 to 10 words from the EFF list, with a choice of
+  separator, capitals and a number. The strength shows the real entropy (~12.9 bits a word).
+- **Username generator:** a random word (with or without capitals and digits) or your email with a
+  `+tag` (`you+word@example.com`), which lands in the same inbox and shows who leaked it.
+  The generator remembers which of the three you used last.
+- **Website icons** in the list and in quick search, for logins with no chosen icon and no known
+  brand. They come from your server's icon service (only the site's address is sent), stay in
+  memory only and can be turned off in Settings.
+- **Any color:** the accent color (Settings) and item icon colors take any color from a color
+  picker (palette, HSL sliders or hex), besides the built-in ones. Free accents are adjusted so
+  button text stays readable in light and dark mode.
+- **Profile photo:** choose an image on the profile screen; a copy is kept in the app folder on
+  this computer (never sent to the server) and shows in the profile and the sidebar.
+
+### Changed
+- The generator was redesigned: a large result with digits and symbols in color, a strength
+  meter, sliders for length and words, and character sets as chips.
+- Generator and password health have the same fixed "Back" button as the other screens.
+- The icon picker expands when it opens and collapses when it closes.
+
 ## [0.6.1] - 2026-11-17
 
 ### Added

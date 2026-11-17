@@ -4,7 +4,9 @@
 use std::path::PathBuf;
 
 use scout_vault_core::api::{DeviceInfo, ServerUrls};
-use scout_vault_core::generator::PasswordOptions;
+use scout_vault_core::generator::{
+    GeneratorKind, PassphraseOptions, PasswordOptions, UsernameOptions,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::appearance::Appearance;
@@ -98,12 +100,22 @@ pub struct Settings {
     /// On app start, go straight to unlock (session and encrypted cache stored).
     #[serde(default = "yes")]
     pub remember_session: bool,
+    /// Website icons in the list (downloaded from the server's icon service).
+    #[serde(default = "yes")]
+    pub site_icons: bool,
     /// The browser extension may ask the app for logins (off by default).
     #[serde(default)]
     pub browser_fill: bool,
     /// Password generator options (the generated password is never saved).
     #[serde(default)]
     pub generator: PasswordOptions,
+    /// What the generator screen makes (password, passphrase or username).
+    #[serde(default)]
+    pub generator_kind: GeneratorKind,
+    #[serde(default)]
+    pub passphrase: PassphraseOptions,
+    #[serde(default)]
+    pub username_generator: UsernameOptions,
     /// Filling in other apps via the global shortcut.
     #[serde(default)]
     pub autotype: AutoTypeSettings,
@@ -140,7 +152,11 @@ impl Default for Settings {
             appearance: Appearance::default(),
             language: String::new(),
             generator: PasswordOptions::default(),
+            generator_kind: GeneratorKind::default(),
+            passphrase: PassphraseOptions::default(),
+            username_generator: UsernameOptions::default(),
             remember_session: true,
+            site_icons: true,
             pinned_items: Vec::new(),
             close_to_tray: true,
             item_icons: Default::default(),

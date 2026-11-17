@@ -97,17 +97,18 @@ installer (Windows Hello, locking with Windows, re-prompt and saving logins are 
 
 ### Phase C — Desktop productivity
 - ~~Global quick search~~ — done: `Ctrl+Shift+Space` opens a floating window to find, copy and fill without opening the app.
-- **Website icons** in the list (the server's icon service, with a cache and an option to turn it off).
+- ~~Website icons~~ — done: from the server's icon service, in memory only (a cache on disk would list the vault's sites), with an option to turn them off; known brands keep their own icon.
 - Auto-type: **per-item sequence** (`{USERNAME}{TAB}{PASSWORD}{ENTER}`, `{TOTP}`, delays) and admin windows.
-- Configurable shortcuts; command palette (`Ctrl+K`).
-- Custom title bar that follows the theme.
+- ~~Configurable shortcuts~~ — done: recorded in Settings, both global shortcuts.
+- Command palette (`Ctrl+K`).
+- ~~Custom title bar that follows the theme~~ — done: same color as the app, with the logo and the vault actions.
 
 ### Phase D — Health and generation
 - ~~Health report~~ — done: "Password health" screen (`Ctrl+Shift+H`) with a score, weak,
   reused, old (no change in over a year) and **leaked** passwords (Have I Been Pwned with
   k-anonymity: only 5 characters of the SHA-1 leave the machine, and only when the person asks).
   Missing: sites that support 2FA where the item has none (2fa.directory list).
-- **Passphrases** (EFF list, CC BY 3.0) and **username generator**.
+- ~~Passphrases and username generator~~ — done: EFF list (CC BY 3.0), random word or email with `+tag`.
 - **Email aliases** via SimpleLogin, addy.io, Fastmail and DuckDuckGo (as Bitwarden does).
 
 ### Phase E — Passkeys

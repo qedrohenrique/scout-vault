@@ -156,7 +156,8 @@ pub fn brand_for_url(url: &str) -> Option<&'static Brand> {
         .map(|(b, _)| b)
 }
 
-/// Chosen icon (name from [`CHOICES`]) and color (id from [`COLORS`]; no color = theme accent).
+/// Chosen icon (name from [`CHOICES`]) and color (id from [`COLORS`] or a free
+/// `#rrggbb`; no color = theme accent).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CustomIcon {
     pub icon: String,
@@ -251,10 +252,13 @@ pub fn icon_by_name(name: &str) -> Option<ItemIcon> {
         .map(|(_, i)| ItemIcon::Lucide(*i))
 }
 
-/// Color of an id from [`COLORS`], adjusted to the light/dark theme.
+/// Color of an id from [`COLORS`] or a free `#rrggbb`, adjusted to the light/dark theme.
 pub fn color_by_id(id: &str, cx: &App) -> Option<Hsla> {
-    let (_, _, hue) = COLORS.iter().find(|(c, _, _)| *c == id)?;
     let dark = cx.theme().mode.is_dark();
+    if let Some(rgb) = crate::colors::Rgb::parse(id) {
+        return Some(crate::colors::readable(rgb.to_hsla(), dark));
+    }
+    let (_, _, hue) = COLORS.iter().find(|(c, _, _)| *c == id)?;
     Some(hsla(*hue, 0.72, if dark { 0.64 } else { 0.48 }, 1.))
 }
 
@@ -300,6 +304,31 @@ pub fn icon_for(item: &Item, cx: &App) -> ItemIcon {
         .unwrap_or_else(|| crate::item_list::kind_icon(&item.kind).into())
 }
 
+/// Domain whose website icon the item shows: only without a chosen icon or a known brand.
+pub fn site_host(item: &Item, cx: &App) -> Option<String> {
+    if choice(&item.id, cx).is_some() || site_brand(item).is_some() {
+        return None;
+    }
+    crate::site_icons::host_of_item(item)
+}
+
+/// Square with a website's icon (downloaded image).
+pub fn site_chip(image: std::sync::Arc<Image>, size: Pixels, highlighted: bool, cx: &App) -> Div {
+    div()
+        .size(size)
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(cx.theme().radius)
+        .bg(if highlighted {
+            cx.theme().secondary_hover
+        } else {
+            cx.theme().secondary
+        })
+        .child(img(image).size(size * 0.58))
+}
+
 /// Brand of a login's first known address.
 pub fn site_brand(item: &Item) -> Option<&'static Brand> {
     match &item.kind {
@@ -317,6 +346,9 @@ pub fn color_for(item: &Item, cx: &App) -> Option<Hsla> {
 
 /// Square with the item's icon, in the chosen color (or in the default style).
 pub fn chip(item: &Item, size: Pixels, highlighted: bool, cx: &App) -> Div {
+    if let Some(image) = site_host(item, cx).and_then(|h| crate::site_icons::image(&h, cx)) {
+        return site_chip(image, size, highlighted, cx);
+    }
     chip_with(
         icon_for(item, cx),
         color_for(item, cx),

@@ -494,8 +494,37 @@ fn settings_change_theme_and_accent_live(cx: &mut TestAppContext) {
                 text_size: scout_vault_app::appearance::TextSize::Large,
                 motion: scout_vault_app::appearance::Motion::On,
                 corners: scout_vault_app::appearance::Corners::Round,
+                custom_accent: None,
             }
         );
+    });
+
+    // Any color can be the accent; it stays readable, and a built-in one undoes it.
+    let pink = scout_vault_app::colors::Rgb::parse("#ff00aa");
+    cx.update_window(handle, |_, window, cx| {
+        let view = app.read(cx).settings_view().cloned().unwrap();
+        view.update(cx, |v, cx| v.set_custom_accent(pink, window, cx));
+    })
+    .unwrap();
+    settle(cx);
+    cx.update(|cx| {
+        let view = app.read(cx).settings_view().unwrap();
+        assert_eq!(view.read(cx).appearance().custom_accent, pink);
+        assert!(!same_color(cx.theme().primary, Accent::Coral.swatch(false)));
+        let white = gpui_kit::hsla(0., 0., 1., 1.);
+        assert!(scout_vault_app::colors::contrast(cx.theme().primary, white) >= 4.4);
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("accent-custom").is_some());
+        window.click("accent-coral", cx);
+    })
+    .unwrap();
+    settle(cx);
+    cx.update(|cx| {
+        let view = app.read(cx).settings_view().unwrap();
+        assert_eq!(view.read(cx).appearance().custom_accent, None);
+        assert!(same_color(cx.theme().primary, Accent::Coral.swatch(false)));
     });
 
     // Closing goes back to the vault, which stayed open underneath.
@@ -606,6 +635,145 @@ fn keyboard_shortcuts_copy_search_and_lock(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn website_icons_show_in_the_list_and_can_be_turned_off(cx: &mut TestAppContext) {
+    let dir =
+        std::env::temp_dir().join(format!("scout-vault-ui-site-icons-{}", std::process::id()));
+    let store = SettingsStore::at(dir.join("settings.json"));
+    cx.update(gpui_kit::init);
+    let store2 = store.clone();
+    let (handle, app) = cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |window, cx| {
+            cx.new(|cx| ScoutVaultApp::with_unlocked(store2, unlocked_fixture(), window, cx))
+        })
+        .unwrap()
+    });
+    // Logins with a known brand keep the brand; the others get the site's icon.
+    let item = cx.update(|cx| {
+        let view = app.read(cx).vault_view().cloned().expect("vault aberto");
+        let list = view.read(cx).list().clone();
+        let vault = list.read(cx).delegate().vault();
+        let hosts = scout_vault_app::site_icons::hosts_of(vault);
+        vault
+            .items
+            .iter()
+            .find(|i| {
+                scout_vault_app::site_icons::host_of_item(i).is_some_and(|h| hosts.contains(&h))
+            })
+            .expect("um login com endereço e sem marca conhecida")
+            .clone()
+    });
+    let host = cx.update(|cx| scout_vault_app::item_icons::site_host(&item, cx).unwrap());
+
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend_from_slice(&16u32.to_be_bytes());
+    png.extend_from_slice(&16u32.to_be_bytes());
+    png.extend_from_slice(&[8, 6, 0, 0, 0]);
+    cx.update(|cx| scout_vault_app::site_icons::insert(&host, png.clone(), cx));
+    cx.update(|cx| assert!(scout_vault_app::site_icons::image(&host, cx).is_some()));
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+
+    // Garbage isn't an icon.
+    cx.update(|cx| {
+        scout_vault_app::site_icons::insert("broken.example", b"<html>404</html>".to_vec(), cx);
+        assert!(scout_vault_app::site_icons::image("broken.example", cx).is_none());
+    });
+
+    // Turning the option off forgets the icons and saves the choice.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    let settings = cx.update(|cx| app.read(cx).settings_view().cloned().unwrap());
+    cx.update(|cx| settings.update(cx, |s, cx| s.set_site_icons(false, cx)));
+    cx.update(|cx| {
+        assert!(!scout_vault_app::site_icons::enabled(cx));
+        assert!(scout_vault_app::site_icons::image(&host, cx).is_none());
+    });
+    assert!(!store.load().site_icons);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn generator_makes_passphrases_and_usernames(cx: &mut TestAppContext) {
+    use scout_vault_core::generator::{GeneratorKind, UsernameKind};
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-phrase-{}", std::process::id()));
+    let store = SettingsStore::at(dir.join("settings.json"));
+    cx.update(gpui_kit::init);
+    let store2 = store.clone();
+    let (handle, app) = cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |window, cx| {
+            cx.new(|cx| ScoutVaultApp::with_unlocked(store2, unlocked_fixture(), window, cx))
+        })
+        .unwrap()
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-generator", cx);
+    })
+    .unwrap();
+    let generator = cx.update(|cx| app.read(cx).generator_view().cloned().unwrap());
+
+    // Passphrase: 4 words separated by dots.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("gen-kind-passphrase", cx);
+    })
+    .unwrap();
+    cx.update(|cx| generator.update(cx, |g, cx| g.edit_phrase(|o| o.words = 4, cx)));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("sep-1", cx);
+    })
+    .unwrap();
+    let phrase = cx.update(|cx| generator.read(cx).password().to_owned());
+    assert_eq!(phrase.split('.').count(), 4, "{phrase}");
+    assert!(phrase
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c == '.' || c == '-'));
+    let saved = store.load();
+    assert_eq!(saved.generator_kind, GeneratorKind::Passphrase);
+    assert_eq!(saved.passphrase.words, 4);
+    assert_eq!(saved.passphrase.separator, ".");
+
+    // Username: a word with four digits, then the account email with a tag.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("gen-kind-username", cx);
+    })
+    .unwrap();
+    let user = cx.update(|cx| generator.read(cx).password().to_owned());
+    assert!(user.ends_with(|c: char| c.is_ascii_digit()), "{user}");
+    assert!(!user.contains('@'));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("user-kind-plus", cx);
+    })
+    .unwrap();
+    let user = cx.update(|cx| generator.read(cx).password().to_owned());
+    assert!(user.contains('+') && user.contains('@'), "{user}");
+    assert_eq!(
+        store.load().username_generator.kind,
+        UsernameKind::PlusEmail
+    );
+
+    // Reopening remembers the kind.
+    cx.update_window(handle, |_, window, cx| window.press("escape", cx))
+        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-generator", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let g = app.read(cx).generator_view().cloned().unwrap();
+        assert_eq!(g.read(cx).kind(), GeneratorKind::Username);
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
 fn password_generator_follows_options_and_saves_them(cx: &mut TestAppContext) {
     let dir = std::env::temp_dir().join(format!("scout-vault-ui-generator-{}", std::process::id()));
     let store = SettingsStore::at(dir.join("settings.json"));
@@ -633,9 +801,15 @@ fn password_generator_follows_options_and_saves_them(cx: &mut TestAppContext) {
             window.find("generator-output").label(),
             Some(first.as_str())
         );
-        window.click("length-32", cx);
     })
     .unwrap();
+    cx.update(|cx| {
+        generator.update(cx, |g, cx| {
+            let mut o = g.options();
+            o.length = 32;
+            g.set_options(o, cx)
+        })
+    });
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("gen-symbols", cx);
@@ -4011,6 +4185,11 @@ fn item_icon_can_be_chosen_saved_and_reset(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert!(cx.update(|cx| vault.read(cx).icon_picker_open()));
+    // The picker expands: wait for the animation before clicking inside it.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("icon-choice-gamepad", cx);
@@ -4064,6 +4243,15 @@ fn item_icon_can_be_chosen_saved_and_reset(cx: &mut TestAppContext) {
             v.select_item("login-1", window, cx);
             v.toggle_icon_picker(cx);
         });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    // The picker expands: wait for the animation before clicking inside it.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("icon-reset", cx);
     })
@@ -4305,6 +4493,59 @@ fn shortcuts_can_be_recorded_in_settings(cx: &mut TestAppContext) {
 
 /// Profile: clicking the email in the sidebar opens it; shows the account and
 /// the vault in numbers; Esc goes back; "Sign out" asks twice and goes to login.
+#[gpui_kit::test]
+fn profile_photo_is_chosen_kept_in_the_app_folder_and_removed(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-photo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = SettingsStore::at(dir.join("settings.json"));
+    cx.update(gpui_kit::init);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-email", cx);
+    })
+    .unwrap();
+    let profile = cx.update(|cx| app.read(cx).profile_view().cloned().unwrap());
+    let email = cx.update(|cx| profile.read(cx).info().email.clone());
+
+    // Not an image: refused, still the initials.
+    let text = dir.join("notes.txt");
+    std::fs::write(&text, b"hello, not a picture").unwrap();
+    cx.update(|cx| profile.update(cx, |p, cx| p.set_photo(&text, cx)));
+    cx.update(|cx| assert!(scout_vault_app::profile_photo::get(&email, cx).is_none()));
+
+    // A PNG: copied into the app folder and shown.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend_from_slice(&16u32.to_be_bytes());
+    png.extend_from_slice(&16u32.to_be_bytes());
+    png.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let picture = dir.join("me.png");
+    std::fs::write(&picture, &png).unwrap();
+    cx.update(|cx| profile.update(cx, |p, cx| p.set_photo(&picture, cx)));
+    let stored = cx.update(|cx| {
+        assert!(scout_vault_app::profile_photo::get(&email, cx).is_some());
+        scout_vault_app::profile_photo::stored_path(&email, cx).unwrap()
+    });
+    assert!(stored.starts_with(dir.join("photos")));
+    assert_eq!(std::fs::read(&stored).unwrap(), png);
+    std::fs::remove_file(&picture).unwrap(); // the copy doesn't depend on the original
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("profile-photo-remove").is_some());
+    })
+    .unwrap();
+
+    // Remove: back to the initials, and the copy is deleted.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("profile-photo-remove", cx)
+    })
+    .unwrap();
+    cx.update(|cx| assert!(scout_vault_app::profile_photo::get(&email, cx).is_none()));
+    assert!(!stored.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[gpui_kit::test]
 fn profile_shows_the_account_and_signs_out(cx: &mut TestAppContext) {
     cx.executor().allow_parking();

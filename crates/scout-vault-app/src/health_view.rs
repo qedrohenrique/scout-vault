@@ -581,38 +581,37 @@ impl Render for HealthView {
             theme.popover,
             theme.muted_foreground,
         );
-        let header = h_flex()
-            .justify_between()
+        let header = v_flex()
+            .gap_1()
+            .child(div().text_2xl().font_semibold().child(t!("health.title")))
             .child(
-                v_flex()
-                    .gap_1()
-                    .child(div().text_2xl().font_semibold().child(t!("health.title")))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child(t!("health.subtitle")),
-                    ),
-            )
-            .child(
-                Button::new("health-close")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Close)
-                    .tooltip(t!("common.close_esc"))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(HealthEvent::Close))),
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(t!("health.subtitle")),
             );
+        // "Back" stays put on the left while the page scrolls, like the other screens.
+        let back = div().absolute().top_6().left_6().child(
+            Button::new("health-close")
+                .ghost()
+                .small()
+                .icon(IconName::ArrowLeft)
+                .label(t!("common.back"))
+                .tooltip(t!("common.close_esc"))
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(HealthEvent::Close))),
+        );
         let mut tabs = h_flex().gap_3();
         for (order, tab) in Tab::ALL.into_iter().enumerate() {
             tabs = tabs.child(self.tab_card(tab, order, cx));
         }
         let list = self.list(cx);
         let tab = self.tab;
-        v_flex()
-            .id("health-view")
-            .size_full()
-            .overflow_y_scroll()
-            .p_8()
+        let content = v_flex()
+            .w_full()
+            .max_w(px(860.))
+            .mx_auto()
+            .px_8()
+            .py_10()
             .gap_5()
             .child(header.flex_shrink_0())
             .child(div().flex_shrink_0().child(self.summary(cx)))
@@ -628,7 +627,18 @@ impl Render for HealthView {
                     .child(list),
                 motion::key("saude-lista", tab.id()),
                 4.,
-            ))
+            ));
+        div()
+            .relative()
+            .size_full()
+            .child(
+                div()
+                    .id("health-view")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .child(content),
+            )
+            .child(back)
     }
 }
 
