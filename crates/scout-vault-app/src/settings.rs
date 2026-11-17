@@ -71,6 +71,9 @@ pub struct Settings {
     /// Seconds until the clipboard is cleared after copying (0 = don't clear).
     #[serde(default = "default_clipboard_clear_secs")]
     pub clipboard_clear_secs: u32,
+    /// Opacity (%) of the floating windows (HUD, tray menu); behind them, Windows blurs.
+    #[serde(default = "default_hud_opacity")]
+    pub hud_opacity: u32,
     /// Lock when the window is minimized or closed to the tray.
     #[serde(default)]
     pub lock_on_minimize: bool,
@@ -140,6 +143,7 @@ impl Default for Settings {
             item_icons: Default::default(),
             lock_with_windows: true,
             clipboard_clear_secs: default_clipboard_clear_secs(),
+            hud_opacity: default_hud_opacity(),
             lock_on_minimize: false,
             windows_hello: false,
             background_sync: true,
@@ -156,6 +160,10 @@ impl Default for Settings {
 
 fn default_relogin_days() -> u32 {
     30
+}
+
+fn default_hud_opacity() -> u32 {
+    crate::quick_search::DEFAULT_OPACITY
 }
 
 fn default_clipboard_clear_secs() -> u32 {

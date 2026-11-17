@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -59,6 +60,12 @@ pub struct ScoutVaultApp {
     pending_autotype: Option<Request>,
     /// Quick search asked for while locked: opens after the HUD unlocks.
     pending_quick_search: Option<Request>,
+    /// The login shown inside the HUD (signed out).
+    _hud_login: Option<Subscription>,
+    /// Redraws the title bar when the vault screen changes.
+    _screen_observer: Option<Subscription>,
+    /// Typing waiting for "type anyway" (the app doesn't tell its fields).
+    pending_type_anyway: Option<(Item, Request)>,
     /// Browser login waiting for unlock to be saved (url, username, password).
     pending_browser_save: Option<(String, String, zeroize::Zeroizing<String>)>,
     /// Typing waiting for the master password of an item that asks for it (request number).
@@ -181,6 +188,7 @@ impl ScoutVaultApp {
             }
         });
         crate::clipboard::set_clear_after_secs(store.load().clipboard_clear_secs, cx);
+        crate::quick_search::set_opacity(store.load().hud_opacity, cx);
         crate::item_icons::set_all(store.load().item_icons, cx);
         // Global shortcut requests arrive through a channel (the shortcut thread isn't the UI thread).
         let (autotype_tx, autotype_rx) = std::sync::mpsc::channel::<Request>();
@@ -243,6 +251,9 @@ impl ScoutVaultApp {
         let mut this = Self {
             pending_autotype: None,
             pending_quick_search: None,
+            _hud_login: None,
+            _screen_observer: None,
+            pending_type_anyway: None,
             pending_browser_save: None,
             reprompt_autotype: None,
             reprompt_counter: 0,
@@ -387,6 +398,12 @@ impl ScoutVaultApp {
             },
             Command::OpenMenu { x, y } => self.open_tray_menu((x, y), cx),
             Command::Unlock(password) => self.unlock_from_hud(password, window, cx),
+            Command::TypeAnyway => {
+                self.close_quick_search(cx);
+                if let Some((item, request)) = self.pending_type_anyway.take() {
+                    self.type_now(&item, request, autotype::FieldCheck::Skip, window, cx);
+                }
+            }
             Command::Fill { item_id } => {
                 self.close_quick_search(cx);
                 let Some(request) = self.quick_target.take() else {
@@ -496,7 +513,8 @@ impl ScoutVaultApp {
             is_movable: false,
             is_resizable: false,
             is_minimizable: false,
-            window_background: WindowBackgroundAppearance::Transparent,
+            // Windows blurs what is behind (acrylic); the card's opacity is a setting.
+            window_background: WindowBackgroundAppearance::Blurred,
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(px(x as f32 / scale), px(y as f32 / scale)),
                 size,
@@ -705,15 +723,19 @@ impl ScoutVaultApp {
             self.open_locked_hud(target, false, cx);
             return;
         }
+        if matches!(self.screen, Screen::Login(_)) {
+            let target = (!request.own_window).then(|| request.title.clone());
+            self.pending_quick_search = Some(request);
+            self.open_login_hud(target, false, window, cx);
+            return;
+        }
         let Some(items) = self.quick_items(cx) else {
-            crate::tray::show_window(window);
-            crate::toast::info(t!("app.unlock_to_quick_search"), cx);
             return;
         };
         // Used in Scout Vault itself: there is no other app to type into.
         let target = (!request.own_window).then(|| request.title.clone());
         self.quick_target = (!request.own_window).then_some(request);
-        self.open_quick_window(cx, move |tx, window, cx| {
+        self.open_quick_window(crate::quick_search::HEIGHT, cx, move |tx, window, cx| {
             crate::quick_search::QuickSearch::new(items, target, tx, window, cx)
         });
     }
@@ -732,7 +754,7 @@ impl ScoutVaultApp {
         };
         let target = request.title.clone();
         self.quick_target = Some(request);
-        self.open_quick_window(cx, move |tx, window, cx| {
+        self.open_quick_window(crate::quick_search::HEIGHT, cx, move |tx, window, cx| {
             crate::quick_search::QuickSearch::autotype(items, target, suggested, tx, window, cx)
         });
     }
@@ -771,8 +793,51 @@ impl ScoutVaultApp {
     /// The HUD in its password step (vault locked).
     fn open_locked_hud(&mut self, target: Option<String>, autotype: bool, cx: &mut Context<Self>) {
         self.close_quick_search(cx);
-        self.open_quick_window(cx, move |tx, window, cx| {
-            crate::quick_search::QuickSearch::locked(target, autotype, tx, window, cx)
+        self.open_quick_window(
+            crate::quick_search::LOCKED_HEIGHT,
+            cx,
+            move |tx, window, cx| {
+                crate::quick_search::QuickSearch::locked(target, autotype, tx, window, cx)
+            },
+        );
+    }
+
+    /// Signed out: the HUD shows the login; signing in carries on with what was asked.
+    fn open_login_hud(
+        &mut self,
+        target: Option<String>,
+        autotype: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_quick_search(cx);
+        let store = self.store.clone();
+        self.open_quick_window(
+            crate::quick_search::LOGIN_HEIGHT,
+            cx,
+            move |tx, window, cx| {
+                crate::quick_search::QuickSearch::signed_out(
+                    target, autotype, store, tx, window, cx,
+                )
+            },
+        );
+        let login = self
+            .quick_search
+            .as_ref()
+            .and_then(|(_, q)| q.read(cx).login_view().cloned());
+        self._hud_login = login.map(|login| {
+            cx.subscribe_in(&login, window, |this, _, event: &LoginEvent, window, cx| {
+                if let LoginEvent::Unlocked(unlocked) = event {
+                    // Close first: focus goes back to the app that will be typed into.
+                    this.close_quick_search(cx);
+                    this._hud_login = None;
+                    let quick = this.pending_quick_search.take();
+                    this.show_vault_from(unlocked, window, cx);
+                    if let Some(request) = quick {
+                        this.open_quick_search(request, window, cx);
+                    }
+                }
+            })
         });
     }
 
@@ -852,6 +917,7 @@ impl ScoutVaultApp {
     /// Opens the quick search window (centered, near the top, on top of everything).
     fn open_quick_window(
         &mut self,
+        height: f32,
         cx: &mut Context<Self>,
         build: impl FnOnce(
                 tokio::sync::mpsc::UnboundedSender<crate::tray::Command>,
@@ -860,10 +926,7 @@ impl ScoutVaultApp {
             ) -> crate::quick_search::QuickSearch
             + 'static,
     ) {
-        let size = size(
-            px(crate::quick_search::WIDTH),
-            px(crate::quick_search::HEIGHT),
-        );
+        let size = size(px(crate::quick_search::WIDTH), px(height));
         // Centered, in the top third of the work area (like launchers).
         let (work, scale) = crate::tray::work_area_and_scale();
         let (wx, wy, ww, wh) = (
@@ -884,7 +947,8 @@ impl ScoutVaultApp {
             is_movable: false,
             is_resizable: false,
             is_minimizable: false,
-            window_background: WindowBackgroundAppearance::Transparent,
+            // Windows blurs what is behind (acrylic); the card's opacity is a setting.
+            window_background: WindowBackgroundAppearance::Blurred,
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, size))),
             ..Default::default()
         };
@@ -955,10 +1019,10 @@ impl ScoutVaultApp {
             return;
         }
         let Screen::Vault(view) = &self.screen else {
-            let message = t!("app.unlock_to_autotype", title = request.title.trim());
+            // Signed out: the login happens in the HUD too.
+            let target = request.title.clone();
             self.pending_autotype = Some(request);
-            crate::tray::show_window(window);
-            crate::toast::info(message, cx);
+            self.open_login_hud(Some(target), true, window, cx);
             return;
         };
         let items = view
@@ -1001,13 +1065,14 @@ impl ScoutVaultApp {
                 }
             }
         }
-        self.type_now(item, request, window, cx);
+        self.type_now(item, request, autotype::FieldCheck::Verify, window, cx);
     }
 
     fn type_now(
         &mut self,
         item: &Item,
         request: Request,
+        check: autotype::FieldCheck,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1018,14 +1083,35 @@ impl ScoutVaultApp {
         self.record_activity();
         let typer = self.typer.clone();
         let target = request.window;
+        let item = item.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let result = crate::io::blocking(move || typer(target, keys)).await;
-            if let Err(message) = result {
-                this.update(cx, |_, cx| crate::toast::error(message, cx))
-                    .ok();
-            }
+            let result = crate::io::blocking(move || typer(target, keys, check)).await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => {}
+                // The HUD says it (the main window may be hidden behind the app).
+                Err(autotype::TypeError::CantVerify) => {
+                    this.pending_type_anyway = Some((item, request));
+                    this.open_notice_hud(t!("autotype.cant_verify").into(), true, cx);
+                }
+                Err(autotype::TypeError::Failed(message)) => {
+                    this.open_notice_hud(message.into(), false, cx);
+                }
+            })
+            .ok();
         })
         .detach();
+    }
+
+    /// A message from auto-type in the HUD (with "type anyway", if `confirm`).
+    fn open_notice_hud(&mut self, message: SharedString, confirm: bool, cx: &mut Context<Self>) {
+        self.close_quick_search(cx);
+        self.open_quick_window(
+            crate::quick_search::NOTICE_HEIGHT,
+            cx,
+            move |tx, window, cx| {
+                crate::quick_search::QuickSearch::notice(message, confirm, tx, window, cx)
+            },
+        );
     }
 
     /// Toast stack (for tests).
@@ -1043,7 +1129,7 @@ impl ScoutVaultApp {
         }
         self.generator = None;
         self.health = None;
-        let view = cx.new(|_| SettingsView::new(self.store.clone()));
+        let view = cx.new(|cx| SettingsView::new(self.store.clone(), cx));
         let sub = cx.subscribe_in(
             &view,
             window,
@@ -1268,6 +1354,11 @@ impl ScoutVaultApp {
     }
 
     fn set_screen(&mut self, (screen, sub): (Screen, Subscription), cx: &mut Context<Self>) {
+        // The title bar shows the vault's actions (the sync spinner…): redraw with it.
+        self._screen_observer = match &screen {
+            Screen::Vault(view) => Some(cx.observe(view, |_, _, cx| cx.notify())),
+            _ => None,
+        };
         // Switching the screen drops the previous one: the decrypted vault leaves memory with it
         // (including the copy the fill list had and the health screen's).
         self.health = None;
@@ -1534,7 +1625,13 @@ impl ScoutVaultApp {
                     VaultEvent::RepromptPassed(token) => {
                         if let Some((t, item, request)) = this.reprompt_autotype.take() {
                             if t == *token {
-                                this.type_now(&item, request, window, cx);
+                                this.type_now(
+                                    &item,
+                                    request,
+                                    autotype::FieldCheck::Verify,
+                                    window,
+                                    cx,
+                                );
                             } else {
                                 this.reprompt_autotype = Some((t, item, request));
                             }
@@ -1585,17 +1682,60 @@ impl Render for ScoutVaultApp {
             (None, Screen::Locked(v)) => v.clone().into(),
             (None, Screen::Vault(v)) => v.clone().into(),
         };
+        // Title bar drawn by the app (minimize, maximize, close): the same colors as
+        // the screen below, so window and app read as one piece.
+        let theme = cx.theme();
+        let with_sidebar = matches!(
+            (
+                &self.settings,
+                &self.screen,
+                self.generator.is_some() || self.health.is_some()
+            ),
+            (None, Screen::Vault(_), false)
+        );
+        let (background, sidebar, border) = (theme.background, theme.sidebar, theme.border);
+        // On the vault: the brand over the sidebar's column, the actions on the right.
+        let actions = match &self.screen {
+            Screen::Vault(view) if with_sidebar => {
+                Some(view.update(cx, |v, cx| v.render_title_actions(cx)))
+            }
+            _ => None,
+        };
+        let title_bar = gpui_kit::component::TitleBar::new()
+            // A bit taller than the default (34 px): room around the logo.
+            .h(px(44.))
+            .pl_0()
+            .border_0()
+            .bg(background)
+            .when(with_sidebar, |bar| {
+                bar.child(
+                    gpui_kit::component::h_flex()
+                        .h_full()
+                        .w(px(crate::vault_view::SIDEBAR_WIDTH))
+                        .flex_shrink_0()
+                        .px_4()
+                        .items_center()
+                        .bg(sidebar)
+                        .border_r_1()
+                        .border_color(border)
+                        .child(crate::ui::wordmark(cx)),
+                )
+            })
+            .children(actions);
         div()
             .track_focus(&self.focus)
             .relative()
             .size_full()
+            .flex()
+            .flex_col()
+            .child(title_bar)
             // Any key or mouse movement postpones the automatic lock.
             // Ctrl+, opens/closes settings; Esc closes.
             .capture_key_down(cx.listener(Self::on_key))
             .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, _| this.record_activity()))
             // Each new screen (login → vault, opening settings…) eases in.
             .child(crate::motion::rise(
-                div().size_full().child(content.clone()),
+                div().flex_1().min_h_0().w_full().child(content.clone()),
                 crate::motion::key("tela", content.entity_id()),
                 10.,
             ))

@@ -6,7 +6,11 @@
 //! list to choose from. Nothing goes through the clipboard.
 //!
 //! Security: before each typed part, we check that the focused window is
-//! still the target; if it changed, we stop without typing the rest.
+//! still the target; if it changed, we stop without typing the rest. Before
+//! the password, Windows UI Automation must say the focused field **is a
+//! password field** — otherwise we stop (the cursor could be in a chat box, and
+//! `Enter` would send the password). When the app doesn't tell what its fields
+//! are, nothing is typed until the person confirms.
 
 use std::sync::Arc;
 
@@ -29,6 +33,8 @@ pub struct Request {
 /// A part of what will be typed.
 pub enum Key {
     Text(Zeroizing<String>),
+    /// The password: only typed into a password field (see [`FieldCheck`]).
+    Password(Zeroizing<String>),
     Tab,
     Enter,
 }
@@ -37,14 +43,32 @@ impl std::fmt::Debug for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Key::Text(t) => write!(f, "Text({} chars)", t.chars().count()),
+            Key::Password(t) => write!(f, "Password({} chars)", t.chars().count()),
             Key::Tab => f.write_str("Tab"),
             Key::Enter => f.write_str("Enter"),
         }
     }
 }
 
+/// Check that the password goes into a password field?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldCheck {
+    Verify,
+    /// The person confirmed typing anyway (the app doesn't tell its fields).
+    Skip,
+}
+
+/// Why typing didn't happen (or stopped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeError {
+    /// Nothing was typed: the app doesn't say whether the field is a password
+    /// field. Ask the person before typing.
+    CantVerify,
+    Failed(String),
+}
+
 /// Who actually types (swapped for a fake in tests).
-pub type Typer = Arc<dyn Fn(isize, Vec<Key>) -> Result<(), String> + Send + Sync>;
+pub type Typer = Arc<dyn Fn(isize, Vec<Key>, FieldCheck) -> Result<(), TypeError> + Send + Sync>;
 
 /// What to type for an item: `username ⇥ password` and, if asked, `↵`.
 pub fn sequence(item: &Item, press_enter: bool) -> Vec<Key> {
@@ -65,7 +89,7 @@ pub fn sequence(item: &Item, press_enter: bool) -> Vec<Key> {
         }
     }
     if let Some(p) = pass {
-        keys.push(Key::Text(Zeroizing::new(p.to_owned())));
+        keys.push(Key::Password(Zeroizing::new(p.to_owned())));
     }
     if press_enter && !keys.is_empty() {
         keys.push(Key::Enter);
@@ -154,7 +178,7 @@ pub fn candidates<'a>(items: &'a [Item], title: &str) -> Vec<&'a Item> {
 
 /// System typist (Windows); on other systems, it only returns an error.
 pub fn system_typer() -> Typer {
-    Arc::new(|window, keys| platform::type_keys(window, &keys))
+    Arc::new(|window, keys, check| platform::type_keys(window, &keys, check))
 }
 
 static SYSTEM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -196,6 +220,8 @@ pub fn listen_quick_search(tx: std::sync::mpsc::Sender<Request>) -> Result<Liste
 #[cfg(windows)]
 mod platform {
     use std::time::{Duration, Instant};
+
+    use super::{FieldCheck, TypeError};
 
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -355,7 +381,72 @@ mod platform {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    pub fn type_keys(window: isize, keys: &[Key]) -> Result<(), String> {
+    /// Windows UI Automation, created once per fill (creating it is the slow part).
+    pub(crate) struct Fields {
+        uia: Option<windows::Win32::UI::Accessibility::IUIAutomation>,
+        com: bool,
+    }
+
+    impl Fields {
+        pub(crate) fn new() -> Self {
+            use windows::Win32::System::Com::{
+                CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+            };
+            use windows::Win32::UI::Accessibility::CUIAutomation;
+            // SAFETY: COM on this thread, released in `drop`.
+            unsafe {
+                let com = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+                let uia = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok();
+                Self { uia, com }
+            }
+        }
+
+        /// The focused element: (is a text field, is a password field). `None`:
+        /// the app doesn't say (no UI Automation support), so it can't be checked.
+        pub(crate) fn focused(&self) -> Option<(bool, bool)> {
+            use windows::Win32::UI::Accessibility::{
+                UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_IsPasswordPropertyId,
+            };
+            // SAFETY: only reads properties of the focused element. Both come in
+            // one trip to the other app (cache request), not three.
+            unsafe {
+                let uia = self.uia.as_ref()?;
+                let request = uia.CreateCacheRequest().ok()?;
+                request.AddProperty(UIA_IsPasswordPropertyId).ok()?;
+                request.AddProperty(UIA_ControlTypePropertyId).ok()?;
+                let element = uia.GetFocusedElementBuildCache(&request).ok()?;
+                let password = element.CachedIsPassword().ok()?.as_bool();
+                let edit = element.CachedControlType().ok()? == UIA_EditControlTypeId;
+                Some((edit, password))
+            }
+        }
+
+        /// Waits a little for the password field: after the Tab (and the first
+        /// time an app is asked, e.g. Chromium-based ones) the answer may lag.
+        fn wait_for_password(&self) -> Option<bool> {
+            let mut last = None;
+            for _ in 0..3 {
+                last = self.focused().map(|(_, password)| password);
+                if last == Some(true) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(80));
+            }
+            last
+        }
+    }
+
+    impl Drop for Fields {
+        fn drop(&mut self) {
+            self.uia = None;
+            if self.com {
+                // SAFETY: pairs with the successful `CoInitializeEx` in `new`.
+                unsafe { windows::Win32::System::Com::CoUninitialize() };
+            }
+        }
+    }
+
+    pub fn type_keys(window: isize, keys: &[Key], check: FieldCheck) -> Result<(), TypeError> {
         let target = HWND(window as *mut _);
         wait_modifiers_released();
         if foreground() != target {
@@ -363,12 +454,30 @@ mod platform {
             let _ = unsafe { SetForegroundWindow(target) };
             std::thread::sleep(Duration::from_millis(150));
         }
+        let has_password = keys.iter().any(|k| matches!(k, Key::Password(_)));
+        let fields = (check == FieldCheck::Verify && has_password).then(Fields::new);
+        // Before typing anything: can this app tell its fields apart? If the
+        // focus isn't even on a text field, the app doesn't expose its fields
+        // (or the cursor is somewhere odd): ask the person.
+        if let Some(fields) = &fields {
+            match fields.focused() {
+                Some((edit, password)) if edit || password => {}
+                _ => return Err(TypeError::CantVerify),
+            }
+        }
         for key in keys {
             if foreground() != target {
-                return Err(t!("autotype.lost_focus").into());
+                return Err(TypeError::Failed(t!("autotype.lost_focus").into()));
+            }
+            if matches!(key, Key::Password(_))
+                && fields
+                    .as_ref()
+                    .is_some_and(|f| f.wait_for_password() != Some(true))
+            {
+                return Err(TypeError::Failed(t!("autotype.not_password_field").into()));
             }
             let mut inputs: Vec<INPUT> = match key {
-                Key::Text(text) => text
+                Key::Text(text) | Key::Password(text) => text
                     .encode_utf16()
                     .flat_map(|unit| {
                         [
@@ -386,7 +495,7 @@ mod platform {
                     key_input(VK_RETURN, 0, KEYEVENTF_KEYUP),
                 ],
             };
-            send(&mut inputs)?;
+            send(&mut inputs).map_err(TypeError::Failed)?;
             // Gives the app time to switch fields after the Tab.
             std::thread::sleep(Duration::from_millis(60));
         }
@@ -410,8 +519,8 @@ mod platform {
 
     pub fn stop(_: u32) {}
 
-    pub fn type_keys(_: isize, _: &[Key]) -> Result<(), String> {
-        Err(t!("autotype.windows_only").into())
+    pub fn type_keys(_: isize, _: &[Key], _: super::FieldCheck) -> Result<(), super::TypeError> {
+        Err(super::TypeError::Failed(t!("autotype.windows_only").into()))
     }
 }
 
@@ -447,7 +556,7 @@ mod tests {
     fn describe(keys: &[Key]) -> Vec<String> {
         keys.iter()
             .map(|k| match k {
-                Key::Text(t) => t.to_string(),
+                Key::Text(t) | Key::Password(t) => t.to_string(),
                 Key::Tab => "⇥".into(),
                 Key::Enter => "↵".into(),
             })
@@ -526,9 +635,29 @@ mod tests {
         drop(again);
     }
 
+    /// The real UI Automation call works (COM set up and released) and
+    /// answers for whatever has focus while the tests run.
+    #[cfg(windows)]
+    #[test]
+    fn ui_automation_answers_about_the_focused_field() {
+        let start = std::time::Instant::now();
+        let fields = super::platform::Fields::new();
+        eprintln!("UI Automation criado em {:?}", start.elapsed());
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            let answer = fields.focused();
+            eprintln!(
+                "campo em foco (texto, senha): {answer:?} em {:?}",
+                start.elapsed()
+            );
+        }
+    }
+
     #[test]
     fn key_debug_hides_text() {
         let k = Key::Text(Zeroizing::new("segredo".into()));
         assert_eq!(format!("{k:?}"), "Text(7 chars)");
+        let k = Key::Password(Zeroizing::new("segredo".into()));
+        assert_eq!(format!("{k:?}"), "Password(7 chars)");
     }
 }

@@ -48,6 +48,8 @@ pub struct LoginView {
     busy: Option<SharedString>,
     error: Option<SharedString>,
     info: Option<SharedString>,
+    /// Inside the HUD: only the form, no entry screen around it.
+    compact: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -104,12 +106,21 @@ impl LoginView {
             sso_identifier,
             use_sso: false,
             remember_device: false,
+            compact: false,
             step: Step::Credentials,
             busy: None,
             error: None,
             info: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The same login, for the HUD (signed out and a shortcut was used).
+    pub fn new_compact(store: SettingsStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::new(store, window, cx);
+        this.compact = true;
+        this.email.update(cx, |e, cx| e.focus(window, cx));
+        this
     }
 
     /// Debug builds only: fills in and submits the login from
@@ -641,6 +652,28 @@ impl Render for LoginView {
             Step::TwoFactor { .. } => t!("login.subtitle_2fa"),
             Step::NewDevice { .. } => t!("login.subtitle_new_device"),
         };
+        if self.compact {
+            return v_flex()
+                .gap_3()
+                .child(div().text_base().font_semibold().child(title))
+                .child(form)
+                .child(crate::ui::status_line(
+                    "login-status",
+                    status,
+                    self.error.is_some(),
+                    cx,
+                ))
+                .child(
+                    Button::new("login-submit")
+                        .primary()
+                        .w_full()
+                        .label(t!("common.continue"))
+                        .loading(busy)
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+                )
+                .into_any_element();
+        }
         let body = v_flex()
             .gap_4()
             .child(form)
@@ -668,5 +701,6 @@ impl Render for LoginView {
             cx.listener(|_, _, _, cx| cx.emit(LoginEvent::OpenSettings)),
             cx,
         )
+        .into_any_element()
     }
 }

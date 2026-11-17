@@ -38,6 +38,8 @@ pub enum Command {
     OpenItem {
         item_id: String,
     },
+    /// The person confirmed typing into an app that doesn't tell its fields.
+    TypeAnyway,
     /// Locked HUD (quick search / auto-type): unlock with this vault password.
     Unlock(HudPassword),
     /// Right-click on the icon: open the menu with its corner at the cursor (screen pixels).
@@ -162,9 +164,9 @@ pub fn is_minimized(window: &gpui_kit::Window) -> bool {
     system_enabled() && hwnd_of(window).is_some_and(platform::is_iconic)
 }
 
-/// Floating window without the Windows 11 frame: no 1 px border and no
-/// rounded corners that the system puts around the transparent area — the app itself
-/// draws the card (with corners and shadow).
+/// Floating window (HUD, tray menu) the size of its card: Windows rounds the
+/// corners and the app draws the border. There is no transparent margin around
+/// the card — Windows shows it as a dark, blurred veil, not as see-through.
 pub fn frameless(window: &gpui_kit::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         platform::frameless(hwnd);
@@ -379,13 +381,13 @@ mod platform {
     pub fn frameless(hwnd: isize) {
         use windows::Win32::Graphics::Dwm::{
             DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-            DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+            DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
         };
         let hwnd = HWND(hwnd as *mut _);
         // SAFETY: visual attributes of our own window; 4-byte values.
         // On Windows 10 these attributes don't exist and the call just fails.
         unsafe {
-            let corner = DWMWCP_DONOTROUND;
+            let corner = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWA_WINDOW_CORNER_PREFERENCE,

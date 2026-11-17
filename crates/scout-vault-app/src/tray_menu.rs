@@ -18,9 +18,10 @@ use crate::{appearance, motion, ui};
 /// Card width.
 pub const WIDTH: f32 = 292.;
 /// Transparent margin around the card, for the shadow.
-pub const MARGIN: f32 = 12.;
+pub const MARGIN: f32 = 0.;
 /// Card corner radius.
-const CARD_RADIUS: f32 = 12.;
+/// Same as the corners Windows 11 cuts on the window (`DWMWCP_ROUND`).
+const CARD_RADIUS: f32 = 8.;
 const HEADER: f32 = 60.;
 const LABEL: f32 = 26.;
 const PINNED: f32 = 40.;
@@ -516,9 +517,8 @@ impl Render for TrayMenu {
             .rounded(px(CARD_RADIUS))
             .border_1()
             .border_color(border)
-            .bg(popover)
+            .bg(popover.opacity(crate::quick_search::opacity(cx)))
             .text_color(fg)
-            .shadow_lg()
             .overflow_hidden()
             .child(self.header(cx))
             .child(body);
@@ -532,6 +532,6 @@ impl Render for TrayMenu {
                     window.remove_window();
                 }
             }))
-            .child(motion::rise(card, motion::key("tray-menu", "abre"), 6.))
+            .child(card)
     }
 }

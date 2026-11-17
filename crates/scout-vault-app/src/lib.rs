@@ -79,17 +79,19 @@ pub fn run() {
             tray::enable_system();
             // Unlock with Windows Hello (if set up in Windows).
             hello::install_system(cx);
+            // The app draws its own title bar (`app.rs`), in the screen's colors.
+            let base = gpui_kit::component::TitleBar::window_options();
             let options = WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Scout Vault".into()),
-                    ..Default::default()
+                    ..gpui_kit::component::TitleBar::title_bar_options()
                 }),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
                     size(px(1100.), px(720.)),
                     cx,
                 ))),
-                ..Default::default()
+                ..base
             };
             gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {

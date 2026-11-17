@@ -10,6 +10,7 @@ use crate::appearance::{Accent, Appearance, Corners, Motion, TextSize, ThemeChoi
 use crate::autotype;
 use crate::settings::{AutoTypeSettings, SettingsStore};
 use crate::ui::{self, Segment};
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
 
 pub enum SettingsEvent {
@@ -44,6 +45,7 @@ pub struct SettingsView {
     lock_with_windows: bool,
     lock_on_minimize: bool,
     clipboard_clear_secs: u32,
+    hud_opacity: u32,
     windows_hello: bool,
     background_sync: bool,
     quick_search: bool,
@@ -52,13 +54,32 @@ pub struct SettingsView {
     auto_lock_minutes: u32,
     browser_fill: bool,
     browser_error: Option<SharedString>,
+    /// Floating windows opacity, 1–100%.
+    hud_slider: Entity<SliderState>,
+    _hud_slider: Subscription,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
-    pub fn new(store: SettingsStore) -> Self {
+    pub fn new(store: SettingsStore, cx: &mut Context<Self>) -> Self {
         let loaded = store.load();
+        let hud_slider = cx.new(|_| {
+            SliderState::new()
+                .min(1.)
+                .max(100.)
+                .step(1.)
+                .default_value(loaded.hud_opacity.clamp(1, 100) as f32)
+        });
+        let _hud_slider = cx.subscribe(&hud_slider, |this, _, event: &SliderEvent, cx| {
+            let SliderEvent::Change(value) = event else {
+                return;
+            };
+            let percent = value.start().round().clamp(1., 100.) as u32;
+            if percent != this.hud_opacity {
+                this.set_hud_opacity(percent, cx);
+            }
+        });
         Self {
             store,
             appearance: loaded.appearance,
@@ -69,6 +90,7 @@ impl SettingsView {
             lock_with_windows: loaded.lock_with_windows,
             lock_on_minimize: loaded.lock_on_minimize,
             clipboard_clear_secs: loaded.clipboard_clear_secs,
+            hud_opacity: loaded.hud_opacity,
             windows_hello: loaded.windows_hello,
             background_sync: loaded.background_sync,
             quick_search: loaded.quick_search,
@@ -77,6 +99,8 @@ impl SettingsView {
             auto_lock_minutes: loaded.auto_lock_minutes,
             browser_fill: loaded.browser_fill,
             browser_error: None,
+            hud_slider,
+            _hud_slider,
         }
     }
 
@@ -233,6 +257,16 @@ impl SettingsView {
         settings.clipboard_clear_secs = secs;
         self.store.save(&settings);
         crate::clipboard::set_clear_after_secs(secs, cx);
+        cx.notify();
+    }
+
+    /// Opacity of the floating windows; applies the next time one opens.
+    pub fn set_hud_opacity(&mut self, percent: u32, cx: &mut Context<Self>) {
+        self.hud_opacity = percent;
+        let mut settings = self.store.load();
+        settings.hud_opacity = percent;
+        self.store.save(&settings);
+        crate::quick_search::set_opacity(percent, cx);
         cx.notify();
     }
 
@@ -560,6 +594,27 @@ impl Render for SettingsView {
             )
         };
 
+        let hud_control = h_flex()
+            .id("settings-hud-opacity")
+            .test_support()
+            .gap_3()
+            .w(px(220.))
+            .child(
+                div().flex_1().child(
+                    Slider::new(&self.hud_slider)
+                        .horizontal()
+                        .accessibility_label(t!("settings.hud_opacity")),
+                ),
+            )
+            .child(
+                div()
+                    .id("settings-hud-opacity-value")
+                    .test_support()
+                    .w(px(40.))
+                    .text_sm()
+                    .text_right()
+                    .child(format!("{}%", self.hud_opacity)),
+            );
         let appearance_group = Self::group(
             t!("settings.group_appearance"),
             vec![
@@ -597,6 +652,12 @@ impl Render for SettingsView {
                     t!("settings.motion"),
                     t!("settings.motion_desc"),
                     motion_control,
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.hud_opacity"),
+                    t!("settings.hud_opacity_desc"),
+                    hud_control,
                     cx,
                 ),
             ],
@@ -856,47 +917,50 @@ impl Render for SettingsView {
             cx,
         );
 
-        let header = h_flex()
-            .justify_between()
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(div().text_2xl().font_semibold().child(t!("settings.title")))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("settings.subtitle")),
-                    ),
-            )
-            .child(
-                Button::new("settings-close")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Close)
-                    .tooltip(t!("common.close_esc"))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close))),
-            );
+        let header = h_flex().child(
+            v_flex()
+                .gap_1()
+                .child(div().text_2xl().font_semibold().child(t!("settings.title")))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("settings.subtitle")),
+                ),
+        );
+        // "Back" stays put on the left while the page scrolls: no need to scroll
+        // up to leave.
+        let back = div().absolute().top_6().left_6().child(
+            Button::new("settings-close")
+                .ghost()
+                .small()
+                .icon(IconName::ArrowLeft)
+                .label(t!("common.back"))
+                .tooltip(t!("common.close_esc"))
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close))),
+        );
 
         div()
-            .id("settings")
+            .relative()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .overflow_y_scroll()
             .child(
-                v_flex()
-                    .w_full()
-                    .max_w(px(680.))
-                    .mx_auto()
-                    .px_8()
-                    .py_10()
-                    .gap_8()
-                    .child(header)
-                    .child(appearance_group)
-                    .child(session_group)
-                    .child(browser_group)
-                    .child(autotype_group),
+                div().id("settings").size_full().overflow_y_scroll().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(680.))
+                        .mx_auto()
+                        .px_8()
+                        .py_10()
+                        .gap_8()
+                        .child(header)
+                        .child(appearance_group)
+                        .child(session_group)
+                        .child(browser_group)
+                        .child(autotype_group),
+                ),
             )
+            .child(back)
     }
 }

@@ -127,6 +127,7 @@ mod tests {
 
     /// Every icon the code uses. When you use a new one, add it here.
     const USED: &[IconName] = &[
+        IconName::ArrowLeft,
         IconName::LockKeyhole,
         IconName::Lock,
         IconName::LayoutGrid,

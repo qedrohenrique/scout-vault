@@ -730,11 +730,11 @@ fn fake_typer(app: &Entity<ScoutVaultApp>, cx: &mut TestAppContext) -> Typed {
     let sink = typed.clone();
     cx.update(|cx| {
         app.update(cx, |app, _| {
-            app.set_typer(Arc::new(move |window, keys| {
+            app.set_typer(Arc::new(move |window, keys, _check| {
                 let keys = keys
                     .iter()
                     .map(|k| match k {
-                        Key::Text(t) => t.to_string(),
+                        Key::Text(t) | Key::Password(t) => t.to_string(),
                         Key::Tab => "⇥".into(),
                         Key::Enter => "↵".into(),
                     })
@@ -4102,4 +4102,143 @@ fn item_icon_can_be_chosen_saved_and_reset(cx: &mut TestAppContext) {
     })
     .unwrap();
     assert!(cx.update(|cx| vault.read(cx).icon_picker_open()));
+}
+
+/// Signed out: the shortcut shows the login inside the HUD (not the main
+/// window), and the HUD doesn't close when it loses focus (2FA by email, SSO).
+#[gpui_kit::test]
+fn signed_out_shortcut_shows_the_login_in_the_hud(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, None);
+    let _typed = fake_typer(&app, cx);
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.handle_autotype(request("Riot Client"), window, cx)
+        })
+    })
+    .unwrap();
+    let (popup, quick) = cx
+        .update(|cx| app.read(cx).quick_search())
+        .expect("HUD com login");
+    assert!(cx.update(|cx| quick.read(cx).login_view().is_some()));
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("login-email").is_some());
+            assert!(window.try_find("login-password").is_some());
+            assert!(window.try_find("login-submit").is_some());
+            // Only the form: no settings button nor entry screen.
+            assert!(window.try_find("login-settings").is_none());
+            window.click("quick-search-close", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(popup.update(cx, |_, _, _| ()).is_err(), "o HUD fechou");
+}
+
+/// An app that doesn't tell its fields: nothing is typed until the person
+/// confirms in the HUD; a field that isn't a password field stops typing and
+/// the HUD says so.
+#[gpui_kit::test]
+fn autotype_asks_before_typing_where_it_cant_check_the_field(cx: &mut TestAppContext) {
+    use scout_vault_app::autotype::{FieldCheck, Key, TypeError};
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let checks: Arc<std::sync::Mutex<Vec<FieldCheck>>> = Default::default();
+    let seen = checks.clone();
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            app.set_typer(Arc::new(move |_, keys: Vec<Key>, check| {
+                seen.lock().unwrap().push(check);
+                assert!(keys.iter().any(|k| matches!(k, Key::Password(_))));
+                match check {
+                    FieldCheck::Verify => Err(TypeError::CantVerify),
+                    FieldCheck::Skip => Ok(()),
+                }
+            }))
+        })
+    });
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_autotype(request("Entrar — banco.example.com — Firefox"), window, cx)
+        })
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| {
+            app.read(cx)
+                .quick_search()
+                .is_some_and(|(_, q)| q.read(cx).notice_text().is_some())
+        })
+    });
+    let (popup, _) = cx.update(|cx| app.read(cx).quick_search()).unwrap();
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("quick-search-type-anyway", cx);
+        })
+        .unwrap();
+    wait_until(cx, |_| checks.lock().unwrap().len() == 2);
+    assert_eq!(
+        *checks.lock().unwrap(),
+        [FieldCheck::Verify, FieldCheck::Skip]
+    );
+
+    // Not a password field: stops, and the HUD explains (no "type anyway").
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            app.set_typer(Arc::new(|_, _, _| {
+                Err(TypeError::Failed("não é campo de senha".into()))
+            }))
+        })
+    });
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_autotype(request("Entrar — banco.example.com — Firefox"), window, cx)
+        })
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| {
+            app.read(cx).quick_search().is_some_and(|(_, q)| {
+                q.read(cx).notice_text().map(|t| t.to_string())
+                    == Some("não é campo de senha".into())
+            })
+        })
+    });
+    let (popup, _) = cx.update(|cx| app.read(cx).quick_search()).unwrap();
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("quick-search-type-anyway").is_none());
+        })
+        .unwrap();
+}
+
+/// The floating windows' opacity is a setting: it applies to the next HUD and is saved.
+#[gpui_kit::test]
+fn hud_opacity_is_a_setting(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (_dir, store) = file_store("hud-opacidade");
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    assert_eq!(
+        cx.update(|cx| scout_vault_app::quick_search::opacity(cx)),
+        0.92,
+        "padrão"
+    );
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.open_settings(window, cx));
+        window.render_frame(cx);
+        // A slider from 1% to 100%.
+        assert!(window.try_find("settings-hud-opacity").is_some());
+        let view = app.read(cx).settings_view().cloned().unwrap();
+        view.update(cx, |v, cx| v.set_hud_opacity(1, cx));
+        window.render_frame(cx);
+    })
+    .unwrap();
+    assert_eq!(
+        cx.update(|cx| scout_vault_app::quick_search::opacity(cx)),
+        0.01
+    );
+    assert_eq!(store.load().hud_opacity, 1);
 }

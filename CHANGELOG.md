@@ -7,6 +7,33 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-16
+
+### Added
+- **Auto-type checks the field before typing the password:** Windows UI Automation must say the
+  focused field is a password field, or Scout Vault stops (the cursor could be in a chat box).
+  Apps that don't tell their fields get a confirmation in the HUD before anything is typed.
+
+### Changed
+- The HUD fits its content (a short list makes a short window) and, like the tray menu, is
+  translucent over a blurred backdrop. **Settings → Appearance → Floating windows opacity** is a
+  slider from 1% to 100% (default 92%).
+- The window's title bar (minimize, maximize, close) is drawn by the app in the screen's own
+  colors — the sidebar's column continues up to the top — so window and app read as one piece.
+  The logo sits in it, over the sidebar, and the vault's actions (sync, password health,
+  generator, settings, lock) moved from the sidebar's footer to its right side.
+- In the item icon picker, the colors come first, above the icons and brands.
+- Settings: a **Back** button fixed on the left replaces the close button at the top, so you
+  don't have to scroll back up to leave.
+- Signed out, `Ctrl+Alt+A` and quick search show a compact login (2FA, new-device code, SSO)
+  inside the HUD instead of the main window.
+- Auto-type messages (stopped, couldn't type) show up in the HUD, not as a toast in the
+  main window.
+
+### Fixed
+- The HUD and the tray menu no longer show a dark, blurred margin around the card: the window is
+  now exactly the card's size, with corners rounded by Windows.
+
 ## [0.4.1] - 2026-11-16
 
 ### Changed

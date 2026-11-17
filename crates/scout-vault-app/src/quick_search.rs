@@ -14,10 +14,10 @@ use gpui_kit::*;
 use scout_vault_core::vault::{Item, ItemKind};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::appearance;
 use crate::item_list::kind_icon;
 use crate::tray::Command;
 use crate::vault_view::{CopyShortcut, VaultView};
-use crate::{appearance, motion};
 
 /// Global shortcut, to show in the interface.
 pub fn hotkey_label() -> &'static str {
@@ -26,7 +26,35 @@ pub fn hotkey_label() -> &'static str {
 /// Window size (with the transparent margin for the shadow).
 pub const WIDTH: f32 = 580.;
 pub const HEIGHT: f32 = 452.;
-pub const MARGIN: f32 = 14.;
+/// Height of the HUD while it asks for the vault password.
+pub const LOCKED_HEIGHT: f32 = 92.;
+/// Height of the HUD while it shows the login.
+pub const LOGIN_HEIGHT: f32 = 440.;
+/// Height of the HUD with an auto-type message.
+pub const NOTICE_HEIGHT: f32 = 132.;
+pub const MARGIN: f32 = 0.;
+/// Default opacity (%) of the floating windows: see-through enough to keep the
+/// context behind, solid enough to read comfortably.
+pub const DEFAULT_OPACITY: u32 = 92;
+
+/// Opacity of the floating windows' card (0–1), from the settings.
+pub struct HudOpacity(pub f32);
+
+impl Global for HudOpacity {}
+
+pub fn set_opacity(percent: u32, cx: &mut App) {
+    cx.set_global(HudOpacity(percent.clamp(1, 100) as f32 / 100.));
+}
+
+pub fn opacity(cx: &App) -> f32 {
+    cx.try_global::<HudOpacity>()
+        .map(|o| o.0)
+        .unwrap_or(DEFAULT_OPACITY as f32 / 100.)
+}
+/// The results list grows with its rows up to this; then it scrolls.
+const MAX_LIST_HEIGHT: f32 = 380.;
+/// Same as the corners Windows 11 cuts on the window (`DWMWCP_ROUND`).
+const CARD_RADIUS: f32 = 8.;
 /// How many results show up.
 pub const MAX_RESULTS: usize = 7;
 
@@ -145,6 +173,10 @@ pub struct QuickSearch {
     suggested: Vec<String>,
     /// Vault locked: the HUD asks for the vault password first.
     locked: Option<Locked>,
+    /// Signed out: the HUD shows the login (email, password, 2FA…).
+    login: Option<Entity<crate::login::LoginView>>,
+    /// Auto-type stopped or needs a confirmation: message (and "type anyway").
+    notice: Option<(SharedString, bool)>,
     tx: UnboundedSender<Command>,
     /// Notice after copying ("Password copied"), before closing.
     flash: Option<SharedString>,
@@ -182,6 +214,41 @@ impl QuickSearch {
             error: None,
         });
         this
+    }
+
+    /// Signed out: the HUD hosts the login; the app follows its events.
+    pub fn signed_out(
+        target: Option<String>,
+        autotype: bool,
+        store: crate::settings::SettingsStore,
+        tx: UnboundedSender<Command>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::build(Vec::new(), target, autotype, Vec::new(), tx, window, cx);
+        this.login = Some(cx.new(|cx| crate::login::LoginView::new_compact(store, window, cx)));
+        this
+    }
+
+    /// A message from auto-type in the HUD. With `confirm`, offers "type anyway".
+    pub fn notice(
+        message: SharedString,
+        confirm: bool,
+        tx: UnboundedSender<Command>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::build(Vec::new(), None, true, Vec::new(), tx, window, cx);
+        this.notice = Some((message, confirm));
+        this
+    }
+
+    pub fn notice_text(&self) -> Option<&SharedString> {
+        self.notice.as_ref().map(|(m, _)| m)
+    }
+
+    pub fn login_view(&self) -> Option<&Entity<crate::login::LoginView>> {
+        self.login.as_ref()
     }
 
     pub fn is_locked(&self) -> bool {
@@ -275,7 +342,7 @@ impl QuickSearch {
         let activation = cx.observe_window_activation(window, |this, window, _| {
             if window.is_window_active() {
                 this.activated = true;
-            } else if this.activated {
+            } else if this.activated && this.login.is_none() {
                 window.remove_window();
             }
         });
@@ -291,6 +358,8 @@ impl QuickSearch {
             autotype,
             suggested,
             locked: None,
+            login: None,
+            notice: None,
             tx,
             flash: None,
             activated: false,
@@ -416,6 +485,20 @@ impl QuickSearch {
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
         let ctrl = k.modifiers.control;
+        if self.notice.is_some() {
+            if k.key == "escape" {
+                window.remove_window();
+                cx.stop_propagation();
+            }
+            return;
+        }
+        if self.login.is_some() {
+            if k.key == "escape" {
+                window.remove_window();
+                cx.stop_propagation();
+            }
+            return;
+        }
         if self.locked.is_some() {
             match k.key.as_str() {
                 "escape" => window.remove_window(),
@@ -525,24 +608,101 @@ impl Render for QuickSearch {
             Some(text) => text.clone(),
             None => t!("quick.footer").into(),
         };
+        if let Some((message, confirm)) = self.notice.clone() {
+            let theme = cx.theme();
+            let card = v_flex()
+                .w_full()
+                .rounded(px(CARD_RADIUS))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover.opacity(opacity(cx)))
+                .text_color(theme.popover_foreground)
+                .overflow_hidden()
+                .p_4()
+                .gap_3()
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .items_start()
+                        .child(
+                            div()
+                                .text_color(theme.warning)
+                                .child(Icon::new(IconName::TriangleAlert)),
+                        )
+                        .child(
+                            div()
+                                .id("quick-search-notice")
+                                .test_support()
+                                .aria_label(message.clone())
+                                .flex_1()
+                                .text_sm()
+                                .child(message),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("quick-search-close")
+                                .ghost()
+                                .label(if confirm {
+                                    t!("common.cancel")
+                                } else {
+                                    t!("common.close")
+                                })
+                                .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                        )
+                        .when(confirm, |el| {
+                            el.child(
+                                Button::new("quick-search-type-anyway")
+                                    .primary()
+                                    .label(t!("autotype.type_anyway"))
+                                    .on_click(cx.listener(|this, _, window, _| {
+                                        // Close first: focus goes back to the target app.
+                                        window.remove_window();
+                                        let _ = this.tx.send(Command::TypeAnyway);
+                                    })),
+                            )
+                        }),
+                );
+            return self.fit(card, cx);
+        }
+        if let Some(login) = self.login.clone() {
+            let theme = cx.theme();
+            let card = v_flex()
+                .w_full()
+                .relative()
+                .rounded(px(CARD_RADIUS))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover.opacity(opacity(cx)))
+                .text_color(theme.popover_foreground)
+                .overflow_hidden()
+                .p_4()
+                .child(login)
+                .child(
+                    div().absolute().top_2().right_2().child(
+                        Button::new("quick-search-close")
+                            .ghost()
+                            .icon(IconName::Close)
+                            .tooltip(t!("autotype.cancel_esc"))
+                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                    ),
+                );
+            return self.fit(card, cx);
+        }
         if let Some(locked) = &self.locked {
             let card = self.locked_card(locked, cx);
-            return div()
-                .id("quick-search")
-                .size_full()
-                .p(px(MARGIN))
-                .capture_key_down(cx.listener(Self::on_key))
-                .child(motion::rise(card, motion::key("busca-rapida", "senha"), 8.))
-                .into_any_element();
+            return self.fit(card, cx);
         }
         let card = v_flex()
-            .size_full()
-            .rounded(px(14.))
+            .w_full()
+            .rounded(px(CARD_RADIUS))
             .border_1()
             .border_color(border)
-            .bg(popover)
+            .bg(popover.opacity(opacity(cx)))
             .text_color(fg)
-            .shadow_lg()
             .overflow_hidden()
             .child(if self.autotype {
                 // HUD: only the search and the close button.
@@ -579,15 +739,16 @@ impl Render for QuickSearch {
             })
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_h_0()
+                    .id("quick-search-results")
+                    .max_h(px(MAX_LIST_HEIGHT))
+                    .overflow_y_scroll()
                     .py_1()
                     .gap_px()
                     .children(rows)
                     .when(empty, |el| {
                         el.child(
                             v_flex()
-                                .flex_1()
+                                .py_6()
                                 .items_center()
                                 .justify_center()
                                 .gap_2()
@@ -618,17 +779,41 @@ impl Render for QuickSearch {
                         .child(footer),
                 )
             });
-        div()
-            .id("quick-search")
-            .size_full()
-            .p(px(MARGIN))
-            .capture_key_down(cx.listener(Self::on_key))
-            .child(motion::rise(card, motion::key("busca-rapida", "abre"), 8.))
-            .into_any_element()
+        self.fit(card, cx)
     }
 }
 
 impl QuickSearch {
+    /// The HUD's root: the card at its natural height, and the window follows
+    /// it (it grows or shrinks downward, from the top).
+    fn fit(&self, card: impl IntoElement, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("quick-search")
+            .w_full()
+            .capture_key_down(cx.listener(Self::on_key))
+            .child(
+                div().relative().w_full().child(card).child(
+                    canvas(
+                        |_, _, _| {},
+                        |bounds, _, window, cx| {
+                            let height = bounds.size.height.ceil();
+                            let viewport = window.viewport_size();
+                            if (f32::from(height) - f32::from(viewport.height)).abs() >= 1. {
+                                window.defer(cx, move |window, _| {
+                                    window.resize(size(viewport.width, height));
+                                });
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                ),
+            )
+            .into_any_element()
+    }
+
     /// Password step: lock icon, the field, the error and the close button.
     fn locked_card(&self, locked: &Locked, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
@@ -645,12 +830,11 @@ impl QuickSearch {
         };
         v_flex()
             .w_full()
-            .rounded(px(14.))
+            .rounded(px(CARD_RADIUS))
             .border_1()
             .border_color(border)
-            .bg(popover)
+            .bg(popover.opacity(opacity(cx)))
             .text_color(fg)
-            .shadow_lg()
             .overflow_hidden()
             .p_3()
             .gap_2()

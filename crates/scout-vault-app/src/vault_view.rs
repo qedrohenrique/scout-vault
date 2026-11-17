@@ -20,6 +20,9 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use scout_vault_core::generator::PasswordOptions;
 
+/// Width of the sidebar (the title bar continues its column).
+pub const SIDEBAR_WIDTH: f32 = 240.;
+
 pub enum VaultEvent {
     /// Asks to lock; carries the session (with possibly renewed tokens).
     Lock(Session),
@@ -1524,6 +1527,7 @@ impl VaultView {
                             ),
                     ),
             )
+            .child(colors)
             .child(grid)
             .child(
                 div()
@@ -1532,8 +1536,7 @@ impl VaultView {
                     .text_color(muted)
                     .child(t!("icons.brands")),
             )
-            .child(brands_grid)
-            .child(colors);
+            .child(brands_grid);
         motion::rise(panel, motion::key("icone-painel", &item.id), 6.)
     }
 
@@ -2526,74 +2529,80 @@ impl VaultView {
             .py_3()
             .border_t_1()
             .border_color(cx.theme().border)
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child({
-                        // Email truncated in the bar; full on hover.
-                        let email = SharedString::from(self.session.email.clone());
-                        div()
-                            .id("vault-email")
-                            .test_support()
-                            .aria_label(email.clone())
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(email.clone())
-                                    .build(window, cx)
-                            })
-                            .child(self.session.email.clone())
+            .child(h_flex().gap_1().child({
+                // Email truncated in the bar; full on hover.
+                let email = SharedString::from(self.session.email.clone());
+                div()
+                    .id("vault-email")
+                    .test_support()
+                    .aria_label(email.clone())
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(email.clone()).build(window, cx)
                     })
-                    .child(self.render_sync_button(cx))
-                    .child(
-                        Button::new("vault-health")
-                            .ghost()
-                            .small()
-                            .icon(IconName::ShieldCheck)
-                            .tooltip(t!("vault.health_tooltip"))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenHealth))),
-                    )
-                    .child(
-                        Button::new("vault-generator")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Dices)
-                            .tooltip(t!("vault.generator_tooltip"))
-                            .on_click(
-                                cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenGenerator)),
-                            ),
-                    )
-                    .child(
-                        Button::new("vault-settings")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Settings)
-                            .tooltip(t!("vault.settings_tooltip"))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings))),
-                    )
-                    .child(
-                        Button::new("vault-lock")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Lock)
-                            .tooltip(t!("vault.lock_tooltip"))
-                            .on_click(cx.listener(|this, _, _, cx| this.request_lock(cx))),
-                    ),
-            );
+                    .child(self.session.email.clone())
+            }));
 
         v_flex()
-            .w(px(240.))
+            .w(px(SIDEBAR_WIDTH))
             .h_full()
             .flex_shrink_0()
             .border_r_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().sidebar)
-            .child(div().px_4().pt_4().pb_3().child(ui::wordmark(cx)))
+            .child(div().h_2())
             .child(nav)
             .child(footer)
+    }
+
+    /// The vault's actions (sync, health, generator, settings, lock), drawn in the
+    /// window's title bar by the app.
+    pub fn render_title_actions(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .id("vault-actions")
+            // Blocks the title bar's drag area behind it: otherwise Windows takes
+            // the click as "move the window" and the buttons never get it.
+            .occlude()
+            .gap_0p5()
+            .pr_2()
+            .child(self.render_sync_button(cx))
+            .child(
+                Button::new("vault-health")
+                    .ghost()
+                    .small()
+                    .icon(IconName::ShieldCheck)
+                    .tooltip(t!("vault.health_tooltip"))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenHealth))),
+            )
+            .child(
+                Button::new("vault-generator")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Dices)
+                    .tooltip(t!("vault.generator_tooltip"))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenGenerator))),
+            )
+            .child(
+                Button::new("vault-settings")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Settings)
+                    .tooltip(t!("vault.settings_tooltip"))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings))),
+            )
+            .child(
+                Button::new("vault-lock")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Lock)
+                    .tooltip(t!("vault.lock_tooltip"))
+                    .on_click(cx.listener(|this, _, _, cx| this.request_lock(cx))),
+            )
+            .into_any_element()
     }
 
     fn render_list_column(&self, cx: &mut Context<Self>) -> impl IntoElement {
