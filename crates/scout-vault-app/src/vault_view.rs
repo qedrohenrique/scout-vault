@@ -36,6 +36,8 @@ pub enum VaultEvent {
     OpenGenerator,
     /// Open the "Password health" screen.
     OpenHealth,
+    /// Open the profile screen (who is signed in).
+    OpenProfile,
     /// Some item's icon changed: all choices, to store.
     IconsChanged(std::collections::HashMap<String, crate::item_icons::CustomIcon>),
     /// The master password asked for by an item was confirmed for an app action
@@ -2532,18 +2534,30 @@ impl VaultView {
             .child(h_flex().gap_1().child({
                 // Email truncated in the bar; full on hover.
                 let email = SharedString::from(self.session.email.clone());
+                // Click: the profile screen.
                 div()
                     .id("vault-email")
                     .test_support()
+                    .role(Role::Button)
                     .aria_label(email.clone())
                     .flex_1()
                     .min_w_0()
+                    .px_1()
+                    .py_0p5()
+                    .rounded(cx.theme().radius)
                     .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(cx.theme().secondary_hover))
                     .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(email.clone()).build(window, cx)
+                        gpui_kit::component::tooltip::Tooltip::new(t!(
+                            "vault.profile_tooltip",
+                            email = email.clone()
+                        ))
+                        .build(window, cx)
                     })
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenProfile)))
                     .child(self.session.email.clone())
             }));
 

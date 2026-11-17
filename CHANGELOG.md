@@ -7,6 +7,17 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-17
+
+### Added
+- **Shortcuts in settings:** the global shortcuts (fill in other apps, quick search) can be
+  changed — click, press the new combination, done. Esc cancels; combinations without
+  Ctrl/Alt/Win or already used by the other shortcut are refused; "Back to default" undoes.
+- **Profile screen** (click your email at the bottom of the sidebar): name, email and badges
+  (Premium, email verified, 2FA), server, sign-in method, account creation date, this device,
+  organizations, the vault in numbers and what this computer remembers. From there: open the
+  web vault (to change password, email or 2FA) or sign out.
+
 ## [0.5.0] - 2026-11-16
 
 ### Added

@@ -4242,3 +4242,116 @@ fn hud_opacity_is_a_setting(cx: &mut TestAppContext) {
     );
     assert_eq!(store.load().hud_opacity, 1);
 }
+
+/// Settings → Shortcuts: click, press the new combination, it's saved; Esc
+/// cancels; Shift alone and the other shortcut's keys are refused; "Default" undoes.
+#[gpui_kit::test]
+fn shortcuts_can_be_recorded_in_settings(cx: &mut TestAppContext) {
+    use scout_vault_app::settings_view::HotkeyKind;
+    cx.update(gpui_kit::init);
+    let (_dir, store) = file_store("atalhos");
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let settings = |cx: &gpui_kit::App| app.read(cx).settings_view().cloned().unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.open_settings(window, cx));
+        window.render_frame(cx);
+        // (the section is at the bottom of the page: start recording directly)
+        settings(cx).update(cx, |v, cx| {
+            v.record_shortcut(HotkeyKind::QuickSearch, window, cx)
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    assert!(cx.update(|cx| settings(cx).read(cx).is_recording()));
+
+    // Shift alone isn't enough; the auto-type keys are taken.
+    cx.update_window(handle, |_, window, cx| {
+        window.press("shift-k", cx);
+        window.render_frame(cx);
+        assert!(settings(cx).read(cx).is_recording());
+        window.press("ctrl-alt-a", cx);
+    })
+    .unwrap();
+    assert!(cx.update(|cx| settings(cx).read(cx).is_recording()));
+    assert_eq!(store.load().hotkeys.quick_search, "Ctrl+Shift+Space");
+
+    // A valid one is saved and recording ends.
+    cx.update_window(handle, |_, window, cx| window.press("ctrl-alt-k", cx))
+        .unwrap();
+    assert!(!cx.update(|cx| settings(cx).read(cx).is_recording()));
+    assert_eq!(store.load().hotkeys.quick_search, "Ctrl+Alt+K");
+    assert_eq!(
+        cx.update(|cx| scout_vault_app::shortcut::quick_search_label(cx)),
+        "Ctrl+Alt+K"
+    );
+
+    // Esc cancels without closing settings; "Default" goes back.
+    cx.update_window(handle, |_, window, cx| {
+        settings(cx).update(cx, |v, cx| {
+            v.record_shortcut(HotkeyKind::AutoType, window, cx)
+        });
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    assert!(!cx.update(|cx| settings(cx).read(cx).is_recording()));
+    assert!(cx.update(|cx| app.read(cx).settings_view().is_some()));
+    assert_eq!(store.load().hotkeys.autotype, "Ctrl+Alt+A");
+    cx.update(|cx| {
+        settings(cx).update(cx, |v, cx| v.set_hotkey(HotkeyKind::QuickSearch, None, cx))
+    });
+    assert_eq!(store.load().hotkeys.quick_search, "Ctrl+Shift+Space");
+}
+
+/// Profile: clicking the email in the sidebar opens it; shows the account and
+/// the vault in numbers; Esc goes back; "Sign out" asks twice and goes to login.
+#[gpui_kit::test]
+fn profile_shows_the_account_and_signs_out(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-email", cx);
+    })
+    .unwrap();
+    assert!(
+        cx.update(|cx| app.read(cx).profile_view().is_some()),
+        "o clique no e-mail abre o perfil"
+    );
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("profile-name").is_some());
+        assert!(window.try_find("profile-premium").is_some());
+        assert!(window.try_find("profile-count-0").is_some());
+    })
+    .unwrap();
+    let info = cx.update(|cx| app.read(cx).profile_view().unwrap().read(cx).info().clone());
+    assert!(info.email.contains('@'));
+    assert!(info.counts[0] > 0, "o fixture tem logins");
+
+    cx.update_window(handle, |_, window, cx| window.press("escape", cx))
+        .unwrap();
+    assert!(cx.update(|cx| app.read(cx).profile_view().is_none()));
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-email", cx);
+    })
+    .unwrap();
+    // (the button is at the bottom of the page: call it directly)
+    let sign_out = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let view = app.read(cx).profile_view().cloned().unwrap();
+            view.update(cx, |v, cx| v.sign_out(cx));
+        });
+        cx.run_until_parked();
+    };
+    sign_out(cx);
+    assert!(
+        cx.update(|cx| app.read(cx).vault_view().is_some()),
+        "pede confirmação"
+    );
+    sign_out(cx);
+    assert!(cx.update(|cx| app.read(cx).vault_view().is_none()));
+    assert!(cx.update(|cx| app.read(cx).profile_view().is_none()));
+}

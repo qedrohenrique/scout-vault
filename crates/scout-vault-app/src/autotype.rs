@@ -17,9 +17,6 @@ use std::sync::Arc;
 use scout_vault_core::vault::{Item, ItemKind};
 use zeroize::Zeroizing;
 
-/// Global shortcut, to show in the interface.
-pub const HOTKEY_LABEL: &str = "Ctrl+Alt+A";
-
 /// Fill request: the window that had focus when the shortcut was used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -205,16 +202,24 @@ impl Drop for Listener {
     }
 }
 
-/// Turns the global shortcut on; each use sends a [`Request`] through `tx`.
+/// Turns the auto-type shortcut on; each use sends a [`Request`] through `tx`.
 /// Fails if another program already uses the same shortcut.
-pub fn listen(tx: std::sync::mpsc::Sender<Request>) -> Result<Listener, String> {
-    platform::listen(tx, platform::Hotkey::AutoType).map(|thread_id| Listener { thread_id })
+pub fn listen(
+    tx: std::sync::mpsc::Sender<Request>,
+    shortcut: &crate::shortcut::Shortcut,
+) -> Result<Listener, String> {
+    platform::listen(tx, platform::Hotkey::AutoType, shortcut)
+        .map(|thread_id| Listener { thread_id })
 }
 
-/// Turns the quick search shortcut on (`Ctrl+Shift+Space`); the [`Request`] carries the
-/// window that had focus (where to type, if the person chooses to fill).
-pub fn listen_quick_search(tx: std::sync::mpsc::Sender<Request>) -> Result<Listener, String> {
-    platform::listen(tx, platform::Hotkey::QuickSearch).map(|thread_id| Listener { thread_id })
+/// Turns the quick search shortcut on; the [`Request`] carries the window that
+/// had focus (where to type, if the person chooses to fill).
+pub fn listen_quick_search(
+    tx: std::sync::mpsc::Sender<Request>,
+    shortcut: &crate::shortcut::Shortcut,
+) -> Result<Listener, String> {
+    platform::listen(tx, platform::Hotkey::QuickSearch, shortcut)
+        .map(|thread_id| Listener { thread_id })
 }
 
 #[cfg(windows)]
@@ -233,8 +238,6 @@ mod platform {
 
     use super::{Key, Request};
 
-    const VK_A: u32 = 0x41;
-
     /// Which global shortcut (each one on its own thread).
     #[derive(Clone, Copy)]
     pub enum Hotkey {
@@ -249,20 +252,23 @@ mod platform {
                 Hotkey::QuickSearch => 0xC10,
             }
         }
+    }
 
-        fn keys(self) -> (HOT_KEY_MODIFIERS, u32) {
-            match self {
-                Hotkey::AutoType => (MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_A),
-                Hotkey::QuickSearch => (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE.0 as u32),
-            }
+    fn modifiers(s: &crate::shortcut::Shortcut) -> HOT_KEY_MODIFIERS {
+        let mut mods = MOD_NOREPEAT;
+        if s.ctrl {
+            mods |= MOD_CONTROL;
         }
-
-        fn label(self) -> &'static str {
-            match self {
-                Hotkey::AutoType => super::HOTKEY_LABEL,
-                Hotkey::QuickSearch => crate::quick_search::hotkey_label(),
-            }
+        if s.alt {
+            mods |= MOD_ALT;
         }
+        if s.shift {
+            mods |= MOD_SHIFT;
+        }
+        if s.win {
+            mods |= MOD_WIN;
+        }
+        mods
     }
 
     fn foreground() -> HWND {
@@ -293,10 +299,15 @@ mod platform {
         let _ = unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
     }
 
-    pub fn listen(tx: std::sync::mpsc::Sender<Request>, hotkey: Hotkey) -> Result<u32, String> {
+    pub fn listen(
+        tx: std::sync::mpsc::Sender<Request>,
+        hotkey: Hotkey,
+        shortcut: &crate::shortcut::Shortcut,
+    ) -> Result<u32, String> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let hotkey_id = hotkey.id();
-        let (mods, vk) = hotkey.keys();
+        let (mods, vk) = (modifiers(shortcut), shortcut.virtual_key());
+        let label = shortcut.label();
         std::thread::Builder::new()
             .name("scout-vault-autotype-hotkey".into())
             .spawn(move || {
@@ -331,7 +342,7 @@ mod platform {
             .map_err(|e| e.to_string())?;
         match ready_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Ok(thread_id)) => Ok(thread_id),
-            Ok(Err(e)) => Err(t!("autotype.hotkey_taken", hotkey = hotkey.label(), e = e)),
+            Ok(Err(e)) => Err(t!("autotype.hotkey_taken", hotkey = label, e = e)),
             Err(_) => Err(t!("autotype.hotkey_no_answer").into()),
         }
     }
@@ -513,7 +524,11 @@ mod platform {
         QuickSearch,
     }
 
-    pub fn listen(_: std::sync::mpsc::Sender<Request>, _: Hotkey) -> Result<u32, String> {
+    pub fn listen(
+        _: std::sync::mpsc::Sender<Request>,
+        _: Hotkey,
+        _: &crate::shortcut::Shortcut,
+    ) -> Result<u32, String> {
         Err(t!("autotype.windows_only").into())
     }
 
@@ -623,15 +638,16 @@ mod tests {
     #[ignore]
     fn hotkey_registers_conflicts_and_releases() {
         let (tx, _rx) = std::sync::mpsc::channel();
-        let first = listen(tx.clone()).expect("registrar");
-        let second = listen(tx.clone());
+        let keys = crate::shortcut::Shortcut::parse(crate::shortcut::DEFAULT_AUTOTYPE).unwrap();
+        let first = listen(tx.clone(), &keys).expect("registrar");
+        let second = listen(tx.clone(), &keys);
         assert!(
             second.is_err(),
             "o mesmo atalho não pode ser registrado duas vezes"
         );
         drop(first);
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let again = listen(tx).expect("depois de soltar, registra de novo");
+        let again = listen(tx, &keys).expect("depois de soltar, registra de novo");
         drop(again);
     }
 

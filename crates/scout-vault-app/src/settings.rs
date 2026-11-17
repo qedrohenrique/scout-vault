@@ -107,6 +107,9 @@ pub struct Settings {
     /// Filling in other apps via the global shortcut.
     #[serde(default)]
     pub autotype: AutoTypeSettings,
+    /// Global shortcuts (auto-type and quick search).
+    #[serde(default)]
+    pub hotkeys: crate::shortcut::Hotkeys,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +157,7 @@ impl Default for Settings {
             tray_hint_shown: false,
             browser_fill: false,
             autotype: AutoTypeSettings::default(),
+            hotkeys: Default::default(),
         }
     }
 }

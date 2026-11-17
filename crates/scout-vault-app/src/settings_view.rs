@@ -7,7 +7,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use crate::appearance::{Accent, Appearance, Corners, Motion, TextSize, ThemeChoice};
-use crate::autotype;
 use crate::settings::{AutoTypeSettings, SettingsStore};
 use crate::ui::{self, Segment};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
@@ -19,6 +18,27 @@ pub enum SettingsEvent {
     WindowsHello(bool),
     /// Changed the interface language (already applied; the app rebuilds what holds text).
     Language,
+    /// A global shortcut changed (the app registers the new combination).
+    Hotkeys,
+    /// Recording a shortcut started (`true`) or ended: the app pauses its own
+    /// global shortcuts meanwhile, or Windows would take the current combination.
+    RecordingShortcut(bool),
+}
+
+/// Which global shortcut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyKind {
+    AutoType,
+    QuickSearch,
+}
+
+impl HotkeyKind {
+    fn id(self) -> &'static str {
+        match self {
+            Self::AutoType => "shortcut-autotype",
+            Self::QuickSearch => "shortcut-quick",
+        }
+    }
 }
 
 /// Options of a [`SettingsView::number_choice`].
@@ -56,6 +76,12 @@ pub struct SettingsView {
     browser_error: Option<SharedString>,
     /// Floating windows opacity, 1–100%.
     hud_slider: Entity<SliderState>,
+    hotkeys: crate::shortcut::Hotkeys,
+    /// Waiting for the new combination of this shortcut.
+    recording: Option<HotkeyKind>,
+    /// Why the last pressed combination wasn't accepted.
+    shortcut_error: Option<(HotkeyKind, SharedString)>,
+    focus: FocusHandle,
     _hud_slider: Subscription,
 }
 
@@ -101,6 +127,10 @@ impl SettingsView {
             browser_error: None,
             hud_slider,
             _hud_slider,
+            hotkeys: loaded.hotkeys.clone(),
+            recording: None,
+            shortcut_error: None,
+            focus: cx.focus_handle(),
         }
     }
 
@@ -258,6 +288,178 @@ impl SettingsView {
         self.store.save(&settings);
         crate::clipboard::set_clear_after_secs(secs, cx);
         cx.notify();
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
+    pub fn hotkeys(&self) -> &crate::shortcut::Hotkeys {
+        &self.hotkeys
+    }
+
+    /// Starts waiting for the new combination (the next keys pressed in the app).
+    pub fn record_shortcut(
+        &mut self,
+        kind: HotkeyKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was = self.recording.replace(kind).is_some();
+        self.shortcut_error = None;
+        self.focus.focus(window, cx);
+        if !was {
+            cx.emit(SettingsEvent::RecordingShortcut(true));
+        }
+        cx.notify();
+    }
+
+    fn stop_recording(&mut self, cx: &mut Context<Self>) {
+        if self.recording.take().is_some() {
+            cx.emit(SettingsEvent::RecordingShortcut(false));
+        }
+        cx.notify();
+    }
+
+    /// A key while recording: Esc cancels; a valid combination is saved.
+    pub fn record_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        let Some(kind) = self.recording else {
+            return;
+        };
+        let m = &keystroke.modifiers;
+        if keystroke.key == "escape" && !(m.control || m.alt || m.shift || m.platform) {
+            self.stop_recording(cx);
+            return;
+        }
+        match crate::shortcut::Shortcut::from_keystroke(keystroke) {
+            Ok(None) => {}
+            Ok(Some(shortcut)) => {
+                let other = match kind {
+                    HotkeyKind::AutoType => self.hotkeys.quick_search(),
+                    HotkeyKind::QuickSearch => self.hotkeys.autotype(),
+                };
+                if other == shortcut {
+                    self.shortcut_error = Some((kind, t!("shortcuts.in_use").into()));
+                    cx.notify();
+                    return;
+                }
+                self.set_hotkey(kind, Some(shortcut), cx);
+                self.stop_recording(cx);
+            }
+            Err(e) => {
+                self.shortcut_error = Some((kind, e.message().into()));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Saves a shortcut (`None` = back to the default).
+    pub fn set_hotkey(
+        &mut self,
+        kind: HotkeyKind,
+        shortcut: Option<crate::shortcut::Shortcut>,
+        cx: &mut Context<Self>,
+    ) {
+        let text = match (kind, &shortcut) {
+            (_, Some(s)) => s.to_storage(),
+            (HotkeyKind::AutoType, None) => crate::shortcut::DEFAULT_AUTOTYPE.into(),
+            (HotkeyKind::QuickSearch, None) => crate::shortcut::DEFAULT_QUICK_SEARCH.into(),
+        };
+        match kind {
+            HotkeyKind::AutoType => self.hotkeys.autotype = text,
+            HotkeyKind::QuickSearch => self.hotkeys.quick_search = text,
+        }
+        self.shortcut_error = None;
+        let mut settings = self.store.load();
+        settings.hotkeys = self.hotkeys.clone();
+        self.store.save(&settings);
+        crate::shortcut::set_current(self.hotkeys.clone(), cx);
+        cx.emit(SettingsEvent::Hotkeys);
+        cx.notify();
+    }
+
+    /// The shortcut's control: its keys (click to record) and "Default".
+    fn shortcut_control(&self, kind: HotkeyKind, cx: &mut Context<Self>) -> impl IntoElement {
+        let (current, default) = match kind {
+            HotkeyKind::AutoType => (self.hotkeys.autotype(), crate::shortcut::DEFAULT_AUTOTYPE),
+            HotkeyKind::QuickSearch => (
+                self.hotkeys.quick_search(),
+                crate::shortcut::DEFAULT_QUICK_SEARCH,
+            ),
+        };
+        let recording = self.recording == Some(kind);
+        let accent = crate::appearance::accent(cx);
+        let theme = cx.theme();
+        let label: SharedString = if recording {
+            t!("shortcuts.press").into()
+        } else {
+            current.label().into()
+        };
+        let error = self
+            .shortcut_error
+            .as_ref()
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, e)| e.clone());
+        v_flex()
+            .items_end()
+            .gap_1()
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(kind.id())
+                            .test_support()
+                            .role(Role::Button)
+                            .aria_label(label.clone())
+                            .min_w(px(150.))
+                            .px_3()
+                            .py_1p5()
+                            .rounded(theme.radius)
+                            .border_1()
+                            .border_color(if recording { accent } else { theme.border })
+                            .bg(if recording {
+                                accent.opacity(0.12)
+                            } else {
+                                theme.secondary
+                            })
+                            .text_sm()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_center()
+                            .text_color(if recording { accent } else { theme.foreground })
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.85))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if this.recording == Some(kind) {
+                                    this.stop_recording(cx);
+                                } else {
+                                    this.record_shortcut(kind, window, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("{}-reset", kind.id())))
+                            .ghost()
+                            .small()
+                            .icon(IconName::Undo2)
+                            .tooltip(t!("shortcuts.reset"))
+                            .disabled(current.to_storage() == default)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.set_hotkey(kind, None, cx)),
+                            ),
+                    ),
+            )
+            .children(error.map(|e| {
+                div()
+                    .id(SharedString::from(format!("{}-error", kind.id())))
+                    .test_support()
+                    .aria_label(e.clone())
+                    .max_w(px(260.))
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(e)
+            }))
     }
 
     /// Opacity of the floating windows; applies the next time one opens.
@@ -698,7 +900,24 @@ impl Render for SettingsView {
             ],
             cx,
         );
-        let _ = autotype::HOTKEY_LABEL;
+        let shortcuts_group = Self::group(
+            t!("settings.group_shortcuts"),
+            vec![
+                Self::row(
+                    t!("shortcuts.autotype"),
+                    t!("shortcuts.autotype_desc"),
+                    self.shortcut_control(HotkeyKind::AutoType, cx),
+                    cx,
+                ),
+                Self::row(
+                    t!("shortcuts.quick_search"),
+                    t!("shortcuts.quick_search_desc"),
+                    self.shortcut_control(HotkeyKind::QuickSearch, cx),
+                    cx,
+                ),
+            ],
+            cx,
+        );
         let browser_group = {
             let mut rows = vec![Self::row(
                 t!("settings.browser_fill"),
@@ -943,6 +1162,14 @@ impl Render for SettingsView {
         div()
             .relative()
             .size_full()
+            .track_focus(&self.focus)
+            // Recording a shortcut: the keys come here first.
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if this.recording.is_some() {
+                    this.record_key(&e.keystroke, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(
@@ -958,7 +1185,8 @@ impl Render for SettingsView {
                         .child(appearance_group)
                         .child(session_group)
                         .child(browser_group)
-                        .child(autotype_group),
+                        .child(autotype_group)
+                        .child(shortcuts_group),
                 ),
             )
             .child(back)

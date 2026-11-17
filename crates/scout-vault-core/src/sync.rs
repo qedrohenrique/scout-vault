@@ -69,6 +69,24 @@ pub struct Profile {
     pub account_keys: Option<AccountKeys>,
     #[serde(default)]
     pub organizations: Vec<OrganizationRaw>,
+    /// Account name (as shown in the web vault).
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub premium: bool,
+    /// Premium through an organization (Families, Teams…).
+    #[serde(default)]
+    pub premium_from_organization: bool,
+    #[serde(default)]
+    pub email_verified: bool,
+    #[serde(default)]
+    pub two_factor_enabled: bool,
+    /// When the account was created (RFC 3339).
+    #[serde(default)]
+    pub creation_date: Option<String>,
+    /// Avatar color chosen in the web vault (`#rrggbb`).
+    #[serde(default)]
+    pub avatar_color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

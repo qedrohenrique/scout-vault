@@ -12,6 +12,7 @@ use crate::flow::{Handoff, Session, Unlocked};
 use crate::generator_view::{GeneratorEvent, GeneratorView};
 use crate::health_view::{HealthEvent, HealthView};
 use crate::login::{LoginEvent, LoginView};
+use crate::profile_view::{ProfileEvent, ProfileInfo, ProfileView};
 use crate::settings::SettingsStore;
 use crate::settings_view::{SettingsEvent, SettingsView};
 use crate::unlock::{UnlockEvent, UnlockView};
@@ -64,6 +65,8 @@ pub struct ScoutVaultApp {
     _hud_login: Option<Subscription>,
     /// Redraws the title bar when the vault screen changes.
     _screen_observer: Option<Subscription>,
+    /// "Profile" screen open, over the vault.
+    profile: Option<(Entity<ProfileView>, Subscription)>,
     /// Typing waiting for "type anyway" (the app doesn't tell its fields).
     pending_type_anyway: Option<(Item, Request)>,
     /// Browser login waiting for unlock to be saved (url, username, password).
@@ -72,9 +75,12 @@ pub struct ScoutVaultApp {
     reprompt_autotype: Option<(u64, Item, Request)>,
     reprompt_counter: u64,
     /// Registered global shortcut (dropping it turns it off).
-    hotkey: Option<autotype::Listener>,
+    hotkey: Option<(autotype::Listener, crate::shortcut::Shortcut)>,
     /// Quick search shortcut (`Ctrl+Shift+Space`).
-    quick_hotkey: Option<autotype::Listener>,
+    quick_hotkey: Option<(autotype::Listener, crate::shortcut::Shortcut)>,
+    /// Global shortcuts off while a new one is being recorded in settings
+    /// (otherwise Windows would take the current combination).
+    hotkeys_paused: bool,
     quick_tx: std::sync::mpsc::Sender<Request>,
     /// Open quick search window and the app to type into.
     quick_search: Option<(AnyWindowHandle, Entity<crate::quick_search::QuickSearch>)>,
@@ -253,6 +259,7 @@ impl ScoutVaultApp {
             pending_quick_search: None,
             _hud_login: None,
             _screen_observer: None,
+            profile: None,
             pending_type_anyway: None,
             pending_browser_save: None,
             reprompt_autotype: None,
@@ -260,6 +267,7 @@ impl ScoutVaultApp {
             hotkey: None,
             autotype_tx,
             quick_hotkey: None,
+            hotkeys_paused: false,
             quick_tx,
             quick_search: None,
             quick_target: None,
@@ -677,27 +685,35 @@ impl ScoutVaultApp {
         }
     }
 
-    /// Registers or drops the global shortcut according to the setting.
+    /// Registers, re-registers (another combination) or drops the global
+    /// shortcuts according to the settings.
     fn refresh_hotkey(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self.store.load();
-        let wanted = settings.autotype.enabled && autotype::system_hotkey_enabled();
-        if !wanted {
+        crate::shortcut::set_current(settings.hotkeys.clone(), cx);
+        let system = autotype::system_hotkey_enabled() && !self.hotkeys_paused;
+
+        let wanted = (settings.autotype.enabled && system).then(|| settings.hotkeys.autotype());
+        if self.hotkey.as_ref().map(|(_, s)| s) != wanted.as_ref() {
+            // Drop the old one first: Windows refuses the same combination twice.
             self.hotkey = None;
-        } else if self.hotkey.is_none() {
-            match autotype::listen(self.autotype_tx.clone()) {
-                Ok(listener) => self.hotkey = Some(listener),
-                // Report it later: while the window is being created the
-                // notification layer doesn't exist yet.
-                Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
+            if let Some(shortcut) = wanted {
+                match autotype::listen(self.autotype_tx.clone(), &shortcut) {
+                    Ok(listener) => self.hotkey = Some((listener, shortcut)),
+                    // Report it later: while the window is being created the
+                    // notification layer doesn't exist yet.
+                    Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
+                }
             }
         }
-        let quick = settings.quick_search && autotype::system_hotkey_enabled();
-        if !quick {
+
+        let wanted = (settings.quick_search && system).then(|| settings.hotkeys.quick_search());
+        if self.quick_hotkey.as_ref().map(|(_, s)| s) != wanted.as_ref() {
             self.quick_hotkey = None;
-        } else if self.quick_hotkey.is_none() {
-            match autotype::listen_quick_search(self.quick_tx.clone()) {
-                Ok(listener) => self.quick_hotkey = Some(listener),
-                Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
+            if let Some(shortcut) = wanted {
+                match autotype::listen_quick_search(self.quick_tx.clone(), &shortcut) {
+                    Ok(listener) => self.quick_hotkey = Some((listener, shortcut)),
+                    Err(e) => cx.defer_in(window, move |_, _, cx| crate::toast::error(e, cx)),
+                }
             }
         }
     }
@@ -1004,7 +1020,10 @@ impl ScoutVaultApp {
         }
         if request.own_window {
             crate::toast::info(
-                t!("app.autotype_own_window", hotkey = autotype::HOTKEY_LABEL),
+                t!(
+                    "app.autotype_own_window",
+                    hotkey = crate::shortcut::autotype_label(cx)
+                ),
                 cx,
             );
             return;
@@ -1148,6 +1167,11 @@ impl ScoutVaultApp {
                     }
                 }
                 SettingsEvent::WindowsHello(on) => this.windows_hello_changed(*on, window, cx),
+                SettingsEvent::Hotkeys => this.refresh_hotkey(window, cx),
+                SettingsEvent::RecordingShortcut(on) => {
+                    this.hotkeys_paused = *on;
+                    this.refresh_hotkey(window, cx);
+                }
                 SettingsEvent::Language => this.language_changed(window, cx),
             },
         );
@@ -1171,6 +1195,59 @@ impl ScoutVaultApp {
     }
 
     /// Opens "Password health" with the open vault's items.
+    /// The profile screen (who is signed in, the account, this computer).
+    pub fn open_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Vault(vault) = &self.screen else {
+            return;
+        };
+        if self.profile.is_some() {
+            return;
+        }
+        self.settings = None;
+        self.generator = None;
+        self.health = None;
+        let info = {
+            let v = vault.read(cx);
+            ProfileInfo::new(
+                v.session(),
+                v.list().read(cx).delegate().vault(),
+                &self.store.load(),
+            )
+        };
+        let view = cx.new(|_| ProfileView::new(info));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ProfileEvent, window, cx| match event {
+                ProfileEvent::Close => this.close_profile(cx),
+                ProfileEvent::OpenSettings => {
+                    this.close_profile(cx);
+                    this.open_settings(window, cx);
+                }
+                ProfileEvent::SignOut => {
+                    this.close_profile(cx);
+                    if let Some(session) = this.current_session(cx) {
+                        crate::hello::forget(&this.store, &session);
+                    }
+                    crate::saved_session::clear(&this.store);
+                    this.show_login(window, cx);
+                }
+            },
+        );
+        self.profile = Some((view, sub));
+        cx.notify();
+    }
+
+    pub fn close_profile(&mut self, cx: &mut Context<Self>) {
+        if self.profile.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub fn profile_view(&self) -> Option<&Entity<ProfileView>> {
+        self.profile.as_ref().map(|(v, _)| v)
+    }
+
     pub fn open_health(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Screen::Vault(vault) = &self.screen else {
             return;
@@ -1249,6 +1326,13 @@ impl ScoutVaultApp {
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.record_activity();
+        // Recording a shortcut in settings: every key goes there (even Esc).
+        if self
+            .settings_view()
+            .is_some_and(|v| v.read(cx).is_recording())
+        {
+            return;
+        }
         let k = &event.keystroke;
         if k.key == "," && k.modifiers.secondary(cx) {
             if self.settings.is_some() {
@@ -1274,9 +1358,12 @@ impl ScoutVaultApp {
             self.close_generator(cx);
         } else if k.key == "escape" && self.health.is_some() {
             self.close_health(cx);
+        } else if k.key == "escape" && self.profile.is_some() {
+            self.close_profile(cx);
         } else if self.settings.is_none()
             && self.generator.is_none()
             && self.health.is_none()
+            && self.profile.is_none()
             && k.modifiers.secondary(cx)
             && !k.modifiers.shift
         {
@@ -1362,6 +1449,7 @@ impl ScoutVaultApp {
         // Switching the screen drops the previous one: the decrypted vault leaves memory with it
         // (including the copy the fill list had and the health screen's).
         self.health = None;
+        self.profile = None;
         self.screen = screen;
         self._screen_subscription = sub;
         self.record_activity();
@@ -1617,6 +1705,7 @@ impl ScoutVaultApp {
                     VaultEvent::OpenSettings => this.open_settings(window, cx),
                     VaultEvent::OpenGenerator => this.open_generator(window, cx),
                     VaultEvent::OpenHealth => this.open_health(window, cx),
+                    VaultEvent::OpenProfile => this.open_profile(window, cx),
                     VaultEvent::IconsChanged(icons) => {
                         let mut settings = this.store.load();
                         settings.item_icons = icons.clone();
@@ -1677,6 +1766,7 @@ impl Render for ScoutVaultApp {
         let content: AnyView = match (&self.settings, &self.screen) {
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
             _ if self.health.is_some() => self.health_view().unwrap().clone().into(),
+            _ if self.profile.is_some() => self.profile_view().unwrap().clone().into(),
             (Some((v, _)), _) => v.clone().into(),
             (None, Screen::Login(v)) => v.clone().into(),
             (None, Screen::Locked(v)) => v.clone().into(),
@@ -1689,7 +1779,7 @@ impl Render for ScoutVaultApp {
             (
                 &self.settings,
                 &self.screen,
-                self.generator.is_some() || self.health.is_some()
+                self.generator.is_some() || self.health.is_some() || self.profile.is_some()
             ),
             (None, Screen::Vault(_), false)
         );

@@ -20,9 +20,6 @@ use crate::tray::Command;
 use crate::vault_view::{CopyShortcut, VaultView};
 
 /// Global shortcut, to show in the interface.
-pub fn hotkey_label() -> &'static str {
-    t!("quick.hotkey")
-}
 /// Window size (with the transparent margin for the shadow).
 pub const WIDTH: f32 = 580.;
 pub const HEIGHT: f32 = 452.;
