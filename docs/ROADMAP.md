@@ -64,7 +64,7 @@ app + extension** on Windows. Features vary by plan; ✅ has it, 🟡 partial, �
 | Emergency access | ❌ | ✅ | 🟡 | ❌ | ❌ |
 | Website icons in the list | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Firefox | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Installer / automatic updates | ❌ (zip) | ✅ | ✅ | ✅ | ✅ |
+| Installer / automatic updates | ✅ / ❌ | ✅ | ✅ | ✅ | ✅ |
 | Linux / macOS | ❌ | ✅ | ✅ | ✅ | ✅ |
 | External security audit | ❌ | ✅ | ✅ | ✅ | ✅ |
 
@@ -128,7 +128,8 @@ installer (Windows Hello, locking with Windows, re-prompt and saving logins are 
 - Item version history (local, with restore).
 
 ### Phase H — Distribution and trust
-- **Installer** (MSI/winget), **automatic updates** with signed updates.
+- ~~Installer~~ — done: per-user Inno Setup installer (no administrator), start with Windows, update over the running app and clean uninstall.
+- **Automatic updates** (signed) and publishing to **winget**.
 - **Code signing** of the executable (removes the SmartScreen warning).
 - Builds for **Linux** and **macOS** (GPUI already runs there).
 - **External security review** and vulnerability disclosure policy.

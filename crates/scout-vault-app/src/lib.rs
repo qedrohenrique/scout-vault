@@ -19,6 +19,7 @@ pub mod app;
 pub mod appearance;
 mod assets;
 mod attachments;
+pub mod autostart;
 pub mod autotype;
 pub mod backdrop;
 pub mod browser;
@@ -60,13 +61,27 @@ use gpui_kit::*;
 
 /// Opens the main window.
 pub fn run() {
+    let args: Vec<String> = std::env::args().collect();
+    // `--quit` (installer, before updating or uninstalling): closes the running app
+    // and waits for it to leave, so its files can be replaced.
+    if args.iter().any(|a| a == "--quit") {
+        tray::quit_existing_instance(std::time::Duration::from_secs(10));
+        return;
+    }
+    // `--tray` (start with Windows): opens hidden in the tray.
+    let hidden = args.iter().any(|a| a == autostart::TRAY_ARG);
+    if hidden && tray::existing_instance() {
+        return;
+    }
     // Already running (maybe hidden in the tray)? Just ask it to show up.
     if tray::wake_existing_instance() {
         return;
     }
+    autostart::enable_system();
+    autostart::refresh();
     gpui_kit::application()
         .with_assets(assets::AppAssets)
-        .run(|cx| {
+        .run(move |cx| {
             gpui_kit::init(cx);
             // Language chosen in Settings or, by default, the Windows one
             // (also applies to the components' internal texts).
@@ -98,11 +113,16 @@ pub fn run() {
                 ))),
                 ..base
             };
-            gpui_kit::open_window(options, cx, |window, cx| {
+            let handle = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
                     app::ScoutVaultApp::new(settings::SettingsStore::default_location(), window, cx)
                 })
             })
             .expect("falha ao abrir a janela");
+            if hidden {
+                let _ = handle
+                    .0
+                    .update(cx, |_, window, _| tray::hide_window(window));
+            }
         });
 }

@@ -7,6 +7,16 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-17
+
+### Added
+- **Installer** (`scout-vault-X.Y.Z-setup.exe`): installs for your user only, without
+  administrator, with a Start menu shortcut, an entry in "Installed apps" and a clean uninstall
+  (it asks before deleting your local data). Running a newer installer updates the app, even
+  while it is open in the tray. The zip stays available.
+- **Start with Windows** (Settings, and a checkbox in the installer): the app opens hidden in the
+  tray when you sign in, with the shortcuts and browser autofill ready.
+
 ## [0.7.0] - 2026-11-17
 
 ### Added

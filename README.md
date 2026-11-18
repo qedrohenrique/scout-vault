@@ -18,6 +18,7 @@ close, without the weight of an Electron app.
 - [Shortcuts](#shortcuts)
 - [Security](#security)
 - [Architecture](#architecture)
+- [Installing](#installing)
 - [Prerequisites (Windows)](#prerequisites-windows)
 - [Running](#running)
 - [Development server](#development-server)
@@ -291,6 +292,32 @@ font size and radii and registers the result as the light and dark themes.
 Windows switches between light and dark (if the theme is "System"). The settings screen also
 calls it on every change.
 
+## Installing
+Download `scout-vault-X.Y.Z-setup.exe` from the
+[Releases](https://github.com/qedrohenrique/scout-vault/releases) page and run it. It installs
+**for your user only** (no administrator) in `%LOCALAPPDATA%\Programs\Scout Vault`, with:
+- a Start menu shortcut and an entry in **Settings → Apps → Installed apps** (uninstall from there);
+- **Start with Windows** (checked by default): opens hidden in the tray when you sign in, with the
+  shortcuts and browser autofill ready. The same option is in the app's Settings;
+- the browser extension in `extension\` inside the install folder, to load as "unpacked".
+
+**Updating** is running the new installer: it closes the app (even hidden in the tray), replaces
+it and keeps your settings. **Uninstalling** removes the app, the shortcuts, the start-with-Windows
+entry and the browser registration, and asks whether to also delete the data in
+`%APPDATA%\Scout Vault` (preferences, the encrypted vault cache, profile photos). Keys saved in the
+Windows Credential Manager (remembered session, Windows Hello) stay until you sign out in the app.
+
+Prefer no installer? The `.zip` on the same page has the bare `scout-vault.exe`.
+
+Windows may show a SmartScreen warning ("unrecognized app") because the files aren't signed yet:
+**More info → Run anyway**. Check the download against the `.sha256` file next to it.
+
+The installer is an [Inno Setup](https://jrsoftware.org/isinfo.php) script,
+`installer/scout-vault.iss`. To build it locally (after `cargo build --release`):
+```bash
+"ISCC.exe" /DAppVersion=X.Y.Z installer/scout-vault.iss   # → dist/scout-vault-X.Y.Z-setup.exe
+```
+
 ## Prerequisites (Windows)
 - Stable Rust: `winget install Rustlang.Rustup`
 - Visual Studio Build Tools with the "Desktop development with C++" workload (MSVC linker + Windows SDK)
@@ -400,8 +427,8 @@ What changed in each version is in [CHANGELOG.md](CHANGELOG.md); downloads are o
 3. Check the notes with `python tools/release_notes.py X.Y.Z`, commit and push the tag:
    `git tag vX.Y.Z` and `git push origin vX.Y.Z`.
 
-GitHub Actions runs the tests, builds, assembles the zip (`tools/package_release.py`) with the
-`.sha256` and creates the release with the notes from that changelog section (0.x versions ship
+GitHub Actions runs the tests, builds, assembles the zip (`tools/package_release.py`) and the
+installer (`installer/scout-vault.iss`, Inno Setup), each with its `.sha256`, and creates the release with the notes from that changelog section (0.x versions ship
 as pre-releases). If the tag doesn't match `Cargo.toml` or the section is missing, nothing is
 published.
 

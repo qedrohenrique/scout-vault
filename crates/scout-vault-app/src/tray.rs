@@ -144,6 +144,29 @@ pub fn wake_existing_instance() -> bool {
     platform::wake_existing()
 }
 
+/// Is the app already running (with its tray icon)?
+pub fn existing_instance() -> bool {
+    platform::find_existing()
+}
+
+/// Asks the running app to quit and waits (up to `timeout`) for it to leave.
+/// `true` when no instance is left.
+pub fn quit_existing_instance(timeout: std::time::Duration) -> bool {
+    if !platform::quit_existing() {
+        return true;
+    }
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if !platform::find_existing() {
+            // The icon's window goes first; give the process a moment to end.
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            return true;
+        }
+    }
+    false
+}
+
 /// Hides the app window (gone from the taskbar; the tray icon stays).
 pub fn hide_window(window: &gpui_kit::Window) {
     if let Some(hwnd) = hwnd_of(window) {
@@ -205,6 +228,8 @@ mod platform {
     const WM_TRAY: u32 = WM_APP + 1;
     /// Message from another instance: "show up".
     const WM_WAKE: u32 = WM_APP + 2;
+    /// Message from another instance (the installer's `--quit`): "quit".
+    const WM_QUIT_APP: u32 = WM_APP + 3;
     const ID: u32 = 1;
 
     thread_local! {
@@ -271,6 +296,10 @@ mod platform {
             }
             WM_WAKE => {
                 send(Command::Show);
+                LRESULT(0)
+            }
+            WM_QUIT_APP => {
+                send(Command::Quit);
                 LRESULT(0)
             }
             WM_DESTROY => {
@@ -358,6 +387,23 @@ mod platform {
         // SAFETY: structure filled in above.
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+    }
+
+    pub fn find_existing() -> bool {
+        // SAFETY: only looks up another instance's invisible window.
+        unsafe { matches!(FindWindowW(CLASS, None), Ok(h) if !h.is_invalid()) }
+    }
+
+    pub fn quit_existing() -> bool {
+        // SAFETY: only looks up another instance's invisible window and posts a message.
+        unsafe {
+            match FindWindowW(CLASS, None) {
+                Ok(hwnd) if !hwnd.is_invalid() => {
+                    PostMessageW(Some(hwnd), WM_QUIT_APP, WPARAM(0), LPARAM(0)).is_ok()
+                }
+                _ => false,
+            }
         }
     }
 
@@ -449,6 +495,12 @@ mod platform {
     pub fn remove(_: isize) {}
     pub fn balloon(_: isize, _: &str, _: &str) {}
     pub fn wake_existing() -> bool {
+        false
+    }
+    pub fn find_existing() -> bool {
+        false
+    }
+    pub fn quit_existing() -> bool {
         false
     }
     pub fn show(_: isize, _: bool) {}

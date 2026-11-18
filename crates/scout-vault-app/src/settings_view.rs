@@ -63,6 +63,7 @@ pub struct SettingsView {
     autotype: AutoTypeSettings,
     remember_session: bool,
     close_to_tray: bool,
+    start_with_windows: bool,
     lock_with_windows: bool,
     lock_on_minimize: bool,
     clipboard_clear_secs: u32,
@@ -136,6 +137,7 @@ impl SettingsView {
             autotype: loaded.autotype,
             remember_session: loaded.remember_session,
             close_to_tray: loaded.close_to_tray,
+            start_with_windows: crate::autostart::is_enabled(),
             lock_with_windows: loaded.lock_with_windows,
             lock_on_minimize: loaded.lock_on_minimize,
             clipboard_clear_secs: loaded.clipboard_clear_secs,
@@ -505,6 +507,15 @@ impl SettingsView {
         settings.hud_opacity = percent;
         self.store.save(&settings);
         crate::quick_search::set_opacity(percent, cx);
+        cx.notify();
+    }
+
+    /// "Start with Windows" (a value in the registry, the same one the installer writes).
+    pub fn set_start_with_windows(&mut self, on: bool, cx: &mut Context<Self>) {
+        match crate::autostart::set(on) {
+            Ok(()) => self.start_with_windows = on,
+            Err(e) => crate::toast::error(e, cx),
+        }
         cx.notify();
     }
 
@@ -1279,6 +1290,18 @@ impl Render for SettingsView {
                     t!("settings.clipboard_clear"),
                     t!("settings.clipboard_clear_desc"),
                     clipboard_control,
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.start_with_windows"),
+                    t!("settings.start_with_windows_desc"),
+                    Switch::new("start-with-windows")
+                        .checked(self.start_with_windows)
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| {
+                                this.set_start_with_windows(*v, cx)
+                            }),
+                        ),
                     cx,
                 ),
                 Self::row(

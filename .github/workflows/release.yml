@@ -50,11 +50,29 @@ jobs:
       - name: Package
         shell: bash
         run: python tools/package_release.py "${GITHUB_REF_NAME}" --out dist
+      # Per-user installer (no administrator): Start menu, "Installed apps",
+      # start with Windows and clean uninstall. Inno Setup comes from Chocolatey
+      # when the runner image doesn't have it.
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          & $iscc "/DAppVersion=$version" installer\scout-vault.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $name = "scout-vault-$version-setup.exe"
+          $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
+          "$hash *$name" | Out-File -Encoding ascii -NoNewline "dist\$name.sha256"
       - uses: actions/upload-artifact@v7
         with:
           name: release
           path: |
             dist/*.zip
+            dist/*.exe
             dist/*.sha256
             release-notes.md
           if-no-files-found: error
@@ -85,4 +103,4 @@ jobs:
             --title "Scout Vault $version" \
             --notes-file release-notes.md \
             "${flags[@]}" \
-            dist/*.zip dist/*.sha256
+            dist/*.exe dist/*.zip dist/*.sha256

@@ -4494,6 +4494,28 @@ fn shortcuts_can_be_recorded_in_settings(cx: &mut TestAppContext) {
 /// Profile: clicking the email in the sidebar opens it; shows the account and
 /// the vault in numbers; Esc goes back; "Sign out" asks twice and goes to login.
 #[gpui_kit::test]
+fn start_with_windows_is_a_setting(cx: &mut TestAppContext) {
+    // Outside the real app nothing touches the registry: the choice stays in memory.
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    let settings = cx.update(|cx| app.read(cx).settings_view().cloned().unwrap());
+    assert!(!scout_vault_app::autostart::is_enabled());
+    cx.update(|cx| settings.update(cx, |s, cx| s.set_start_with_windows(true, cx)));
+    assert!(scout_vault_app::autostart::is_enabled());
+    cx.update(|cx| settings.update(cx, |s, cx| s.set_start_with_windows(false, cx)));
+    assert!(!scout_vault_app::autostart::is_enabled());
+    let line = scout_vault_app::autostart::command_line().unwrap();
+    assert!(
+        line.starts_with('"') && line.ends_with("\" --tray"),
+        "{line}"
+    );
+}
+
+#[gpui_kit::test]
 fn profile_photo_is_chosen_kept_in_the_app_folder_and_removed(cx: &mut TestAppContext) {
     let dir = std::env::temp_dir().join(format!("scout-vault-ui-photo-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
