@@ -59,7 +59,7 @@ app + extension** on Windows. Features vary by plan; ✅ has it, 🟡 partial, �
 | Move item to organization / share | ❌ | ✅ | ✅ | ❌ | ✅ |
 | Item version history | 🟡 password only | 🟡 password only | ✅ | ✅ | ❌ |
 | Several accounts at once | ❌ | ✅ | ✅ | ✅ (several files) | ✅ |
-| SSH agent | ❌ (stores keys) | ✅ | ✅ | ✅ | ❌ |
+| SSH agent | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Import / export | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Emergency access | ❌ | ✅ | 🟡 | ❌ | ❌ |
 | Website icons in the list | ❌ | ✅ | ✅ | ✅ | ✅ |
@@ -136,7 +136,9 @@ installer (Windows Hello, locking with Windows, re-prompt and saving logins are 
 - ~~English interface (i18n)~~ — done: pt-BR and English in the app and the extension, with
   catalogs that accept new languages.
 - Accessibility review (screen reader, contrast).
-- SSH agent (the vault already stores the keys).
+- ~~SSH agent~~ — done: the open vault's keys on Windows' OpenSSH pipe, with approval (and
+  optionally Windows Hello) for each signature. Next: ask to unlock when a key is requested
+  while the vault is locked, and choose which keys the agent offers.
 
 ---
 

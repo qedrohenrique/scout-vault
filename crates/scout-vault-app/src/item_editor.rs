@@ -9,6 +9,7 @@ use gpui_kit::component::{button::*, *};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use scout_vault_core::generator::{self, PasswordOptions};
+use scout_vault_core::ssh::{self, ImportError, KeyMaterial};
 use scout_vault_core::vault::{Card, Field, FieldKind, Identity, Item, ItemKind, Login, SshKey};
 use scout_vault_core::Secret;
 
@@ -46,10 +47,17 @@ pub enum NewKind {
     Note,
     Card,
     Identity,
+    SshKey,
 }
 
 impl NewKind {
-    pub const ALL: [NewKind; 4] = [Self::Login, Self::Note, Self::Card, Self::Identity];
+    pub const ALL: [NewKind; 5] = [
+        Self::Login,
+        Self::Note,
+        Self::Card,
+        Self::Identity,
+        Self::SshKey,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -57,6 +65,15 @@ impl NewKind {
             Self::Note => t!("kind.note"),
             Self::Card => t!("kind.card"),
             Self::Identity => t!("kind.identity"),
+            Self::SshKey => t!("kind.ssh_key"),
+        }
+    }
+
+    /// In the type picker of a new item, where room is short.
+    fn short_label(self) -> &'static str {
+        match self {
+            Self::SshKey => "SSH",
+            other => other.label(),
         }
     }
 
@@ -66,6 +83,7 @@ impl NewKind {
             Self::Note => "note",
             Self::Card => "card",
             Self::Identity => "identity",
+            Self::SshKey => "ssh",
         }
     }
 
@@ -75,6 +93,7 @@ impl NewKind {
             Self::Note => ItemKind::SecureNote,
             Self::Card => ItemKind::Card(Card::default()),
             Self::Identity => ItemKind::Identity(Box::default()),
+            Self::SshKey => ItemKind::SshKey(SshKey::default()),
         }
     }
 }
@@ -93,6 +112,53 @@ struct CustomField {
     value: Entity<InputState>,
 }
 
+/// What the private key in the form is.
+enum SshStatus {
+    Empty,
+    Valid(KeyMaterial),
+    NeedsPassphrase,
+    Unsupported,
+    Invalid,
+}
+
+fn ssh_status(text: &str) -> SshStatus {
+    if text.trim().is_empty() {
+        return SshStatus::Empty;
+    }
+    match ssh::import(text, None) {
+        Ok(key) => SshStatus::Valid(key),
+        Err(ImportError::NeedsPassphrase) => SshStatus::NeedsPassphrase,
+        Err(ImportError::Unsupported) => SshStatus::Unsupported,
+        Err(_) => SshStatus::Invalid,
+    }
+}
+
+/// Fingerprint of the form's text, to notice changes without keeping a copy.
+fn text_hash(text: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(text.trim().as_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+/// The SSH key part of the form: the private key; the public key and the
+/// fingerprint come from it.
+struct SshForm {
+    private: Entity<TextareaState>,
+    /// For keys protected by a passphrase (only used to import them).
+    passphrase: Entity<InputState>,
+    /// The key the item had when the editor opened.
+    original: [u8; 32],
+    /// The text last checked, and what it is.
+    checked: [u8; 32],
+    status: SshStatus,
+    wrong_passphrase: bool,
+}
+
+/// Biggest key file accepted on import.
+const MAX_KEY_FILE: u64 = 64 * 1024;
+
 pub struct ItemEditor {
     /// Original item (edit) or an empty template (new).
     base: Item,
@@ -102,8 +168,8 @@ pub struct ItemEditor {
     uris: Vec<Entity<InputState>>,
     fields: Vec<CustomField>,
     notes: Entity<TextareaState>,
-    /// SSH private key (several lines).
-    ssh_private: Option<Entity<TextareaState>>,
+    /// SSH key (several lines).
+    ssh: Option<SshForm>,
     folder_id: Option<String>,
     favorite: bool,
     /// Ask for the master password to show, copy, edit or fill.
@@ -164,7 +230,6 @@ fn placeholder_for(key: &str) -> &'static str {
         "id-state" => t!("editor.ph_state"),
         "id-country" => t!("editor.ph_country"),
         "id-ssn" => t!("editor.ph_ssn"),
-        "ssh-fingerprint" => "SHA256:…",
         _ => "",
     }
 }
@@ -202,7 +267,6 @@ fn layout(kind: &ItemKind) -> &'static [&'static [(&'static str, Option<f32>)]] 
                 ("id-license", None),
             ],
         ],
-        ItemKind::SshKey(_) => &[&[("ssh-public", None)], &[("ssh-fingerprint", None)]],
         _ => &[],
     }
 }
@@ -286,7 +350,7 @@ impl ItemEditor {
         });
         let mut lines = Vec::new();
         let mut uris = Vec::new();
-        let mut ssh_private = None;
+        let mut ssh_form = None;
         {
             let mut line = |key,
                             label,
@@ -468,33 +532,38 @@ impl ItemEditor {
                     }
                 }
                 ItemKind::SshKey(k) => {
-                    line(
-                        "ssh-public",
-                        t!("field.public_key"),
-                        k.public_key.as_deref(),
-                        false,
-                        window,
-                        cx,
-                    );
-                    line(
-                        "ssh-fingerprint",
-                        t!("field.fingerprint"),
-                        k.fingerprint.as_deref(),
-                        false,
-                        window,
-                        cx,
-                    );
-                    let private = k
+                    let mut private = k
                         .private_key
                         .as_ref()
                         .map(|s| s.expose().to_owned())
                         .unwrap_or_default();
-                    ssh_private = Some(cx.new(|cx| {
+                    // A new SSH key item starts with a fresh key, like the Bitwarden apps.
+                    if is_new && private.trim().is_empty() {
+                        private = ssh::generate().private_key.to_string();
+                    }
+                    let original = if is_new {
+                        [0u8; 32]
+                    } else {
+                        text_hash(&private)
+                    };
+                    let checked = text_hash(&private);
+                    let status = ssh_status(&private);
+                    let private = cx.new(|cx| {
                         TextareaState::new(window, cx)
                             .auto_grow(4, 12)
-                            .placeholder(t!("field.private_key"))
+                            .placeholder(t!("editor.ph_private_key"))
                             .default_value(private)
-                    }));
+                    });
+                    let passphrase =
+                        input_with(window, cx, None, true, t!("editor.ssh_passphrase"));
+                    ssh_form = Some(SshForm {
+                        private,
+                        passphrase,
+                        original,
+                        checked,
+                        status,
+                        wrong_passphrase: false,
+                    });
                 }
                 ItemKind::SecureNote | ItemKind::Unknown(_) => {}
             }
@@ -534,7 +603,7 @@ impl ItemEditor {
             uris,
             fields,
             notes,
-            ssh_private,
+            ssh: ssh_form,
             places,
             generator,
             saving: false,
@@ -670,14 +739,23 @@ impl ItemEditor {
                 passport_number: self.secret("id-passport", cx),
                 license_number: self.secret("id-license", cx),
             })),
-            ItemKind::SshKey(_) => ItemKind::SshKey(SshKey {
-                public_key: self.text("ssh-public", cx),
-                fingerprint: self.text("ssh-fingerprint", cx),
-                private_key: self.ssh_private.as_ref().and_then(|p| {
-                    let v = p.read(cx).value().to_string();
-                    (!v.trim().is_empty()).then(|| Secret::new(v))
-                }),
-            }),
+            ItemKind::SshKey(old) => {
+                let text = self.ssh_text(cx);
+                match ssh::import(&text, None) {
+                    // Saved as OpenSSH, with the public key and fingerprint it has.
+                    Ok(key) => ItemKind::SshKey(SshKey {
+                        private_key: Some(Secret::new(key.private_key.to_string())),
+                        public_key: Some(key.public_key),
+                        fingerprint: Some(key.fingerprint),
+                    }),
+                    // A key this app can't read (kept as it was).
+                    Err(_) => ItemKind::SshKey(SshKey {
+                        private_key: (!text.trim().is_empty()).then(|| Secret::new(text)),
+                        public_key: old.public_key.clone(),
+                        fingerprint: old.fingerprint.clone(),
+                    }),
+                }
+            }
             other => other.clone(),
         };
         item
@@ -698,8 +776,284 @@ impl ItemEditor {
             cx.notify();
             return;
         }
+        if let Some(problem) = self.ssh_problem(cx) {
+            self.error = Some(problem.into());
+            cx.notify();
+            return;
+        }
         self.error = None;
         cx.emit(EditorEvent::Save(Box::new(item), self.files.clone()));
+    }
+
+    /// The private key as typed (empty when the item isn't an SSH key).
+    fn ssh_text(&self, cx: &App) -> String {
+        self.ssh
+            .as_ref()
+            .map(|f| f.private.read(cx).value().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Why the SSH key can't be saved. A key the item already had is kept even if
+    /// this app can't read it.
+    fn ssh_problem(&self, cx: &App) -> Option<&'static str> {
+        let form = self.ssh.as_ref()?;
+        let text = self.ssh_text(cx);
+        if !self.is_new && text_hash(&text) == form.original {
+            return None;
+        }
+        match ssh_status(&text) {
+            SshStatus::Valid(_) => None,
+            SshStatus::Empty => Some(t!("editor.ssh_required")),
+            SshStatus::NeedsPassphrase => Some(t!("editor.ssh_locked")),
+            SshStatus::Unsupported => Some(t!("editor.ssh_unsupported")),
+            SshStatus::Invalid => Some(t!("editor.ssh_invalid")),
+        }
+    }
+
+    /// Puts a private key in the form.
+    pub fn set_ssh_private(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.ssh else { return };
+        form.wrong_passphrase = false;
+        let text = text.trim().to_owned();
+        form.private
+            .update(cx, |s, cx| s.set_value(text, window, cx));
+        cx.notify();
+    }
+
+    /// Replaces the key with a new Ed25519 key.
+    pub fn generate_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = ssh::generate();
+        self.set_ssh_private(&key.private_key, window, cx);
+    }
+
+    /// Opens a key protected by a passphrase (it is saved without it).
+    pub fn unlock_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &self.ssh else { return };
+        let passphrase = form.passphrase.read(cx).value().to_string();
+        let text = self.ssh_text(cx);
+        match ssh::import(&text, Some(&passphrase)) {
+            Ok(key) => {
+                let empty = String::new();
+                if let Some(form) = &self.ssh {
+                    form.passphrase
+                        .update(cx, |s, cx| s.set_value(empty, window, cx));
+                }
+                self.set_ssh_private(&key.private_key, window, cx);
+            }
+            Err(_) => {
+                if let Some(form) = &mut self.ssh {
+                    form.wrong_passphrase = true;
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// The SSH key's state right now (checked again only when the text changes).
+    fn refresh_ssh(&mut self, cx: &App) {
+        let text = self.ssh_text(cx);
+        let Some(form) = &mut self.ssh else { return };
+        let hash = text_hash(&text);
+        if hash != form.checked {
+            form.checked = hash;
+            form.status = ssh_status(&text);
+            form.wrong_passphrase = false;
+        }
+    }
+
+    /// Reads a key file chosen in Windows' file picker.
+    fn import_ssh_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t!("editor.ssh_import_prompt").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let text = std::fs::metadata(&path)
+                .ok()
+                .filter(|m| m.len() <= MAX_KEY_FILE)
+                .and_then(|_| std::fs::read_to_string(&path).ok());
+            this.update_in(cx, |this, window, cx| match text {
+                Some(text) => this.set_ssh_private(&text, window, cx),
+                None => crate::toast::error(t!("editor.ssh_file_unreadable"), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_ssh(&self, busy: bool, cx: &mut Context<Self>) -> Option<Div> {
+        let form = self.ssh.as_ref()?;
+        let theme = cx.theme();
+        let (muted, success, danger, warning) = (
+            theme.muted_foreground,
+            theme.success,
+            theme.danger,
+            theme.warning,
+        );
+        let (icon, color, text): (IconName, Hsla, SharedString) = match &form.status {
+            SshStatus::Valid(_) => (
+                IconName::CircleCheck,
+                success,
+                t!("editor.ssh_valid").into(),
+            ),
+            SshStatus::Empty => (IconName::Info, muted, t!("editor.ssh_empty").into()),
+            SshStatus::NeedsPassphrase => (
+                IconName::LockKeyhole,
+                warning,
+                t!("editor.ssh_locked").into(),
+            ),
+            SshStatus::Unsupported => (
+                IconName::TriangleAlert,
+                danger,
+                t!("editor.ssh_unsupported").into(),
+            ),
+            SshStatus::Invalid => (
+                IconName::TriangleAlert,
+                danger,
+                t!("editor.ssh_invalid").into(),
+            ),
+        };
+        let status = h_flex()
+            .id("editor-ssh-status")
+            .test_support()
+            .aria_label(text.clone())
+            .gap_1p5()
+            .text_xs()
+            .text_color(color)
+            .child(Icon::new(icon).small())
+            .child(text);
+
+        let actions = h_flex()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                Button::new("editor-ssh-generate")
+                    .ghost()
+                    .small()
+                    .icon(IconName::RefreshCw)
+                    .label(t!("editor.ssh_generate"))
+                    .tooltip(t!("editor.ssh_generate_hint"))
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.generate_ssh(window, cx))),
+            )
+            .child(
+                Button::new("editor-ssh-import")
+                    .ghost()
+                    .small()
+                    .icon(IconName::FolderOpen)
+                    .label(t!("editor.ssh_import"))
+                    .tooltip(t!("editor.ssh_import_hint"))
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.import_ssh_file(window, cx))),
+            )
+            .child(div().flex_1())
+            .child(status);
+
+        let mut block = v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .font_family("monospace")
+                    .text_xs()
+                    .child(Textarea::new(&form.private).disabled(busy)),
+            )
+            .child(actions);
+
+        if matches!(form.status, SshStatus::NeedsPassphrase) {
+            block = block.child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div().flex_1().child(
+                                    Input::new(&form.passphrase)
+                                        .id("editor-ssh-passphrase")
+                                        .mask_toggle()
+                                        .disabled(busy),
+                                ),
+                            )
+                            .child(
+                                Button::new("editor-ssh-unlock")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::LockOpen)
+                                    .label(t!("editor.ssh_unlock"))
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.unlock_ssh(window, cx)
+                                    })),
+                            ),
+                    )
+                    .when(form.wrong_passphrase, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(danger)
+                                .child(t!("editor.ssh_wrong_passphrase")),
+                        )
+                    }),
+            );
+        }
+
+        // Public key and fingerprint: worked out from the private key.
+        let (public, fingerprint, algorithm) = match (&form.status, &self.base.kind) {
+            (SshStatus::Valid(k), _) => (
+                Some(k.public_key.clone()),
+                Some(k.fingerprint.clone()),
+                Some(k.algorithm.clone()),
+            ),
+            (_, ItemKind::SshKey(old)) if !self.is_new => {
+                (old.public_key.clone(), old.fingerprint.clone(), None)
+            }
+            _ => (None, None, None),
+        };
+        let derived = |id: &'static str, label: &'static str, value: Option<String>| {
+            v_flex()
+                .gap_0p5()
+                .child(div().text_xs().text_color(muted).child(label))
+                .child(
+                    div()
+                        .id(id)
+                        .test_support()
+                        .aria_label(SharedString::from(value.clone().unwrap_or_default()))
+                        .text_sm()
+                        .font_family("monospace")
+                        .whitespace_normal()
+                        .overflow_x_hidden()
+                        .child(value.unwrap_or_else(|| "—".into())),
+                )
+        };
+        let info = v_flex()
+            .gap_2()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .bg(cx.theme().muted.opacity(0.5))
+            .when_some(algorithm, |el, a| {
+                el.child(derived("editor-ssh-type", t!("field.key_type"), Some(a)))
+            })
+            .child(derived("editor-ssh-public", t!("field.public_key"), public))
+            .child(derived(
+                "editor-ssh-fingerprint",
+                t!("field.fingerprint"),
+                fingerprint,
+            ));
+
+        Some(
+            v_flex()
+                .gap_3()
+                .child(Self::labeled(t!("field.private_key"), block, cx))
+                .child(info),
+        )
     }
 
     fn generate_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1141,6 +1495,7 @@ impl ItemEditor {
 
 impl Render for ItemEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_ssh(cx);
         let busy = self.saving;
         let mut form = v_flex().gap_3p5();
 
@@ -1158,7 +1513,7 @@ impl Render for ItemEditor {
                     .iter()
                     .map(|k| Segment {
                         id: format!("editor-kind-{}", k.id()).into(),
-                        label: k.label().into(),
+                        label: k.short_label().into(),
                         icon: None,
                         selected: *k == current,
                     })
@@ -1248,12 +1603,8 @@ impl Render for ItemEditor {
             form = form.child(Self::labeled(t!("editor.sites"), list, cx));
         }
 
-        if let Some(private) = &self.ssh_private {
-            form = form.child(Self::labeled(
-                t!("field.private_key"),
-                Textarea::new(private).disabled(busy),
-                cx,
-            ));
+        if let Some(ssh) = self.render_ssh(busy, cx) {
+            form = form.child(ssh);
         }
 
         // Custom fields.

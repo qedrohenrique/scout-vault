@@ -7,6 +7,8 @@
 //! - [`edit`]       — writing: edited item → encrypted body for the server
 //! - [`enc_string`] — `EncString` format (`2.iv|ct|mac`, `4.data`)
 //! - [`kdf`]        — key derivation parameters
+//! - [`ssh`]        — SSH keys: generate, import, public key and fingerprint
+//! - [`ssh_agent`]  — SSH agent protocol: list the vault's keys and sign
 //! - [`sync`]       — sync response, still encrypted (safe to cache)
 //! - [`totp`]       — authenticator codes (RFC 6238, Steam)
 //! - [`vault`]      — decrypted vault: items, folders, organizations, search
@@ -23,6 +25,8 @@ pub mod icons;
 mod json;
 pub mod kdf;
 pub mod secret;
+pub mod ssh;
+pub mod ssh_agent;
 pub mod sync;
 pub mod totp;
 pub mod vault;

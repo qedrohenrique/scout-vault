@@ -46,6 +46,7 @@ pub mod settings;
 pub mod settings_view;
 pub mod shortcut;
 pub mod site_icons;
+pub mod ssh_agent;
 pub mod sso;
 pub mod theme_fx;
 pub mod toast;

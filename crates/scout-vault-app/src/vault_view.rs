@@ -1733,6 +1733,7 @@ impl VaultView {
             Filter::Kind(KindFilter::Note) => NewKind::Note,
             Filter::Kind(KindFilter::Card) => NewKind::Card,
             Filter::Kind(KindFilter::Identity) => NewKind::Identity,
+            Filter::Kind(KindFilter::SshKey) => NewKind::SshKey,
             _ => NewKind::Login,
         };
         // Filter on an organization/collection: the new item is born there.

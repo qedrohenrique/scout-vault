@@ -1308,6 +1308,249 @@ fn editor_validates_switches_kind_and_keeps_data_on_failure(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn ssh_keys_are_generated_checked_and_unlocked(cx: &mut TestAppContext) {
+    use scout_vault_core::vault::ItemKind;
+    use ssh_key::{getrandom::SysRng, rand_core::UnwrapErr, Algorithm, HashAlg, LineEnding};
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let ssh_of = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let editor = vault.read(cx).editor().unwrap().clone();
+            let ItemKind::SshKey(k) = editor.read(cx).to_item(cx).kind else {
+                panic!("not an SSH key")
+            };
+            k
+        })
+    };
+
+    // A new SSH key item comes with a fresh Ed25519 key.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+        window.click("editor-kind-ssh", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("editor-ssh-status").label(),
+            Some("Chave válida")
+        );
+        assert!(window
+            .find("editor-ssh-public")
+            .label()
+            .unwrap()
+            .starts_with("ssh-ed25519 AAAA"));
+        assert!(window
+            .find("editor-ssh-fingerprint")
+            .label()
+            .unwrap()
+            .starts_with("SHA256:"));
+    })
+    .unwrap();
+    let first = ssh_of(cx);
+    assert!(first
+        .private_key
+        .as_ref()
+        .unwrap()
+        .expose()
+        .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+
+    // "Generate new key" replaces it.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("editor-ssh-generate", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let second = ssh_of(cx);
+    assert_ne!(second.public_key, first.public_key);
+
+    // Something that isn't a key: flagged, and not saved.
+    let editor = cx.update(|cx| vault.read(cx).editor().unwrap().clone());
+    cx.update_window(handle, |_, window, cx| {
+        editor.update(cx, |e, cx| e.set_ssh_private("hello", window, cx));
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("editor-ssh-status").label(),
+            Some("Não é uma chave privada válida (OpenSSH, PuTTY .ppk ou RSA PEM).")
+        );
+        window.click("editor-name", cx);
+        window.input("Servidor", cx);
+        window.click("editor-save", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("editor-status").label(),
+            Some("Não é uma chave privada válida (OpenSSH, PuTTY .ppk ou RSA PEM).")
+        );
+    })
+    .unwrap();
+
+    // A key with a passphrase: asks for it, and keeps the key without it.
+    let plain = ssh_key::PrivateKey::random(&mut UnwrapErr(SysRng), Algorithm::Ed25519).unwrap();
+    let locked = plain
+        .encrypt(&mut UnwrapErr(SysRng), "segredo")
+        .unwrap()
+        .to_openssh(LineEnding::LF)
+        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        editor.update(cx, |e, cx| e.set_ssh_private(&locked, window, cx));
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("editor-ssh-status").label(),
+            Some("Chave protegida por senha: digite a senha para importá-la.")
+        );
+        window.click("editor-ssh-passphrase", cx);
+        window.input("segredo", cx);
+        window.click("editor-ssh-unlock", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("editor-ssh-status").label(),
+            Some("Chave válida")
+        );
+        assert!(window.try_find("editor-ssh-passphrase").is_none());
+    })
+    .unwrap();
+    let unlocked = ssh_of(cx);
+    assert_eq!(
+        unlocked.fingerprint.as_deref(),
+        Some(plain.fingerprint(HashAlg::Sha256).to_string().as_str())
+    );
+    let private = unlocked.private_key.unwrap();
+    assert!(!ssh_key::PrivateKey::from_openssh(private.expose())
+        .unwrap()
+        .is_encrypted());
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+fn ssh_agent_offers_vault_keys_and_signs_only_when_allowed(cx: &mut TestAppContext) {
+    use scout_vault_app::ssh_agent::{self, Status};
+    use scout_vault_core::vault::{Item, ItemKind, SshKey};
+    use std::io::{Read, Write};
+    cx.executor().allow_parking();
+
+    let key = scout_vault_core::ssh::generate();
+    let blob = ssh_key::PrivateKey::from_openssh(key.private_key.as_str())
+        .unwrap()
+        .public_key()
+        .to_bytes()
+        .unwrap();
+    let mut unlocked = unlocked_fixture();
+    unlocked.vault.items.push(Item {
+        id: "ssh-agent-test".into(),
+        organization_id: None,
+        folder_id: None,
+        name: "GitHub pessoal".into(),
+        notes: None,
+        favorite: false,
+        reprompt: false,
+        deleted: false,
+        revision_date: None,
+        attachments: Vec::new(),
+        collection_ids: Vec::new(),
+        fields: Vec::new(),
+        kind: ItemKind::SshKey(SshKey {
+            private_key: Some(scout_vault_core::Secret::new(key.private_key.to_string())),
+            public_key: Some(key.public_key.clone()),
+            fingerprint: Some(key.fingerprint.clone()),
+        }),
+    });
+    let (handle, app) = open_app(cx, Some(unlocked));
+    let pipe = format!(r"\\.\pipe\scout-vault-test-agent-{}", std::process::id());
+    cx.update(|cx| {
+        ssh_agent::set_pipe(&pipe, cx);
+        ssh_agent::set_enabled(true, cx);
+        assert_eq!(ssh_agent::status(cx), Status::Running);
+    });
+
+    // A client: one request, one answer.
+    fn ask(pipe: &str, body: &[u8]) -> Vec<u8> {
+        let mut conn = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(pipe)
+            .unwrap();
+        conn.write_all(&(body.len() as u32).to_be_bytes()).unwrap();
+        conn.write_all(body).unwrap();
+        let mut len = [0u8; 4];
+        conn.read_exact(&mut len).unwrap();
+        let mut answer = vec![0u8; u32::from_be_bytes(len) as usize];
+        conn.read_exact(&mut answer).unwrap();
+        answer
+    }
+    let sign_body = {
+        let mut body = vec![13];
+        body.extend_from_slice(&(blob.len() as u32).to_be_bytes());
+        body.extend_from_slice(&blob);
+        body.extend_from_slice(&5u32.to_be_bytes());
+        body.extend_from_slice(b"hello");
+        body.extend_from_slice(&0u32.to_be_bytes());
+        body
+    };
+    let contains = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+
+    // The list has the vault's key, named after the item.
+    let list = ask(&pipe, &[11]);
+    assert_eq!(list[0], 12);
+    assert!(contains(&list, &blob));
+    assert!(contains(&list, "GitHub pessoal".as_bytes()));
+
+    // Signing waits for "Allow".
+    let sign = |pipe: String, body: Vec<u8>| std::thread::spawn(move || ask(&pipe, &body));
+    let waiting = sign(pipe.clone(), sign_body.clone());
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).ssh_request().is_some())
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let text = window.find("ssh-request-text").label().unwrap().to_owned();
+        assert!(text.contains("“GitHub pessoal”"), "{text}");
+        window.click("ssh-allow", cx);
+    })
+    .unwrap();
+    let answer = waiting.join().unwrap();
+    assert_eq!(answer[0], 14, "signed");
+    let mut rest = &answer[1..];
+    let len = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
+    rest = &rest[4..];
+    let signature = {
+        use ssh_key::encoding::Decode;
+        ssh_key::Signature::decode(&mut &rest[..len]).unwrap()
+    };
+    {
+        use signature::Verifier;
+        ssh_key::PublicKey::from_bytes(&blob)
+            .unwrap()
+            .key_data()
+            .verify(b"hello", &signature)
+            .unwrap();
+    }
+
+    // "Deny": the program gets a failure.
+    let waiting = sign(pipe.clone(), sign_body.clone());
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).ssh_request().is_some())
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("ssh-deny", cx);
+    })
+    .unwrap();
+    assert_eq!(waiting.join().unwrap(), [5]);
+    cx.update(|cx| assert!(app.read(cx).ssh_request().is_none()));
+
+    // Locked: no keys at all.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.lock(window, cx))
+    })
+    .unwrap();
+    let list = ask(&pipe, &[11]);
+    assert_eq!(list, [12, 0, 0, 0, 0]);
+    assert_eq!(ask(&pipe, &sign_body), [5]);
+
+    cx.update(|cx| ssh_agent::set_enabled(false, cx));
+}
+
+#[gpui_kit::test]
 fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
@@ -1704,7 +1947,7 @@ fn editor_layout_puts_short_fields_side_by_side(cx: &mut TestAppContext) {
         assert!((kind - save).abs() < 2.0, "seletor {kind} x salvar {save}");
         // Centered in the free space: equal room on both sides.
         let first = window.find("editor-kind-login").bounds();
-        let last = window.find("editor-kind-identity").bounds();
+        let last = window.find("editor-kind-ssh").bounds();
         let cancel = window.find("editor-cancel").bounds();
         let detail = window.find("editor-name").bounds();
         let left_gap = f32::from(first.left() - detail.left());
@@ -4535,22 +4778,58 @@ fn profile_photo_is_chosen_kept_in_the_app_folder_and_removed(cx: &mut TestAppCo
     let text = dir.join("notes.txt");
     std::fs::write(&text, b"hello, not a picture").unwrap();
     cx.update(|cx| profile.update(cx, |p, cx| p.set_photo(&text, cx)));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(scout_vault_app::profile_photo::get(&email, cx).is_none());
+        assert!(!profile.read(cx).cropping());
+    });
+
+    // A wide PNG: opens the crop editor, framed in the middle, without zoom.
+    let wide = image::RgbaImage::from_fn(300, 200, |x, y| image::Rgba([x as u8, y as u8, 0, 255]));
+    let picture = dir.join("me.png");
+    wide.save(&picture).unwrap();
+    cx.update(|cx| profile.update(cx, |p, cx| p.set_photo(&picture, cx)));
+    cx.run_until_parked();
+    let area = cx.update(|cx| profile.read(cx).crop_area().expect("the editor opens"));
+    assert_eq!((area.x, area.y, area.size), (50., 0., 200.));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("photo-crop-area").is_some());
+    })
+    .unwrap();
+
+    // Cancel: nothing saved.
+    cx.update(|cx| profile.update(cx, |p, cx| p.cancel_crop(cx)));
     cx.update(|cx| assert!(scout_vault_app::profile_photo::get(&email, cx).is_none()));
 
-    // A PNG: copied into the app folder and shown.
-    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-    png.extend_from_slice(&16u32.to_be_bytes());
-    png.extend_from_slice(&16u32.to_be_bytes());
-    png.extend_from_slice(&[8, 6, 0, 0, 0]);
-    let picture = dir.join("me.png");
-    std::fs::write(&picture, &png).unwrap();
+    // Again, zoomed in and dragged to the left edge (it can't leave the picture).
     cx.update(|cx| profile.update(cx, |p, cx| p.set_photo(&picture, cx)));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        profile.update(cx, |p, cx| {
+            p.set_crop_zoom(2., cx);
+            p.pan_crop(1000., 0., cx);
+        })
+    });
+    let area = cx.update(|cx| profile.read(cx).crop_area().unwrap());
+    assert_eq!((area.x, area.size), (0., 100.));
+    cx.update_window(handle, |_, window, cx| window.click("photo-crop-save", cx))
+        .unwrap();
+
+    // Saved square in the app folder and shown.
     let stored = cx.update(|cx| {
+        assert!(!profile.read(cx).cropping());
         assert!(scout_vault_app::profile_photo::get(&email, cx).is_some());
         scout_vault_app::profile_photo::stored_path(&email, cx).unwrap()
     });
     assert!(stored.starts_with(dir.join("photos")));
-    assert_eq!(std::fs::read(&stored).unwrap(), png);
+    let saved = image::ImageReader::open(&stored)
+        .unwrap()
+        .with_guessed_format()
+        .unwrap()
+        .decode()
+        .unwrap();
+    assert_eq!((saved.width(), saved.height()), (100, 100));
     std::fs::remove_file(&picture).unwrap(); // the copy doesn't depend on the original
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);

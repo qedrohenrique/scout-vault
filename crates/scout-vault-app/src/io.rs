@@ -19,6 +19,11 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
+/// Inside the network runtime (to create Tokio resources outside a task).
+pub fn enter() -> tokio::runtime::EnterGuard<'static> {
+    runtime().enter()
+}
+
 /// Runs `fut` on the network runtime and waits for the result.
 pub async fn run<F>(fut: F) -> F::Output
 where

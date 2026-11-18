@@ -5,12 +5,14 @@
 //! (password, 2FA, email) happens in the web vault, which the screen opens.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{button::*, *};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use scout_vault_core::vault::{ItemKind, Vault};
 
 use crate::flow::Session;
+use crate::profile_photo::{Crop, Picture};
 use crate::settings::Settings;
 use crate::ui;
 
@@ -200,10 +202,69 @@ pub fn avatar(
         .child(initials)
 }
 
+/// Side of the crop editor's square, in pixels.
+const CROP_VIEW: f32 = 280.;
+/// Most zoom in the crop editor.
+const MAX_ZOOM: f32 = 4.;
+
+/// Positions a value between `lo` and `hi` (the middle when they cross).
+fn within(v: f32, lo: f32, hi: f32) -> f32 {
+    if lo >= hi {
+        (lo + hi) / 2.
+    } else {
+        v.clamp(lo, hi)
+    }
+}
+
+/// The crop editor: the chosen picture under a round mask; drag to move it, zoom
+/// to frame it.
+struct CropEditor {
+    picture: Picture,
+    /// 1 = the short side fills the circle.
+    zoom: f32,
+    /// The point of the picture (in its pixels) in the middle of the circle.
+    center: (f32, f32),
+    /// Where the last drag event was.
+    drag: Option<Point<Pixels>>,
+    zoom_slider: Entity<SliderState>,
+    _zoom_sub: Subscription,
+}
+
+impl CropEditor {
+    fn size(&self) -> (f32, f32) {
+        (self.picture.width() as f32, self.picture.height() as f32)
+    }
+
+    /// Screen pixels per picture pixel.
+    fn scale(&self) -> f32 {
+        let (w, h) = self.size();
+        CROP_VIEW / w.min(h) * self.zoom
+    }
+
+    /// Keeps the circle inside the picture.
+    fn keep_inside(&mut self) {
+        let (w, h) = self.size();
+        let half = CROP_VIEW / (2. * self.scale());
+        self.center.0 = within(self.center.0, half, w - half);
+        self.center.1 = within(self.center.1, half, h - half);
+    }
+
+    fn crop(&self) -> Crop {
+        let side = CROP_VIEW / self.scale();
+        Crop {
+            x: self.center.0 - side / 2.,
+            y: self.center.1 - side / 2.,
+            size: side,
+        }
+    }
+}
+
 pub struct ProfileView {
     info: ProfileInfo,
     /// "Sign out" asks for a second click.
     confirm_sign_out: bool,
+    /// Open while a new photo is being framed.
+    crop: Option<CropEditor>,
 }
 
 impl EventEmitter<ProfileEvent> for ProfileView {}
@@ -218,6 +279,7 @@ impl ProfileView {
         Self {
             info,
             confirm_sign_out: false,
+            crop: None,
         }
     }
 
@@ -243,13 +305,293 @@ impl ProfileView {
         .detach();
     }
 
-    /// Makes the image at `path` the photo (copied into the app folder).
+    /// Opens the image at `path` in the crop editor (decoded in the background).
     pub fn set_photo(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
-        match crate::profile_photo::set_from_file(&self.info.email, path, cx) {
+        let path = path.to_path_buf();
+        let task = cx.background_spawn(async move { crate::profile_photo::open_file(&path) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| match result {
+                Ok(picture) => this.open_crop(picture, cx),
+                Err(e) => crate::toast::error(e.message(), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn open_crop(&mut self, picture: Picture, cx: &mut Context<Self>) {
+        let zoom_slider = cx.new(|_| {
+            SliderState::new()
+                .min(1.)
+                .max(MAX_ZOOM)
+                .step(0.01)
+                .default_value(1.)
+        });
+        let sub = cx.subscribe(&zoom_slider, |this, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = event {
+                this.set_crop_zoom(v.start(), cx);
+            }
+        });
+        let center = (picture.width() as f32 / 2., picture.height() as f32 / 2.);
+        self.crop = Some(CropEditor {
+            picture,
+            zoom: 1.,
+            center,
+            drag: None,
+            zoom_slider,
+            _zoom_sub: sub,
+        });
+        cx.notify();
+    }
+
+    /// Is the crop editor open?
+    pub fn cropping(&self) -> bool {
+        self.crop.is_some()
+    }
+
+    /// The part of the picture that would be saved now.
+    pub fn crop_area(&self) -> Option<Crop> {
+        self.crop.as_ref().map(CropEditor::crop)
+    }
+
+    pub fn set_crop_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        if let Some(c) = &mut self.crop {
+            c.zoom = zoom.clamp(1., MAX_ZOOM);
+            c.keep_inside();
+            cx.notify();
+        }
+    }
+
+    /// Zoom by a step (the mouse wheel), moving the slider along.
+    fn zoom_crop_by(&mut self, step: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(c) = &self.crop else { return };
+        let zoom = (c.zoom * (1. + step)).clamp(1., MAX_ZOOM);
+        let slider = c.zoom_slider.clone();
+        self.set_crop_zoom(zoom, cx);
+        slider.update(cx, |s, cx| s.set_value(zoom, window, cx));
+    }
+
+    /// Moves the picture by a distance on screen.
+    pub fn pan_crop(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        if let Some(c) = &mut self.crop {
+            let scale = c.scale();
+            c.center.0 -= dx / scale;
+            c.center.1 -= dy / scale;
+            c.keep_inside();
+            cx.notify();
+        }
+    }
+
+    /// Back to the middle of the picture, without zoom.
+    fn recenter_crop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(c) = &mut self.crop else { return };
+        let (w, h) = c.size();
+        c.center = (w / 2., h / 2.);
+        c.zoom = 1.;
+        let slider = c.zoom_slider.clone();
+        slider.update(cx, |s, cx| s.set_value(1., window, cx));
+        cx.notify();
+    }
+
+    fn drag_crop(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(c) = &mut self.crop else { return };
+        let Some(last) = c.drag else { return };
+        if !event.dragging() {
+            c.drag = None;
+            return;
+        }
+        c.drag = Some(event.position);
+        let d = event.position - last;
+        self.pan_crop(f32::from(d.x), f32::from(d.y), cx);
+    }
+
+    pub fn cancel_crop(&mut self, cx: &mut Context<Self>) {
+        self.crop = None;
+        cx.notify();
+    }
+
+    /// Saves the framed square as the photo (copied into the app folder).
+    pub fn save_crop(&mut self, cx: &mut Context<Self>) {
+        let Some(c) = self.crop.take() else { return };
+        match crate::profile_photo::save(&self.info.email, &c.picture, c.crop(), cx) {
             Ok(()) => crate::toast::success(t!("profile.photo_saved"), cx),
             Err(e) => crate::toast::error(e.message(), cx),
         }
         cx.notify();
+    }
+
+    fn render_crop(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let c = self.crop.as_ref()?;
+        let theme = cx.theme();
+        let (bg, border, muted, radius) = (
+            theme.background,
+            theme.border,
+            theme.muted_foreground,
+            theme.radius_lg,
+        );
+        let scale = c.scale();
+        let (w, h) = c.size();
+        let left = CROP_VIEW / 2. - c.center.0 * scale;
+        let top = CROP_VIEW / 2. - c.center.1 * scale;
+        // A thick round border around the circle darkens what stays out.
+        let ring = 220.;
+        let area = div()
+            .id("photo-crop-area")
+            .test_support()
+            .relative()
+            .size(px(CROP_VIEW))
+            .flex_shrink_0()
+            .overflow_hidden()
+            .rounded(radius)
+            .bg(gpui_kit::black())
+            .cursor_grab()
+            .child(
+                img(c.picture.preview.clone())
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px(w * scale))
+                    .h(px(h * scale))
+                    .object_fit(ObjectFit::Fill),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(-ring))
+                    .top(px(-ring))
+                    .size(px(CROP_VIEW + 2. * ring))
+                    .rounded_full()
+                    .border(px(ring))
+                    .border_color(gpui_kit::black().opacity(0.6)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded_full()
+                    .border_2()
+                    .border_color(gpui_kit::white().opacity(0.85)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    if let Some(c) = &mut this.crop {
+                        c.drag = Some(e.position);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.drag_crop(e, cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| {
+                    if let Some(c) = &mut this.crop {
+                        c.drag = None;
+                    }
+                }),
+            )
+            .on_scroll(cx.listener(|this, e: &ScrollEvent, window, cx| {
+                let dy = f32::from(e.delta.pixel_delta(px(20.)).y);
+                this.zoom_crop_by(dy / 400., window, cx);
+            }));
+
+        let zoom = h_flex()
+            .w(px(CROP_VIEW))
+            .gap_3()
+            .items_center()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("profile.photo_zoom")),
+            )
+            .child(
+                div().flex_1().child(
+                    Slider::new(&c.zoom_slider)
+                        .horizontal()
+                        .accessibility_label(t!("profile.photo_zoom")),
+                ),
+            );
+
+        let card = v_flex()
+            .id("photo-crop")
+            .w(px(CROP_VIEW + 48.))
+            .p_6()
+            .gap_4()
+            .items_center()
+            .rounded(radius)
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_semibold()
+                            .child(t!("profile.photo_crop_title")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(t!("profile.photo_crop_hint")),
+                    ),
+            )
+            .child(area)
+            .child(zoom)
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(
+                        Button::new("photo-crop-center")
+                            .ghost()
+                            .small()
+                            .label(t!("profile.photo_center"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.recenter_crop(window, cx)),
+                            ),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("photo-crop-cancel")
+                            .outline()
+                            .small()
+                            .label(t!("common.cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_crop(cx))),
+                    )
+                    .child(
+                        Button::new("photo-crop-save")
+                            .primary()
+                            .small()
+                            .icon(IconName::Check)
+                            .label(t!("profile.photo_crop_save"))
+                            .on_click(cx.listener(|this, _, _, cx| this.save_crop(cx))),
+                    ),
+            );
+
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui_kit::black().opacity(0.55))
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.cancel_crop(cx)),
+                )
+                .child(card)
+                .into_any_element(),
+        )
     }
 
     pub fn remove_photo(&mut self, cx: &mut Context<Self>) {
@@ -768,6 +1110,7 @@ impl Render for ProfileView {
                 ),
             )
             .child(back)
+            .children(self.render_crop(cx))
     }
 }
 

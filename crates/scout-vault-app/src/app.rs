@@ -67,6 +67,15 @@ pub struct ScoutVaultApp {
     _screen_observer: Option<Subscription>,
     /// "Profile" screen open, over the vault.
     profile: Option<(Entity<ProfileView>, Subscription)>,
+    /// SSH signatures waiting for "Allow" (the first one is on screen).
+    ssh_requests: std::collections::VecDeque<crate::ssh_agent::Approval>,
+    /// "Remember for 10 minutes" in the SSH prompt.
+    ssh_remember: bool,
+    /// Windows Hello is being asked for the SSH request on screen.
+    ssh_confirming: bool,
+    /// The window was in the tray when the SSH request came: goes back after.
+    ssh_was_hidden: bool,
+    _ssh_task: Task<()>,
     /// Typing waiting for "type anyway" (the app doesn't tell its fields).
     pending_type_anyway: Option<(Item, Request)>,
     /// Browser login waiting for unlock to be saved (url, username, password).
@@ -250,6 +259,7 @@ impl ScoutVaultApp {
                 while let Ok(event) = os_rx.try_recv() {
                     this.handle_os_event(event, window, cx);
                 }
+                this.drop_stale_ssh_requests(window, cx);
             });
             if alive.is_err() {
                 break;
@@ -276,6 +286,25 @@ impl ScoutVaultApp {
                 }
             }
         });
+        // SSH agent: signature requests come from the pipe threads.
+        let (ssh_tx, mut ssh_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::ssh_agent::Approval>();
+        crate::ssh_agent::install(crate::ssh_agent::PIPE, ssh_tx, cx);
+        if store.load().ssh_agent && crate::tray::system_enabled() {
+            crate::ssh_agent::set_enabled(true, cx);
+        }
+        let ssh_task = cx.spawn_in(window, async move |this, cx| {
+            while let Some(request) = ssh_rx.recv().await {
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        this.handle_ssh_request(request, window, cx)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         let auto_lock_after = Self::auto_lock_from_settings(&store);
         let lock_on_minimize = store.load().lock_on_minimize;
         let mut this = Self {
@@ -285,6 +314,11 @@ impl ScoutVaultApp {
             _screen_observer: None,
             profile: None,
             pending_type_anyway: None,
+            ssh_requests: Default::default(),
+            ssh_remember: false,
+            ssh_confirming: false,
+            ssh_was_hidden: false,
+            _ssh_task: ssh_task,
             pending_browser_save: None,
             reprompt_autotype: None,
             reprompt_counter: 0,
@@ -319,6 +353,7 @@ impl ScoutVaultApp {
             focus: cx.focus_handle(),
             toasts: crate::toast::init(cx),
         };
+        this.refresh_ssh_keys(cx);
         this.refresh_hotkey(window, cx);
         this.refresh_browser();
         this.refresh_tray(window, cx);
@@ -329,6 +364,263 @@ impl ScoutVaultApp {
                 .unwrap_or(true)
         });
         this
+    }
+
+    /// Gives the SSH agent the open vault's keys (none when locked).
+    fn refresh_ssh_keys(&self, cx: &mut App) {
+        match &self.screen {
+            Screen::Vault(view) => {
+                let list = view.read(cx).list().clone();
+                let vault = list.read(cx).delegate().vault();
+                // `set_keys` needs `&mut App`: work on a copy of the SSH items only.
+                let ssh = scout_vault_core::vault::Vault {
+                    items: vault
+                        .items
+                        .iter()
+                        .filter(|i| matches!(i.kind, scout_vault_core::vault::ItemKind::SshKey(_)))
+                        .cloned()
+                        .collect(),
+                    ..Default::default()
+                };
+                crate::ssh_agent::set_keys(Some(&ssh), cx);
+            }
+            _ => crate::ssh_agent::set_keys(None, cx),
+        }
+    }
+
+    /// A program wants to sign with a vault SSH key: ask (or allow, if remembered).
+    pub fn handle_ssh_request(
+        &mut self,
+        request: crate::ssh_agent::Approval,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.screen, Screen::Vault(_)) {
+            request.answer(false);
+            return;
+        }
+        if crate::ssh_agent::is_remembered(&request, cx) {
+            request.answer(true);
+            return;
+        }
+        if self.ssh_requests.is_empty() {
+            self.ssh_was_hidden = crate::tray::is_hidden(window);
+            self.ssh_remember = false;
+        }
+        self.ssh_requests.push_back(request);
+        crate::tray::show_window(window);
+        cx.notify();
+    }
+
+    /// The SSH request on screen, if any.
+    pub fn ssh_request(&self) -> Option<&crate::ssh_agent::Approval> {
+        self.ssh_requests.front()
+    }
+
+    pub fn set_ssh_remember(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.ssh_remember = on;
+        cx.notify();
+    }
+
+    /// "Allow": with Windows Hello first, if the setting asks for it.
+    pub fn allow_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ssh_confirming || self.ssh_requests.is_empty() {
+            return;
+        }
+        let hello = self.store.load().ssh_agent_hello && crate::hello::available(cx);
+        let signer = hello.then(|| crate::hello::signer(cx)).flatten();
+        let Some(signer) = signer else {
+            self.finish_ssh(true, window, cx);
+            return;
+        };
+        self.ssh_confirming = true;
+        cx.notify();
+        let challenge = crate::hello::new_challenge();
+        let task = cx.background_spawn(async move { signer(&challenge) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, window, cx| {
+                this.ssh_confirming = false;
+                match result {
+                    Ok(_) => this.finish_ssh(true, window, cx),
+                    Err(e) => {
+                        crate::toast::error(e.message(), cx);
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn deny_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ssh_confirming {
+            self.finish_ssh(false, window, cx);
+        }
+    }
+
+    fn finish_ssh(&mut self, allow: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(request) = self.ssh_requests.pop_front() else {
+            return;
+        };
+        if allow && self.ssh_remember {
+            crate::ssh_agent::remember(&request, cx);
+        }
+        request.answer(allow);
+        // Others waiting for the same key and program get the same answer.
+        if allow && self.ssh_remember {
+            let (same, rest): (Vec<_>, Vec<_>) = self
+                .ssh_requests
+                .drain(..)
+                .partition(|r| crate::ssh_agent::is_remembered(r, cx));
+            self.ssh_requests = rest.into();
+            for r in same {
+                r.answer(true);
+            }
+        }
+        self.ssh_remember = false;
+        if self.ssh_requests.is_empty() && self.ssh_was_hidden {
+            crate::tray::hide_window(window);
+        }
+        cx.notify();
+    }
+
+    /// Requests the program stopped waiting for leave the screen.
+    fn drop_stale_ssh_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ssh_confirming || !self.ssh_requests.iter().any(|r| r.is_stale()) {
+            return;
+        }
+        self.ssh_requests.retain(|r| !r.is_stale());
+        if self.ssh_requests.is_empty() && self.ssh_was_hidden {
+            crate::tray::hide_window(window);
+        }
+        cx.notify();
+    }
+
+    fn render_ssh_request(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::assets::IconName;
+        use gpui_kit::component::button::*;
+        use gpui_kit::component::checkbox::Checkbox;
+        use gpui_kit::component::*;
+        let request = self.ssh_requests.front()?;
+        let theme = cx.theme();
+        let (bg, border, muted, radius) = (
+            theme.background,
+            theme.border,
+            theme.muted_foreground,
+            theme.radius_lg,
+        );
+        let accent = crate::appearance::accent(cx);
+        let waiting = self.ssh_requests.len() - 1;
+        let busy = self.ssh_confirming;
+        let card = v_flex()
+            .id("ssh-request")
+            .w(px(420.))
+            .p_6()
+            .gap_4()
+            .rounded(radius)
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .shadow_lg()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(
+                        div()
+                            .size(px(40.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(accent.opacity(0.15))
+                            .text_color(accent)
+                            .child(Icon::new(IconName::KeyRound)),
+                    )
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_semibold()
+                            .child(t!("ssh_agent.request_title")),
+                    ),
+            )
+            .child(
+                div()
+                    .id("ssh-request-text")
+                    .test_support()
+                    .aria_label(SharedString::from(t!(
+                        "ssh_agent.request_text",
+                        program = request.client.describe(),
+                        key = request.key_name.clone()
+                    )))
+                    .text_sm()
+                    .child(t!(
+                        "ssh_agent.request_text",
+                        program = request.client.describe(),
+                        key = request.key_name.clone()
+                    )),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .font_family("monospace")
+                    .child(request.fingerprint.clone()),
+            )
+            .child(
+                Checkbox::new("ssh-remember")
+                    .label(t!("ssh_agent.remember"))
+                    .checked(self.ssh_remember)
+                    .disabled(busy)
+                    .on_change(cx.listener(|this, v: &bool, _, cx| this.set_ssh_remember(*v, cx))),
+            )
+            .when(waiting > 0, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t!("ssh_agent.more_waiting", n = waiting)),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        Button::new("ssh-deny")
+                            .outline()
+                            .small()
+                            .label(t!("ssh_agent.deny"))
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, window, cx| this.deny_ssh(window, cx))),
+                    )
+                    .child(
+                        Button::new("ssh-allow")
+                            .primary()
+                            .small()
+                            .icon(IconName::Check)
+                            .label(t!("ssh_agent.allow"))
+                            .loading(busy)
+                            .disabled(busy)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.allow_ssh(window, cx)),
+                            ),
+                    ),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui_kit::black().opacity(0.55))
+                .occlude()
+                .child(card)
+                .into_any_element(),
+        )
     }
 
     /// Windows locked the session or is about to sleep: lock the vault too
@@ -1364,6 +1656,15 @@ impl ScoutVaultApp {
             return;
         }
         let k = &event.keystroke;
+        // The SSH prompt answers Esc (deny) and Enter (allow) before anything else.
+        if !self.ssh_requests.is_empty() {
+            match k.key.as_str() {
+                "escape" => self.deny_ssh(window, cx),
+                "enter" => self.allow_ssh(window, cx),
+                _ => {}
+            }
+            return;
+        }
         if k.key == "," && k.modifiers.secondary(cx) {
             if self.settings.is_some() {
                 self.close_settings(cx);
@@ -1389,7 +1690,15 @@ impl ScoutVaultApp {
         } else if k.key == "escape" && self.health.is_some() {
             self.close_health(cx);
         } else if k.key == "escape" && self.profile.is_some() {
-            self.close_profile(cx);
+            let profile = self.profile_view().unwrap().clone();
+            if profile.read(cx).cropping() {
+                profile.update(cx, |p, cx| p.cancel_crop(cx));
+            } else {
+                self.close_profile(cx);
+            }
+        } else if k.key == "enter" && self.profile_view().is_some_and(|p| p.read(cx).cropping()) {
+            let profile = self.profile_view().unwrap().clone();
+            profile.update(cx, |p, cx| p.save_crop(cx));
         } else if self.settings.is_none()
             && self.generator.is_none()
             && self.health.is_none()
@@ -1473,7 +1782,10 @@ impl ScoutVaultApp {
     fn set_screen(&mut self, (screen, sub): (Screen, Subscription), cx: &mut Context<Self>) {
         // The title bar shows the vault's actions (the sync spinner…): redraw with it.
         self._screen_observer = match &screen {
-            Screen::Vault(view) => Some(cx.observe(view, |_, _, cx| cx.notify())),
+            Screen::Vault(view) => Some(cx.observe(view, |this, _, cx| {
+                this.refresh_ssh_keys(cx);
+                cx.notify()
+            })),
             _ => None,
         };
         // Switching the screen drops the previous one: the decrypted vault leaves memory with it
@@ -1482,6 +1794,14 @@ impl ScoutVaultApp {
         self.profile = None;
         self.screen = screen;
         self._screen_subscription = sub;
+        // The SSH agent only has keys while the vault is open.
+        self.refresh_ssh_keys(cx);
+        if !matches!(self.screen, Screen::Vault(_)) {
+            for request in self.ssh_requests.drain(..) {
+                request.answer(false);
+            }
+            self.ssh_confirming = false;
+        }
         self.record_activity();
         cx.notify();
     }
@@ -1862,6 +2182,7 @@ impl Render for ScoutVaultApp {
                 crate::motion::key("tela", content.entity_id()),
                 10.,
             ))
+            .children(self.render_ssh_request(cx))
             .child(self.toasts.clone())
             // Theme transition on top of everything.
             .children(crate::theme_fx::overlay(cx))

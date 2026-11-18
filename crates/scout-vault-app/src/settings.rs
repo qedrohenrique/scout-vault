@@ -103,6 +103,12 @@ pub struct Settings {
     /// Website icons in the list (downloaded from the server's icon service).
     #[serde(default = "yes")]
     pub site_icons: bool,
+    /// SSH agent on Windows' OpenSSH pipe (off by default).
+    #[serde(default)]
+    pub ssh_agent: bool,
+    /// The SSH agent asks for Windows Hello before each signature (when available).
+    #[serde(default = "yes")]
+    pub ssh_agent_hello: bool,
     /// The browser extension may ask the app for logins (off by default).
     #[serde(default)]
     pub browser_fill: bool,
@@ -157,6 +163,8 @@ impl Default for Settings {
             username_generator: UsernameOptions::default(),
             remember_session: true,
             site_icons: true,
+            ssh_agent: false,
+            ssh_agent_hello: true,
             pinned_items: Vec::new(),
             close_to_tray: true,
             item_icons: Default::default(),

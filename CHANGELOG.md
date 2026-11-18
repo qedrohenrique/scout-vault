@@ -7,6 +7,25 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Added
+- **SSH keys**: create them in the app ("New item" → SSH). A new item comes with a fresh
+  Ed25519 key; you can also paste or import an existing private key (OpenSSH `id_ed25519` /
+  `id_rsa` / ECDSA, with or without a passphrase, PuTTY `.ppk` and RSA PEM). The public key and
+  the fingerprint are worked out from the private key, and keys are saved in OpenSSH format,
+  like the Bitwarden apps.
+- **SSH agent** (Settings → SSH): `ssh` and `git` use the open vault's SSH keys through
+  Windows' OpenSSH pipe. Each signature asks first, showing which program wants which key
+  (optionally confirmed with Windows Hello), and can be remembered for 10 minutes. Locking the
+  vault removes the keys. Windows' own "OpenSSH Authentication Agent" service must be stopped.
+- **Crop the profile photo**: after choosing a picture, drag it and zoom to frame it in the
+  circle; "Center" puts it back in the middle.
+
+### Fixed
+- Non-square profile photos no longer show with flat sides: the photo is saved square (at most
+  512 px) and older photos show their middle. Phone photos come out the right way up (EXIF).
+
 ## [0.8.0] - 2026-11-17
 
 ### Added

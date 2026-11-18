@@ -76,6 +76,8 @@ pub struct SettingsView {
     relogin_days: u32,
     auto_lock_minutes: u32,
     browser_fill: bool,
+    ssh_agent: bool,
+    ssh_agent_hello: bool,
     browser_error: Option<SharedString>,
     /// Floating windows opacity, 1–100%.
     hud_slider: Entity<SliderState>,
@@ -150,6 +152,8 @@ impl SettingsView {
             relogin_days: loaded.relogin_days,
             auto_lock_minutes: loaded.auto_lock_minutes,
             browser_fill: loaded.browser_fill,
+            ssh_agent: loaded.ssh_agent,
+            ssh_agent_hello: loaded.ssh_agent_hello,
             browser_error: None,
             hud_slider,
             _hud_slider,
@@ -270,6 +274,24 @@ impl SettingsView {
     }
 
     /// Website icons on/off (applied at once; downloading happens when settings close).
+    /// SSH agent on Windows' OpenSSH pipe (starts or stops right away).
+    pub fn set_ssh_agent(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.ssh_agent = on;
+        let mut settings = self.store.load();
+        settings.ssh_agent = on;
+        self.store.save(&settings);
+        crate::ssh_agent::set_enabled(on, cx);
+        cx.notify();
+    }
+
+    pub fn set_ssh_agent_hello(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.ssh_agent_hello = on;
+        let mut settings = self.store.load();
+        settings.ssh_agent_hello = on;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
     pub fn set_site_icons(&mut self, on: bool, cx: &mut Context<Self>) {
         self.site_icons = on;
         let mut settings = self.store.load();
@@ -1154,6 +1176,61 @@ impl Render for SettingsView {
             }
             Self::group(t!("settings.group_browser"), rows, cx)
         };
+        let ssh_group = {
+            let mut rows = vec![Self::row(
+                t!("settings.ssh_agent"),
+                t!("settings.ssh_agent_desc"),
+                Switch::new("ssh-agent-setting")
+                    .checked(self.ssh_agent)
+                    .on_click(cx.listener(|this, v: &bool, _, cx| this.set_ssh_agent(*v, cx))),
+                cx,
+            )];
+            if self.ssh_agent && crate::hello::available(cx) {
+                rows.push(Self::row(
+                    t!("settings.ssh_agent_hello"),
+                    t!("settings.ssh_agent_hello_desc"),
+                    Switch::new("ssh-agent-hello")
+                        .checked(self.ssh_agent_hello)
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_ssh_agent_hello(*v, cx)),
+                        ),
+                    cx,
+                ));
+            }
+            let status: Option<(SharedString, Hsla)> = match crate::ssh_agent::status(cx) {
+                _ if !self.ssh_agent => None,
+                crate::ssh_agent::Status::Running => Some((
+                    t!(
+                        "settings.ssh_agent_running",
+                        n = crate::ssh_agent::key_count(cx)
+                    )
+                    .into(),
+                    cx.theme().muted_foreground,
+                )),
+                crate::ssh_agent::Status::PipeBusy => {
+                    Some((t!("settings.ssh_agent_busy").into(), cx.theme().warning))
+                }
+                crate::ssh_agent::Status::Failed(e) => Some((
+                    t!("settings.ssh_agent_failed", e = e).into(),
+                    cx.theme().danger,
+                )),
+                crate::ssh_agent::Status::Off => None,
+            };
+            if let Some((text, color)) = status {
+                rows.push(
+                    div().px_4().py_3().child(
+                        div()
+                            .id("ssh-agent-status")
+                            .test_support()
+                            .aria_label(text.clone())
+                            .text_xs()
+                            .text_color(color)
+                            .child(text),
+                    ),
+                );
+            }
+            Self::group(t!("settings.group_ssh"), rows, cx)
+        };
         let unlock_control = self.number_choice(
             NumberChoice {
                 id: "settings-unlock-memory",
@@ -1377,6 +1454,7 @@ impl Render for SettingsView {
                         .child(appearance_group)
                         .child(session_group)
                         .child(browser_group)
+                        .child(ssh_group)
                         .child(autotype_group)
                         .child(shortcuts_group)
                         .child(about_group),

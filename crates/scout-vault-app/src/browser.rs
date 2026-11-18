@@ -486,29 +486,34 @@ mod server {
         Some(sd)
     }
 
-    pub async fn serve(name: String, tx: Sender<Incoming>) -> std::io::Result<()> {
+    /// A pipe instance only the current user can open (`first`: fail if another
+    /// process already serves this name). Must run inside the Tokio runtime.
+    pub fn create_user_pipe(
+        name: &str,
+        first: bool,
+    ) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
         let sd = user_only_descriptor()
             .ok_or_else(|| std::io::Error::other("não foi possível proteger o pipe"))?;
-        // The descriptor lives until the app closes; stored as a number so the
-        // future can switch threads.
-        let sd_addr = sd.0 as usize;
-        let create = |first: bool| {
-            let mut attrs = SECURITY_ATTRIBUTES {
-                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: sd_addr as *mut std::ffi::c_void,
-                bInheritHandle: false.into(),
-            };
-            // SAFETY: `attrs` points to a valid descriptor during the call.
-            unsafe {
-                ServerOptions::new()
-                    .first_pipe_instance(first)
-                    .reject_remote_clients(true)
-                    .create_with_security_attributes_raw(
-                        &name,
-                        (&mut attrs as *mut SECURITY_ATTRIBUTES).cast(),
-                    )
-            }
+        let mut attrs = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: sd.0,
+            bInheritHandle: false.into(),
         };
+        // SAFETY: `attrs` points to a valid descriptor during the call. The descriptor
+        // is small and lives until the app closes.
+        unsafe {
+            ServerOptions::new()
+                .first_pipe_instance(first)
+                .reject_remote_clients(true)
+                .create_with_security_attributes_raw(
+                    name,
+                    (&mut attrs as *mut SECURITY_ATTRIBUTES).cast(),
+                )
+        }
+    }
+
+    pub async fn serve(name: String, tx: Sender<Incoming>) -> std::io::Result<()> {
+        let create = |first: bool| create_user_pipe(&name, first);
         // `first_pipe_instance`: if another process already created a pipe with this name, fail.
         let mut server = create(true)?;
         loop {
@@ -554,6 +559,9 @@ mod server {
         }
     }
 }
+
+#[cfg(windows)]
+pub(crate) use server::create_user_pipe;
 
 /// Starts the pipe server (Windows only). Dropping the returned value turns it off.
 pub fn start_server(tx: std::sync::mpsc::Sender<Incoming>) -> Option<crate::io::Background> {

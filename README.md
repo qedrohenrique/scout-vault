@@ -77,7 +77,9 @@ close, without the weight of an Electron app.
   server, the app goes back to the login screen with a notice.
 
 **Editing** (encrypted on your machine before it leaves)
-- **New item** (`+` in the list or `Ctrl+N`): login, note, card or identity. **Edit**
+- **New item** (`+` in the list or `Ctrl+N`): login, note, card, identity or SSH key (a new
+  Ed25519 key is generated, or import yours: OpenSSH, PuTTY `.ppk`, RSA PEM; the public key and
+  fingerprint are filled in). **Edit**
   (`Ctrl+E`) any item, SSH keys included: name, fields, websites, custom fields, notes, folder
   and favorite. A button generates the password right there.
 - When you change the password, the old one goes to the item's **password history** (as in the
@@ -103,6 +105,16 @@ close, without the weight of an Electron app.
   key; the opened copy lives in `%TEMP%\ScoutVault-anexos` and is deleted on lock. On a free
   bitwarden.com account attachments require **Premium** — the app says so.
 - Organization items you can only read don't show Edit.
+
+**SSH agent** (Settings → SSH, off by default)
+- Serves the open vault's SSH keys to Windows' `ssh` and `git` on the OpenSSH pipe
+  (`\\.\pipe\openssh-ssh-agent`), like 1Password: each signature shows **who is asking**
+  (e.g. `ssh.exe (git.exe)`) and **which key**, and waits for **Allow** (optionally confirmed with
+  Windows Hello). "Don't ask again for 10 minutes" skips the question for that program and key
+  until the vault locks. Locked vault = no keys. Nothing can add, remove or export keys through it.
+- Windows' own "OpenSSH Authentication Agent" service uses the same pipe: stop and disable it
+  (`services.msc`) to use Scout Vault's. For git, point it at Windows' ssh:
+  `git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe`.
 
 **Browser autofill** (Chrome, Edge, Brave)
 - Its own extension in the [`extension/`](extension/) folder. Turn it on in Settings → Browser and

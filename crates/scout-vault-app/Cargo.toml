@@ -12,9 +12,11 @@ path = "src/main.rs"
 
 [dependencies]
 base64.workspace = true
-scout-vault-core = { version = "0.8.0", path = "../scout-vault-core" }
+scout-vault-core = { version = "0.9.0", path = "../scout-vault-core" }
 getrandom = "0.4"
 gpui-kit = "0.9"
+# Profile photo: decode, crop and save as PNG (already built by GPUI).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico", "bmp"] }
 keyring = "4.2.0"
 raw-window-handle = "0.6"
 serde = { workspace = true, features = ["derive"] }
@@ -28,6 +30,8 @@ psl = "2.1.255"
 gpui-kit = { version = "0.9", features = ["test-support"] }
 hmac = "0.13"
 sha1 = "0.11"
+ssh-key = { version = "0.7.0-rc.12", default-features = false, features = ["std", "ed25519", "encryption", "getrandom"] }
+signature = "3"
 # gpui-kit with `test-support` pulls in gpui-fast, which pins exact versions
 # of these dependencies; pinning them here makes Cargo's resolver converge.
 taffy = "=0.15.0"
@@ -38,4 +42,4 @@ zeroize = "1.9.1"
 winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Foundation", "Security_Credentials", "Security_Cryptography", "Storage_Streams", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Networking_WindowsWebServices", "Win32_Security", "Win32_Security_Authorization", "Win32_System_DataExchange", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Accessibility", "Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Foundation", "Security_Credentials", "Security_Cryptography", "Storage_Streams", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Networking_WindowsWebServices", "Win32_Security", "Win32_Security_Authorization", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Accessibility", "Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

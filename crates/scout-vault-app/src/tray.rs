@@ -182,6 +182,11 @@ pub fn show_window(window: &gpui_kit::Window) {
     window.activate_window();
 }
 
+/// Is the window hidden in the tray? (outside the real app, always `false`)
+pub fn is_hidden(window: &gpui_kit::Window) -> bool {
+    system_enabled() && hwnd_of(window).is_some_and(|h| !platform::is_visible(h))
+}
+
 /// Is the window minimized? (outside the real app, always `false`)
 pub fn is_minimized(window: &gpui_kit::Window) -> bool {
     system_enabled() && hwnd_of(window).is_some_and(platform::is_iconic)
@@ -424,6 +429,13 @@ mod platform {
         unsafe { IsIconic(HWND(hwnd as *mut _)).as_bool() }
     }
 
+    pub fn is_visible(hwnd: isize) -> bool {
+        // SAFETY: only queries the state of the app's own window.
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(HWND(hwnd as *mut _)).as_bool()
+        }
+    }
+
     pub fn frameless(hwnd: isize) {
         use windows::Win32::Graphics::Dwm::{
             DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
@@ -506,6 +518,9 @@ mod platform {
     pub fn show(_: isize, _: bool) {}
     pub fn is_iconic(_: isize) -> bool {
         false
+    }
+    pub fn is_visible(_: isize) -> bool {
+        true
     }
     pub fn frameless(_: isize) {}
     pub fn work_area_and_scale() -> ((i32, i32, i32, i32), f32) {
