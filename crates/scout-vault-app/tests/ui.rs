@@ -1888,6 +1888,34 @@ fn sidebar_sections_collapse_and_entries_take_custom_icons(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn the_star_favorites_an_item_from_its_detail(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    // "Meu Banco" is a favorite in the fixture.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("login-1", window, cx));
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("item-favorite").label(),
+            Some("Tirar dos favoritos")
+        );
+        window.click("item-favorite", cx);
+        window.render_frame(cx);
+        // Right away on screen, while it goes to the server.
+        assert_eq!(window.find("item-favorite").label(), Some("Favoritar"));
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert!(!vault.read(cx).selected().unwrap().favorite);
+        assert!(vault.read(cx).is_syncing());
+    });
+    // The fixture's server doesn't exist: the star goes back.
+    wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_syncing()));
+    cx.update(|cx| assert!(vault.read(cx).selected().unwrap().favorite));
+}
+
+#[gpui_kit::test]
 fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());

@@ -565,6 +565,11 @@ pub enum WriteOp {
     /// into another: in Bitwarden the hierarchy is the name "Parent/Child").
     /// The returned id is the first one's.
     RenameFolders(Vec<(String, String)>),
+    /// Marks or unmarks an item as favorite (per person, also for organization items).
+    SetFavorite {
+        item_id: String,
+        favorite: bool,
+    },
     /// Adds many items at once (import), with their folders by name; `existing`
     /// are the vault's folders, reused when the name matches.
     Import {
@@ -669,6 +674,11 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
     let favorite = match &op {
         WriteOp::MoveItem { item_id, .. } => base_cipher(&session, item_id)?.favorite,
         _ => false,
+    };
+    // Favorite: the item stays in its folder.
+    let keep_folder = match &op {
+        WriteOp::SetFavorite { item_id, .. } => base_cipher(&session, item_id)?.folder_id,
+        _ => None,
     };
     let body = match &op {
         WriteOp::Save(item, _) => {
@@ -800,6 +810,12 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                         client.rename_folder(token, id, name).await?;
                     }
                     renamed.first().map(|(id, _)| id.clone())
+                }
+                WriteOp::SetFavorite { item_id, favorite } => {
+                    client
+                        .move_cipher_to_folder(token, &item_id, keep_folder.as_deref(), favorite)
+                        .await?;
+                    Some(item_id)
                 }
                 WriteOp::Import { .. } => {
                     let body = import_body.expect("cifrado acima");

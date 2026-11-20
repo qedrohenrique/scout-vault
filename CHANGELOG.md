@@ -7,6 +7,12 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-19
+
+### Added
+- **Favorite from the item**: a star next to the item's name marks or unmarks it as a favorite
+  right away, without opening the editor (organization items too: favorites are per person).
+
 ## [0.11.0] - 2026-11-19
 
 ### Added

@@ -1373,6 +1373,22 @@ impl VaultView {
     }
 
     /// Pins or unpins the open item in quick access.
+    /// Marks or unmarks the open item as favorite (right away on screen, then on the server).
+    pub fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = &mut self.selected else {
+            return;
+        };
+        if item.deleted || self.syncing {
+            return;
+        }
+        item.favorite = !item.favorite;
+        let op = WriteOp::SetFavorite {
+            item_id: item.id.clone(),
+            favorite: item.favorite,
+        };
+        self.run_write(op, cx);
+    }
+
     pub fn toggle_pin(&mut self, cx: &mut Context<Self>) {
         let Some(item) = &self.selected else { return };
         let id = item.id.clone();
@@ -2351,6 +2367,8 @@ impl VaultView {
                 WriteOp::RenameFolders(_) => Some(t!("vault.folder_moved")),
                 // The message comes from `import_items`.
                 WriteOp::Import { .. } => None,
+                WriteOp::SetFavorite { favorite: true, .. } => Some(t!("vault.favorited")),
+                WriteOp::SetFavorite { .. } => Some(t!("vault.unfavorited")),
             }
             .map(String::from)
         });
@@ -2453,6 +2471,20 @@ impl VaultView {
                     }
                     Err(flow::SyncError::Expired) => cx.emit(VaultEvent::SessionExpired),
                     Err(flow::SyncError::Other(e)) => {
+                        // Undo what was shown ahead of the server (e.g. the favorite star).
+                        if let Some(id) = this.selected.as_ref().map(|i| i.id.clone()) {
+                            if let Some(item) = this
+                                .list
+                                .read(cx)
+                                .delegate()
+                                .vault()
+                                .items
+                                .iter()
+                                .find(|i| i.id == id)
+                            {
+                                this.selected = Some(item.clone());
+                            }
+                        }
                         // With the editor open, the error shows up in it and nothing is lost.
                         if let Some((editor, _)) = &this.editor {
                             let msg = e.clone();
@@ -3487,11 +3519,57 @@ impl VaultView {
                                     .truncate()
                                     .child(item.name.clone()),
                             )
-                            .when(item.favorite, |el| {
+                            .when(!item.deleted, |el| {
+                                let favorite = item.favorite;
+                                let (accent, muted, busy) = (
+                                    appearance::accent(cx),
+                                    cx.theme().muted_foreground,
+                                    self.syncing,
+                                );
                                 el.child(
-                                    Icon::new(IconName::StarFill)
-                                        .small()
-                                        .text_color(appearance::accent(cx)),
+                                    div()
+                                        .id("item-favorite")
+                                        .test_support()
+                                        .role(Role::Button)
+                                        .aria_label(SharedString::from(if favorite {
+                                            t!("vault.unfavorite")
+                                        } else {
+                                            t!("vault.favorite")
+                                        }))
+                                        .flex_shrink_0()
+                                        .p_1()
+                                        .rounded(cx.theme().radius)
+                                        .when(!busy, |el| {
+                                            el.cursor_pointer()
+                                                .hover(|s| s.bg(cx.theme().secondary_hover))
+                                                .active(|s| s.opacity(0.7))
+                                        })
+                                        .tooltip(move |window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                if favorite {
+                                                    t!("vault.unfavorite")
+                                                } else {
+                                                    t!("vault.favorite")
+                                                },
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .child(motion::pop(
+                                            Icon::new(if favorite {
+                                                IconName::StarFill
+                                            } else {
+                                                IconName::Star
+                                            })
+                                            .small()
+                                            .text_color(if favorite { accent } else { muted }),
+                                            motion::key(
+                                                "favorito",
+                                                format!("{}:{favorite}", item.id),
+                                            ),
+                                        ))
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.toggle_favorite(cx)),
+                                        ),
                                 )
                             }),
                     )
