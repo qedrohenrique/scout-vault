@@ -24,6 +24,8 @@ pub enum SettingsEvent {
     /// Recording a shortcut started (`true`) or ended: the app pauses its own
     /// global shortcuts meanwhile, or Windows would take the current combination.
     RecordingShortcut(bool),
+    /// "Import…": the app opens the import screen.
+    OpenImport,
 }
 
 /// Which global shortcut.
@@ -1231,6 +1233,21 @@ impl Render for SettingsView {
             }
             Self::group(t!("settings.group_ssh"), rows, cx)
         };
+        let data_group = Self::group(
+            t!("settings.group_data"),
+            vec![Self::row(
+                t!("settings.import"),
+                t!("settings.import_desc"),
+                Button::new("settings-import")
+                    .outline()
+                    .small()
+                    .icon(IconName::Download)
+                    .label(t!("settings.import_button"))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::OpenImport))),
+                cx,
+            )],
+            cx,
+        );
         let unlock_control = self.number_choice(
             NumberChoice {
                 id: "settings-unlock-memory",
@@ -1455,6 +1472,7 @@ impl Render for SettingsView {
                         .child(session_group)
                         .child(browser_group)
                         .child(ssh_group)
+                        .child(data_group)
                         .child(autotype_group)
                         .child(shortcuts_group)
                         .child(about_group),

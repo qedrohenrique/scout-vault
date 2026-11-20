@@ -60,7 +60,7 @@ app + extension** on Windows. Features vary by plan; ✅ has it, 🟡 partial, �
 | Item version history | 🟡 password only | 🟡 password only | ✅ | ✅ | ❌ |
 | Several accounts at once | ❌ | ✅ | ✅ | ✅ (several files) | ✅ |
 | SSH agent | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Import / export | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Import / export | ✅ / ❌ | ✅ | ✅ | ✅ | ✅ |
 | Emergency access | ❌ | ✅ | 🟡 | ❌ | ❌ |
 | Website icons in the list | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Firefox | ❌ | ✅ | ✅ | ✅ | ✅ |
@@ -123,7 +123,9 @@ installer (Windows Hello, locking with Windows, re-prompt and saving logins are 
 - New server item types (bank account, driver's license, passport) once stable.
 
 ### Phase G — Data
-- **Import**: Bitwarden JSON/CSV, 1Password `.1pux`, KeePass `.kdbx`/CSV, Chrome/Edge CSV, Proton Pass.
+- ~~Import~~ — done for Bitwarden JSON/CSV, browser CSVs (Chrome, Edge, Brave, Opera, Firefox,
+  Safari) and generic CSVs, in one encrypted bulk request, skipping duplicates. Still missing:
+  password-protected Bitwarden JSON, 1Password `.1pux`, KeePass `.kdbx`, Proton Pass.
 - **Export**: password-encrypted JSON (Bitwarden format) and CSV (with a warning).
 - Item version history (local, with restore).
 

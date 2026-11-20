@@ -27,6 +27,7 @@ notes on the [releases](https://github.com/qedrohenrique/scout-vault/releases).
 - The app (`crates/`): cryptography, local storage of keys and session, communication with the
   server, Windows Hello, clipboard, autofill in apps.
 - The browser extension (`extension/`) and the local channel between it and the app.
+- The SSH agent (the OpenSSH pipe, the approval prompt and who may sign with which key).
 - The build and release workflows (`.github/`).
 
 Issues in the Bitwarden server or in Vaultwarden belong to those projects:

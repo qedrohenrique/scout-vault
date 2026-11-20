@@ -11,6 +11,7 @@ use crate::autotype::{self, Request, Typer};
 use crate::flow::{Handoff, Session, Unlocked};
 use crate::generator_view::{GeneratorEvent, GeneratorView};
 use crate::health_view::{HealthEvent, HealthView};
+use crate::import_view::{ImportEvent, ImportView};
 use crate::login::{LoginEvent, LoginView};
 use crate::profile_view::{ProfileEvent, ProfileInfo, ProfileView};
 use crate::settings::SettingsStore;
@@ -50,6 +51,8 @@ pub struct ScoutVaultApp {
     generator: Option<(Entity<GeneratorView>, Subscription)>,
     /// "Password health" open (holds decrypted copies: goes away on lock).
     health: Option<(Entity<HealthView>, Subscription)>,
+    /// "Import" open (holds a copy of the vault's items: goes away on lock).
+    import: Option<(Entity<ImportView>, Subscription)>,
     _screen_subscription: Subscription,
     _appearance_subscription: Subscription,
     _idle_task: Task<()>,
@@ -352,6 +355,7 @@ impl ScoutVaultApp {
             settings: None,
             generator: None,
             health: None,
+            import: None,
             _screen_subscription: sub,
             _appearance_subscription: appearance_sub,
             _idle_task: idle_task,
@@ -1619,6 +1623,7 @@ impl ScoutVaultApp {
                     this.refresh_hotkey(window, cx);
                 }
                 SettingsEvent::Language => this.language_changed(window, cx),
+                SettingsEvent::OpenImport => this.open_import(window, cx),
             },
         );
         self.settings = Some((view, sub));
@@ -1634,6 +1639,57 @@ impl ScoutVaultApp {
             Screen::Locked(view) => view.update(cx, |v, cx| v.relabel(window, cx)),
         }
         cx.notify();
+    }
+
+    pub fn import_view(&self) -> Option<&Entity<ImportView>> {
+        self.import.as_ref().map(|(v, _)| v)
+    }
+
+    /// Opens "Import" (needs the vault open: the items go into it).
+    pub fn open_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Vault(vault) = &self.screen else {
+            crate::toast::error(t!("import.needs_vault"), cx);
+            return;
+        };
+        if self.import.is_some() {
+            return;
+        }
+        self.settings = None;
+        self.generator = None;
+        self.health = None;
+        self.profile = None;
+        let copy = {
+            let v = vault.read(cx);
+            let open = v.list().read(cx).delegate().vault();
+            scout_vault_core::vault::Vault {
+                folders: open.folders.clone(),
+                items: open.items.clone(),
+                ..Default::default()
+            }
+        };
+        let view = cx.new(|_| ImportView::new(copy));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ImportEvent, _, cx| match event {
+                ImportEvent::Close => this.close_import(cx),
+                ImportEvent::Import { items, existing } => {
+                    let (items, existing) = (items.clone(), existing.clone());
+                    this.close_import(cx);
+                    if let Screen::Vault(v) = &this.screen {
+                        v.update(cx, |v, cx| v.import_items(items, existing, cx));
+                    }
+                }
+            },
+        );
+        self.import = Some((view, sub));
+        cx.notify();
+    }
+
+    pub fn close_import(&mut self, cx: &mut Context<Self>) {
+        if self.import.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub fn health_view(&self) -> Option<&Entity<HealthView>> {
@@ -1817,6 +1873,8 @@ impl ScoutVaultApp {
             self.close_generator(cx);
         } else if k.key == "escape" && self.health.is_some() {
             self.close_health(cx);
+        } else if k.key == "escape" && self.import.is_some() {
+            self.close_import(cx);
         } else if k.key == "escape" && self.profile.is_some() {
             let profile = self.profile_view().unwrap().clone();
             if profile.read(cx).cropping() {
@@ -1919,6 +1977,7 @@ impl ScoutVaultApp {
         // Switching the screen drops the previous one: the decrypted vault leaves memory with it
         // (including the copy the fill list had and the health screen's).
         self.health = None;
+        self.import = None;
         self.profile = None;
         self.screen = screen;
         self._screen_subscription = sub;
@@ -2247,6 +2306,7 @@ impl Render for ScoutVaultApp {
         let content: AnyView = match (&self.settings, &self.screen) {
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
             _ if self.health.is_some() => self.health_view().unwrap().clone().into(),
+            _ if self.import.is_some() => self.import_view().unwrap().clone().into(),
             _ if self.profile.is_some() => self.profile_view().unwrap().clone().into(),
             (Some((v, _)), _) => v.clone().into(),
             (None, Screen::Login(v)) => v.clone().into(),
@@ -2260,7 +2320,10 @@ impl Render for ScoutVaultApp {
             (
                 &self.settings,
                 &self.screen,
-                self.generator.is_some() || self.health.is_some() || self.profile.is_some()
+                self.generator.is_some()
+                    || self.health.is_some()
+                    || self.profile.is_some()
+                    || self.import.is_some()
             ),
             (None, Screen::Vault(_), false)
         );
@@ -2300,6 +2363,28 @@ impl Render for ScoutVaultApp {
             .flex()
             .flex_col()
             .child(title_bar)
+            // On the vault: a line under the title bar, from the sidebar's edge to the
+            // window's (the sidebar's column stays one piece).
+            .when(with_sidebar, |el| {
+                el.child(
+                    gpui_kit::component::h_flex()
+                        .id("title-divider")
+                        .test_support()
+                        .h(px(1.))
+                        .w_full()
+                        .flex_shrink_0()
+                        .child(
+                            div()
+                                .h_full()
+                                .w(px(crate::vault_view::SIDEBAR_WIDTH))
+                                .flex_shrink_0()
+                                .bg(sidebar)
+                                .border_r_1()
+                                .border_color(border),
+                        )
+                        .child(div().flex_1().h_full().bg(border)),
+                )
+            })
             // Any key or mouse movement postpones the automatic lock.
             // Ctrl+, opens/closes settings; Esc closes.
             .capture_key_down(cx.listener(Self::on_key))

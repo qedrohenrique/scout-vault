@@ -565,6 +565,12 @@ pub enum WriteOp {
     /// into another: in Bitwarden the hierarchy is the name "Parent/Child").
     /// The returned id is the first one's.
     RenameFolders(Vec<(String, String)>),
+    /// Adds many items at once (import), with their folders by name; `existing`
+    /// are the vault's folders, reused when the name matches.
+    Import {
+        items: Vec<scout_vault_core::import::Imported>,
+        existing: Vec<scout_vault_core::vault::Folder>,
+    },
 }
 
 fn base_cipher(
@@ -685,6 +691,13 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
         }
         _ => None,
     };
+    let import_body = match &op {
+        WriteOp::Import { items, existing } => Some(
+            scout_vault_core::import::request(items, existing, &keys, &session.sync.profile.id)
+                .map_err(|e| SyncError::Other(t!("flow.item_encrypt_failed", e = e)))?,
+        ),
+        _ => None,
+    };
     let file_keys = keys.clone();
     // Edited organization item: did the collections change?
     let collections_changed = match &op {
@@ -787,6 +800,11 @@ pub async fn write(session: Session, keys: Arc<Keys>, op: WriteOp) -> Result<Wri
                         client.rename_folder(token, id, name).await?;
                     }
                     renamed.first().map(|(id, _)| id.clone())
+                }
+                WriteOp::Import { .. } => {
+                    let body = import_body.expect("cifrado acima");
+                    client.import_ciphers(token, &body).await?;
+                    None
                 }
             };
             let sync = client.sync(token).await?;

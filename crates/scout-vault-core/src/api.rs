@@ -559,6 +559,19 @@ impl Client {
         ensure_success(res).await.map(|_| ())
     }
 
+    /// `POST /api/ciphers/import` — creates many personal items (and their folders) at
+    /// once. `body` comes from [`crate::import::request`].
+    pub async fn import_ciphers(&self, access_token: &str, body: &Value) -> Result<(), ApiError> {
+        let res = self
+            .http
+            .post(format!("{}/ciphers/import", self.urls.api))
+            .bearer_auth(access_token)
+            .json(body)
+            .send()
+            .await?;
+        ensure_success(res).await.map(|_| ())
+    }
+
     /// `POST /api/folders` — creates a folder. `name` is already encrypted with the user key.
     pub async fn create_folder(
         &self,

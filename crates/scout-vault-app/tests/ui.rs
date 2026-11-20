@@ -1682,6 +1682,120 @@ fn ssh_agent_offers_vault_keys_and_signs_only_when_allowed(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn import_reads_an_export_skips_duplicates_and_sends_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Settings → Data → "Import…" (the button sits below the fold, so the event is sent).
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let settings = app
+            .read(cx)
+            .settings_view()
+            .cloned()
+            .expect("settings open");
+        settings.update(cx, |_, cx| {
+            cx.emit(scout_vault_app::settings_view::SettingsEvent::OpenImport)
+        });
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(app.read(cx).settings_view().is_none());
+        assert!(window.try_find("import-zone").is_some());
+    })
+    .unwrap();
+    let import = cx.update(|cx| app.read(cx).import_view().cloned().expect("import open"));
+
+    // A password-protected export: explained, nothing to import.
+    let locked = dir.join("locked.json");
+    std::fs::write(&locked, r#"{"encrypted":true,"passwordProtected":true}"#).unwrap();
+    cx.update(|cx| import.update(cx, |v, cx| v.load_path(locked.clone(), cx)));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(import
+            .read(cx)
+            .error()
+            .unwrap()
+            .contains("protegido por senha"));
+        assert!(import.read(cx).to_import().is_empty());
+    });
+
+    // A browser CSV: one login the vault already has, one new.
+    let csv = dir.join("Chrome Passwords.csv");
+    std::fs::write(
+        &csv,
+        "name,url,username,password,note\n\
+         Meu Banco,https://banco.example.com,pessoa,s3nh@-ção,\n\
+         Novo site,https://novo.example,ana,outra,\n",
+    )
+    .unwrap();
+    cx.update(|cx| import.update(cx, |v, cx| v.load_path(csv.clone(), cx)));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let v = import.read(cx);
+        assert!(v.error().is_none());
+        assert_eq!(v.duplicates(), 1);
+        let names: Vec<_> = v.to_import().iter().map(|i| i.item.name.clone()).collect();
+        assert_eq!(names, ["Novo site"]);
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("import-file").label(),
+            Some("Chrome Passwords.csv")
+        );
+        // Keeping duplicates too: both go.
+        window.click("import-skip-duplicates", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(import.read(cx).to_import().len(), 2));
+
+    // "Import": the screen closes and the vault sends it (the fixture's server
+    // doesn't exist, so it ends in an error toast, but the request went out).
+    cx.update_window(handle, |_, window, cx| window.click("import-run", cx))
+        .unwrap();
+    cx.update(|cx| {
+        assert!(app.read(cx).import_view().is_none());
+        assert!(vault.read(cx).is_syncing());
+    });
+    wait_until(cx, |cx| cx.update(|cx| !vault.read(cx).is_syncing()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_line_separates_the_title_bar_from_the_vault(cx: &mut TestAppContext) {
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let line = window.find("title-divider").bounds();
+        let actions = window.find("vault-settings").bounds();
+        // Right under the title bar, one pixel tall, across the window.
+        assert!(f32::from(line.size.height) <= 1.5);
+        assert!(line.top() >= actions.bottom());
+        assert!(f32::from(line.size.width) > 1000.0);
+        // Settings has no sidebar: no line.
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("title-divider").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());

@@ -2057,6 +2057,22 @@ impl VaultView {
         )
     }
 
+    /// Adds the imported items to the vault (encrypted here, sent together).
+    pub fn import_items(
+        &mut self,
+        items: Vec<scout_vault_core::import::Imported>,
+        existing: Vec<scout_vault_core::vault::Folder>,
+        cx: &mut Context<Self>,
+    ) {
+        let message = t!("vault.imported", n = items.len());
+        self.run_write_with(WriteOp::Import { items, existing }, Some(message), cx);
+    }
+
+    /// Is a change (or sync) being sent right now?
+    pub fn is_syncing(&self) -> bool {
+        self.syncing
+    }
+
     /// Sends a change (or just syncs) and updates the screen with the result.
     fn run_write(&mut self, op: WriteOp, cx: &mut Context<Self>) {
         self.run_write_with(op, None, cx);
@@ -2086,6 +2102,8 @@ impl VaultView {
                 WriteOp::DeleteFolder(_) => Some(t!("vault.folder_deleted")),
                 WriteOp::MoveItem { .. } => Some(t!("vault.item_moved")),
                 WriteOp::RenameFolders(_) => Some(t!("vault.folder_moved")),
+                // The message comes from `import_items`.
+                WriteOp::Import { .. } => None,
             }
             .map(String::from)
         });

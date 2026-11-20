@@ -3,6 +3,7 @@
 //!
 //! - [`api`]        — HTTP client: prelogin, login (2FA, new device), refresh, sync
 //! - [`crypto`]     — master key (PBKDF2/Argon2id), stretch (HKDF), AES-CBC + HMAC, RSA-OAEP
+//! - [`import`]     — import from Bitwarden, browsers and other CSVs
 //! - [`icons`]      — website icons from the server's icon service
 //! - [`edit`]       — writing: edited item → encrypted body for the server
 //! - [`enc_string`] — `EncString` format (`2.iv|ct|mac`, `4.data`)
@@ -22,6 +23,7 @@ pub mod enc_string;
 pub mod generator;
 pub mod health;
 pub mod icons;
+pub mod import;
 mod json;
 pub mod kdf;
 pub mod secret;

@@ -7,6 +7,27 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-19
+
+### Added
+- **Import** (Settings → Data → Import…): bring items from a Bitwarden export (JSON without
+  password, or CSV) or from a browser's passwords CSV (Chrome, Edge, Brave, Opera, Firefox,
+  Safari, and other CSVs with the usual columns). A preview shows the types, folders and entries
+  left out; items already in the vault are skipped (optional). Everything is encrypted on this
+  computer and sent in one request; existing folders with the same name are reused.
+
+### Changed
+- A thin line now separates the title bar from the vault, from the sidebar's edge to the
+  window's.
+
+### Security
+- **SSH agent: keys that ask for the master password** (items with "re-prompt" on) now need
+  the master password in the approval prompt for every signature, and are never remembered.
+  Before, a plain "Allow" was enough.
+- **SSH agent: programs are identified by their full path** (and their parent's). The prompt
+  shows where the program runs from, and "Don't ask again" only covers that exact program, so
+  another executable that merely calls itself `ssh.exe` (from `%TEMP%`, say) is asked again.
+
 ## [0.9.0] - 2026-11-18
 
 ### Added

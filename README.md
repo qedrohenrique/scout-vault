@@ -77,6 +77,10 @@ close, without the weight of an Electron app.
   server, the app goes back to the login screen with a notice.
 
 **Editing** (encrypted on your machine before it leaves)
+- **Import** (Settings → Data → Import…): Bitwarden JSON/CSV and passwords CSVs from Chrome, Edge,
+  Brave, Opera, Firefox and Safari (or any CSV with `name`, `url`, `username`, `password`, `notes`).
+  It shows what's in the file first (types, folders, entries left out) and skips items already in
+  the vault; everything is encrypted here and sent in one request. Delete the export afterwards.
 - **New item** (`+` in the list or `Ctrl+N`): login, note, card, identity or SSH key (a new
   Ed25519 key is generated, or import yours: OpenSSH, PuTTY `.ppk`, RSA PEM; the public key and
   fingerprint are filled in). **Edit**
@@ -110,8 +114,10 @@ close, without the weight of an Electron app.
 - Serves the open vault's SSH keys to Windows' `ssh` and `git` on the OpenSSH pipe
   (`\\.\pipe\openssh-ssh-agent`), like 1Password: each signature shows **who is asking**
   (e.g. `ssh.exe (git.exe)`) and **which key**, and waits for **Allow** (optionally confirmed with
-  Windows Hello). "Don't ask again for 10 minutes" skips the question for that program and key
-  until the vault locks. Locked vault = no keys. Nothing can add, remove or export keys through it.
+  Windows Hello). The prompt also shows the program's full path. "Don't ask again for 10
+  minutes" skips the question for that exact program (by path) and key, until the vault locks.
+  Keys whose item asks for the master password need it for **every** signature and are never
+  remembered. Locked vault = no keys. Nothing can add, remove or export keys through it.
 - Windows' own "OpenSSH Authentication Agent" service uses the same pipe: stop and disable it
   (`services.msc`) to use Scout Vault's. For git, point it at Windows' ssh:
   `git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe`.
@@ -264,6 +270,9 @@ Found a vulnerability? Report it privately, as explained in [SECURITY.md](SECURI
   decrypting with AES-256-CBC. Organization keys use RSA-OAEP, and each item can have its own key.
 - A corrupted item or organization doesn't take down the rest of the vault: it shows up as an
   isolated error.
+- The **local pipes** (browser bridge, SSH agent) only accept the current Windows user. The SSH
+  agent offers keys only while the vault is open, asks before every signature (by program path)
+  and refuses requests to add, remove or export keys.
 - Network and KDF run off the UI thread, so the interface never freezes.
 - Development always targets a **local Vaultwarden**, never a real vault.
 

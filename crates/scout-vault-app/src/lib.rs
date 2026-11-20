@@ -30,6 +30,7 @@ pub mod flow;
 pub mod generator_view;
 pub mod health_view;
 pub mod hello;
+pub mod import_view;
 mod io;
 pub mod item_editor;
 pub mod item_icons;
