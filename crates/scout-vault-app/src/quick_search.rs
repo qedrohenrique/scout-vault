@@ -181,6 +181,9 @@ pub struct QuickSearch {
     /// Notice after copying ("Password copied"), before closing.
     flash: Option<SharedString>,
     activated: bool,
+    /// Focus of the card itself, for the screens without a field (the notice): without
+    /// focus, Enter and Esc wouldn't reach [`Self::on_key`].
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -240,7 +243,14 @@ impl QuickSearch {
     ) -> Self {
         let mut this = Self::build(Vec::new(), None, true, Vec::new(), tx, window, cx);
         this.notice = Some((message, confirm));
+        this.focus.focus(window, cx);
         this
+    }
+
+    /// "Type anyway" (button or Enter): closes first, so focus goes back to the target app.
+    fn type_anyway(&self, window: &mut Window) {
+        window.remove_window();
+        let _ = self.tx.send(Command::TypeAnyway);
     }
 
     pub fn notice_text(&self) -> Option<&SharedString> {
@@ -363,6 +373,7 @@ impl QuickSearch {
             tx,
             flash: None,
             activated: false,
+            focus: cx.focus_handle(),
             _subscriptions: vec![input_sub, activation],
         }
     }
@@ -485,11 +496,15 @@ impl QuickSearch {
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
         let ctrl = k.modifiers.control;
-        if self.notice.is_some() {
-            if k.key == "escape" {
-                window.remove_window();
-                cx.stop_propagation();
+        if let Some((_, confirm)) = &self.notice {
+            match k.key.as_str() {
+                "escape" => window.remove_window(),
+                // Enter = the main button: "Type anyway", or just close.
+                "enter" if *confirm => self.type_anyway(window),
+                "enter" => window.remove_window(),
+                _ => return,
             }
+            cx.stop_propagation();
             return;
         }
         if self.login.is_some() {
@@ -644,6 +659,10 @@ impl Render for QuickSearch {
                                 .test_support()
                                 .aria_label(message.clone())
                                 .flex_1()
+                                // Without it the line keeps the whole sentence's width
+                                // and the card cuts it instead of wrapping.
+                                .min_w_0()
+                                .whitespace_normal()
                                 .text_sm()
                                 .child(message),
                         ),
@@ -667,11 +686,10 @@ impl Render for QuickSearch {
                                 Button::new("quick-search-type-anyway")
                                     .primary()
                                     .label(t!("autotype.type_anyway"))
-                                    .on_click(cx.listener(|this, _, window, _| {
-                                        // Close first: focus goes back to the target app.
-                                        window.remove_window();
-                                        let _ = this.tx.send(Command::TypeAnyway);
-                                    })),
+                                    .tooltip(t!("autotype.type_anyway_enter"))
+                                    .on_click(
+                                        cx.listener(|this, _, window, _| this.type_anyway(window)),
+                                    ),
                             )
                         }),
                 );
@@ -798,6 +816,7 @@ impl QuickSearch {
     fn fit(&self, card: impl IntoElement, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("quick-search")
+            .track_focus(&self.focus)
             .w_full()
             .capture_key_down(cx.listener(Self::on_key))
             .child(

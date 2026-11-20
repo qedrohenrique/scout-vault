@@ -61,6 +61,7 @@
   "autotype.lost_focus": "The other window lost focus, so typing stopped.",
   "autotype.not_password_field": "The focused field isn't a password field, so I stopped before typing the password. Click the username field and try again.",
   "autotype.type_anyway": "Type anyway",
+  "autotype.type_anyway_enter": "Type anyway (Enter)",
   "autotype.windows_only": "Filling in other apps only works on Windows for now.",
   "browser.busy": "Scout Vault is busy.",
   "browser.no_answer": "Scout Vault didn't respond.",

@@ -61,6 +61,7 @@
   "autotype.lost_focus": "A outra janela saiu da frente, então parei de digitar.",
   "autotype.not_password_field": "O campo em foco não é de senha, então parei antes de digitar a senha. Clique no campo de usuário e tente de novo.",
   "autotype.type_anyway": "Digitar mesmo assim",
+  "autotype.type_anyway_enter": "Digitar mesmo assim (Enter)",
   "autotype.windows_only": "Preencher em outros apps só funciona no Windows por enquanto.",
   "browser.busy": "O Scout Vault está ocupado.",
   "browser.no_answer": "O Scout Vault não respondeu.",

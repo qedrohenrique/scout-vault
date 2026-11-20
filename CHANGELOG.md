@@ -7,6 +7,18 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-11-20
+
+### Changed
+- **Enter confirms "Type anyway"** in the `Ctrl+Alt+A` prompt (Esc still cancels). In the other
+  notices, Enter closes them.
+
+### Fixed
+- In the sidebar, the section arrow and the Folders "+" button sit on the heading's center line
+  (they were at different heights).
+- The `Ctrl+Alt+A` notices (e.g. "can't check the field, type anyway?") were cut at the card's
+  edge; the message now wraps.
+
 ## [0.11.3] - 2026-11-20
 
 ### Fixed

@@ -1814,6 +1814,16 @@ fn sidebar_sections_collapse_and_entries_take_custom_icons(cx: &mut TestAppConte
         let types = window.find("section-types").bounds();
         let login = window.find("filter-login").bounds();
         assert!(f32::from(login.top() - types.bottom()) < 12.0);
+        // The arrow and the "+" sit on the heading's center line.
+        let center = |b: gpui_kit::Bounds<gpui_kit::Pixels>| f32::from(b.center().y);
+        let heading = window.find("section-folders").bounds();
+        let arrow = window.find("section-folders-arrow").bounds();
+        let add = window.find("folder-new").bounds();
+        assert!(
+            (center(arrow) - center(heading)).abs() < 1.5,
+            "arrow off center"
+        );
+        assert!((center(add) - center(heading)).abs() < 1.5, "+ off center");
         // The "+" of Folders stays beside the heading, inside the sidebar.
         let plus = window.find("folder-new").bounds();
         let folders = window.find("section-folders").bounds();
@@ -4984,7 +4994,17 @@ fn autotype_asks_before_typing_where_it_cant_check_the_field(cx: &mut TestAppCon
     popup
         .update(cx, |_, window, cx| {
             window.render_frame(cx);
-            window.click("quick-search-type-anyway", cx);
+            // The message wraps inside the card instead of being cut at its edge.
+            let notice = window.find("quick-search-notice").bounds();
+            let button = window.find("quick-search-type-anyway").bounds();
+            assert!(
+                notice.right() <= button.right() + gpui_kit::px(1.),
+                "notice {:?} past the card (button {:?})",
+                notice,
+                button
+            );
+            // Enter confirms, like the button.
+            window.press("enter", cx);
         })
         .unwrap();
     wait_until(cx, |_| checks.lock().unwrap().len() == 2);

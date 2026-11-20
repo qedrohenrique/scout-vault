@@ -1257,17 +1257,33 @@ impl VaultView {
             .cursor_pointer()
             .text_color(muted)
             .hover(move |s| s.text_color(hover))
-            .child(div().flex_1().min_w_0().child(ui::section_label(label, cx)))
-            .child(div().pt_2().pr_1().child(
-                Icon::new(IconName::ChevronRight).xsmall().with_animation(
-                    motion::key("secao", format!("{key}:{open}")),
-                    Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
-                    move |icon, t| {
-                        let (from, to) = if open { (0., TAU / 4.) } else { (TAU / 4., 0.) };
-                        icon.rotate(radians(from + (to - from) * t))
-                    },
-                ),
-            ))
+            // No vertical padding here: the row around it sets it, so the text, the
+            // arrow and (in Folders) the "+" share one center line.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .px_2()
+                    .text_size(px(11.))
+                    .font_semibold()
+                    .truncate()
+                    .child(label),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("section-{key}-arrow")))
+                    .test_support()
+                    .flex()
+                    .pr_1()
+                    .child(Icon::new(IconName::ChevronRight).xsmall().with_animation(
+                        motion::key("secao", format!("{key}:{open}")),
+                        Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
+                        move |icon, t| {
+                            let (from, to) = if open { (0., TAU / 4.) } else { (TAU / 4., 0.) };
+                            icon.rotate(radians(from + (to - from) * t))
+                        },
+                    )),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_section(key, cx)))
     }
 
@@ -2827,14 +2843,22 @@ impl VaultView {
         // Quick access: items pinned by the person, right at the top.
         let pinned = self.pinned_items(cx);
         if !pinned.is_empty() {
-            nav = nav.child(self.section_header("quick", t!("vault.quick_access"), cx));
+            nav = nav.child(div().pt_3().pb_1().child(self.section_header(
+                "quick",
+                t!("vault.quick_access"),
+                cx,
+            )));
             if !self.is_collapsed("quick") {
                 for item in &pinned {
                     nav = nav.child(self.pinned_row(item, cx));
                 }
             }
         }
-        nav = nav.child(self.section_header("types", t!("vault.types"), cx));
+        nav = nav.child(div().pt_3().pb_1().child(self.section_header(
+            "types",
+            t!("vault.types"),
+            cx,
+        )));
         for k in KindFilter::ALL
             .into_iter()
             .filter(|_| !self.is_collapsed("types"))
@@ -2855,7 +2879,11 @@ impl VaultView {
             ));
         }
         if !orgs.is_empty() {
-            nav = nav.child(self.section_header("orgs", t!("vault.organizations"), cx));
+            nav = nav.child(div().pt_3().pb_1().child(self.section_header(
+                "orgs",
+                t!("vault.organizations"),
+                cx,
+            )));
             for (id, name) in orgs.into_iter().filter(|_| !self.is_collapsed("orgs")) {
                 nav = nav.child(self.filter_row(
                     format!("filter-org-{id}").into(),
@@ -2880,6 +2908,9 @@ impl VaultView {
             h_flex()
                 .id("folders-header")
                 .justify_between()
+                .items_center()
+                .pt_3()
+                .pb_1()
                 .pr_1()
                 .rounded(cx.theme().radius)
                 // Dropping a folder on the "Folders" heading moves it to the top level.
