@@ -99,6 +99,7 @@ pub fn run() {
             autotype::enable_system_hotkey();
             // Closing the window leaves the app in the Windows tray.
             tray::enable_system();
+            site_icons::enable_network();
             // Unlock with Windows Hello (if set up in Windows).
             hello::install_system(cx);
             // The app draws its own title bar (`app.rs`), in the screen's colors.

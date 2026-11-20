@@ -117,8 +117,21 @@ pub fn hosts_of(vault: &Vault) -> Vec<String> {
     hosts
 }
 
+/// Downloads only happen in the real app: in the UI tests the answer (even an error from a
+/// server that doesn't exist) would arrive on the network thread after the test ended, and
+/// GPUI's test scheduler aborts the whole test run when that happens.
+static NETWORK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// In the real app: icons may be downloaded.
+pub fn enable_network() {
+    NETWORK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Downloads the icons of `hosts` that haven't been asked for yet.
 pub fn prefetch(urls: &ServerUrls, hosts: Vec<String>, cx: &mut App) {
+    if !NETWORK.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let service = icons::service_url(urls);
     let hosts: Vec<String> = {
         let s = state(cx);
