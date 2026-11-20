@@ -1078,12 +1078,7 @@ impl Render for ProfileView {
             );
 
         let back = div().absolute().top_6().left_6().child(
-            Button::new("profile-close")
-                .ghost()
-                .small()
-                .icon(IconName::ArrowLeft)
-                .label(t!("common.back"))
-                .tooltip(t!("common.close_esc"))
+            ui::back_button("profile-close")
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ProfileEvent::Close))),
         );
 

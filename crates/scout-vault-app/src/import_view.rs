@@ -395,12 +395,7 @@ impl Render for ImportView {
         let theme = cx.theme();
         let (muted, warning, danger) = (theme.muted_foreground, theme.warning, theme.danger);
         let back = div().absolute().top_6().left_6().child(
-            Button::new("import-close")
-                .ghost()
-                .small()
-                .icon(IconName::ArrowLeft)
-                .label(t!("common.back"))
-                .tooltip(t!("common.close_esc"))
+            ui::back_button("import-close")
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ImportEvent::Close))),
         );
         let header = h_flex()

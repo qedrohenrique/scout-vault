@@ -7,6 +7,16 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-20
+
+### Fixed
+- The "← Back" arrow of Settings, Profile, Generator, Password health and Import sits on the
+  text's line (it looked higher than the word).
+
+### Changed
+- Development: dependencies only keep line tables in debug builds, which halves the UI tests'
+  debug database (it had outgrown the Windows linker).
+
 ## [0.12.0] - 2026-11-20
 
 ### Added

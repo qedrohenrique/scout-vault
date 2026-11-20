@@ -1543,12 +1543,7 @@ impl Render for SettingsView {
         // "Back" stays put on the left while the page scrolls: no need to scroll
         // up to leave.
         let back = div().absolute().top_6().left_6().child(
-            Button::new("settings-close")
-                .ghost()
-                .small()
-                .icon(IconName::ArrowLeft)
-                .label(t!("common.back"))
-                .tooltip(t!("common.close_esc"))
+            ui::back_button("settings-close")
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close))),
         );
 

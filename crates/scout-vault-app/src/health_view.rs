@@ -592,12 +592,7 @@ impl Render for HealthView {
             );
         // "Back" stays put on the left while the page scrolls, like the other screens.
         let back = div().absolute().top_6().left_6().child(
-            Button::new("health-close")
-                .ghost()
-                .small()
-                .icon(IconName::ArrowLeft)
-                .label(t!("common.back"))
-                .tooltip(t!("common.close_esc"))
+            ui::back_button("health-close")
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(HealthEvent::Close))),
         );
         let mut tabs = h_flex().gap_3();

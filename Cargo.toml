@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/scout-vault-core", "crates/scout-vault-app"]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.12.1"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -25,6 +25,12 @@ hmac.opt-level = 3
 aes.opt-level = 3
 rsa.opt-level = 3
 crypto-bigint.opt-level = 3
+
+# Dependencies (GPUI is huge) only carry line tables in debug builds: full debug info
+# for everything made the UI tests' PDB outgrow the Windows linker (LNK1140). Our own
+# crates keep full debug info.
+[profile.dev.package."*"]
+debug = "line-tables-only"
 
 [profile.release]
 # Smaller release binary (no debug symbols).

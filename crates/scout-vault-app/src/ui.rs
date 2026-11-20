@@ -8,6 +8,40 @@ use gpui_kit::*;
 
 use crate::appearance;
 
+/// "← Back" in the top left corner of the screens over the vault (Esc does the same).
+///
+/// The arrow goes 1 px down: it is a thin stroke right on the middle of its box, while the
+/// text's letters sit a little below the middle of the line, so centered boxes still looked
+/// misaligned (the button's own `.icon()` can't be nudged).
+pub fn back_button(id: &'static str) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .accessibility_label(t!("common.back"))
+        .tooltip(t!("common.close_esc"))
+        .child(
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{id}-arrow")))
+                        .test_support()
+                        .flex()
+                        // Moves the drawing only (a margin would be re-centered away).
+                        .relative()
+                        .top(px(1.))
+                        .child(Icon::new(IconName::ArrowLeft).small()),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{id}-text")))
+                        .test_support()
+                        .child(t!("common.back")),
+                ),
+        )
+}
+
 /// The Scout Vault mark: the padlock with a hat (`assets/brand/mark.svg`) on a
 /// square in the accent color — follows the theme, unlike the `.exe` icon.
 pub fn brand_mark(size: Pixels, cx: &App) -> Div {

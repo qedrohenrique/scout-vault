@@ -733,12 +733,7 @@ impl Render for GeneratorView {
 
         // "Back" stays put on the left while the page scrolls, like the other screens.
         let back = div().absolute().top_6().left_6().child(
-            Button::new("generator-close")
-                .ghost()
-                .small()
-                .icon(IconName::ArrowLeft)
-                .label(t!("common.back"))
-                .tooltip(t!("common.close_esc"))
+            ui::back_button("generator-close")
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(GeneratorEvent::Close))),
         );
 

@@ -1984,6 +1984,32 @@ fn a_new_version_shows_in_the_title_bar_and_in_about(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_back_arrow_lines_up_with_its_text(cx: &mut TestAppContext) {
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("vault-settings", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let center = |id: &'static str| f32::from(window.find(id).bounds().center().y);
+        let (arrow, text) = (
+            center("settings-close-arrow"),
+            center("settings-close-text"),
+        );
+        // The thin arrow sits 1 px lower than the text's box, where the letters look centered.
+        let offset = arrow - text;
+        assert!(
+            (0.5..=1.5).contains(&offset),
+            "arrow {arrow} vs text {text}"
+        );
+        assert_eq!(window.find("settings-close").label(), Some("Voltar"));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
