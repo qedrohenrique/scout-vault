@@ -7,11 +7,20 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
-## [0.11.1] - 2026-11-19
+## [0.11.2] - 2026-11-20
 
 ### Added
 - **Favorite from the item**: a star next to the item's name marks or unmarks it as a favorite
   right away, without opening the editor (organization items too: favorites are per person).
+
+### Fixed
+- The test run no longer aborts on machines with few cores (as the CI runner): website icons
+  are only downloaded by the real app, not during the UI tests.
+
+## [0.11.1] - 2026-11-19
+
+Not published: its release build stopped at the tests (fixed in 0.11.2, which carries its
+changes).
 
 ## [0.11.0] - 2026-11-19
 
