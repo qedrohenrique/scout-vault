@@ -98,12 +98,20 @@ Root: HKCU; Subkey: "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\c
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; Update started by the app itself (`/SILENT /RELAUNCH=1`): opens it again afterwards.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [UninstallDelete]
 ; The browser manifest the app writes next to its preferences.
 Type: files; Name: "{userappdata}\{#AppName}\navegador-host.json"
 
 [Code]
+{ `/RELAUNCH=1`: the app ran this installer to update itself and wants to come back. }
+function RelaunchAfterUpdate(): Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
 { Asks a running Scout Vault (even hidden in the tray) to quit, so its files can be replaced. }
 procedure QuitRunningApp(const Exe: String);
 var

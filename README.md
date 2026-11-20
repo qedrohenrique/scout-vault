@@ -324,7 +324,9 @@ Download `scout-vault-X.Y.Z-setup.exe` from the
   shortcuts and browser autofill ready. The same option is in the app's Settings;
 - the browser extension in `extension\` inside the install folder, to load as "unpacked".
 
-**Updating** is running the new installer: it closes the app (even hidden in the tray), replaces
+**Updating** happens inside the app: when a new version is out, a button shows up in the title
+bar and in Settings → About; "Update now" downloads the installer, checks its SHA-256 and runs it
+(the app closes and comes back). You can also just run the new installer: it closes the app (even hidden in the tray), replaces
 it and keeps your settings. **Uninstalling** removes the app, the shortcuts, the start-with-Windows
 entry and the browser registration, and asks whether to also delete the data in
 `%APPDATA%\Scout Vault` (preferences, the encrypted vault cache, profile photos). Keys saved in the

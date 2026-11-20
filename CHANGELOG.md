@@ -7,6 +7,19 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-20
+
+### Added
+- **Updates inside the app**: on start and twice a day (Settings → About → "Check for updates
+  automatically", on by default) the app asks GitHub whether there's a newer version; a button
+  in the title bar and Settings → About show it. "Update now" downloads the installer, checks it
+  against its published SHA-256 and runs it silently: the app closes and opens again on the new
+  version. Copies from the zip open the release page instead. Nothing from the vault is sent.
+
+### Fixed
+- Settings → About: "Source code" now has the GitHub icon; the `<>` icon sat higher than the
+  text next to it.
+
 ## [0.11.4] - 2026-11-20
 
 ### Changed

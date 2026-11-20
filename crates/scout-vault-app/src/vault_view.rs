@@ -3096,6 +3096,16 @@ impl VaultView {
             .gap_0p5()
             .pr_2()
             .child(self.render_sync_button(cx))
+            // A new version is out: a button that leads to Settings → About.
+            .children(crate::updater::available(cx).map(|v| {
+                Button::new("vault-update")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Download)
+                    .text_color(appearance::accent(cx))
+                    .tooltip(t!("update.available", v = v))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings)))
+            }))
             .child(
                 Button::new("vault-health")
                     .ghost()

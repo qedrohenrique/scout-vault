@@ -60,6 +60,11 @@ pub fn refresh() {
     }
 }
 
+/// A text value under `HKEY_CURRENT_USER\<key>` (Windows only).
+pub fn read_registry_string(key: &str, name: &str) -> Option<String> {
+    platform::read_string(key, name)
+}
+
 #[cfg(windows)]
 mod platform {
     use windows::core::HSTRING;
@@ -70,8 +75,13 @@ mod platform {
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
     pub fn read() -> Option<String> {
-        let key = HSTRING::from(RUN_KEY);
-        let name = HSTRING::from(super::VALUE_NAME);
+        read_string(RUN_KEY, super::VALUE_NAME)
+    }
+
+    /// A text value of the current user's registry (`None` when it isn't there).
+    pub fn read_string(key: &str, name: &str) -> Option<String> {
+        let key = HSTRING::from(key);
+        let name = HSTRING::from(name);
         let mut size = 0u32;
         // SAFETY: asks only for the size of a REG_SZ value of the current user.
         let status = unsafe {
@@ -142,6 +152,9 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     pub fn read() -> Option<String> {
+        None
+    }
+    pub fn read_string(_: &str, _: &str) -> Option<String> {
         None
     }
     pub fn write(_: &str) -> Result<(), String> {

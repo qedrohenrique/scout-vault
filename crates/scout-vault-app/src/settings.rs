@@ -109,6 +109,12 @@ pub struct Settings {
     /// Website icons in the list (downloaded from the server's icon service).
     #[serde(default = "yes")]
     pub site_icons: bool,
+    /// Look for new versions on GitHub on start and twice a day.
+    #[serde(default = "yes")]
+    pub check_updates: bool,
+    /// When the automatic check last ran (seconds since 1970).
+    #[serde(default)]
+    pub last_update_check: u64,
     /// SSH agent on Windows' OpenSSH pipe (off by default).
     #[serde(default)]
     pub ssh_agent: bool,
@@ -169,6 +175,8 @@ impl Default for Settings {
             username_generator: UsernameOptions::default(),
             remember_session: true,
             site_icons: true,
+            check_updates: true,
+            last_update_check: 0,
             ssh_agent: false,
             ssh_agent_hello: true,
             pinned_items: Vec::new(),

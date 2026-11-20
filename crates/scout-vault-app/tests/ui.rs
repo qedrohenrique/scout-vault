@@ -1939,6 +1939,51 @@ fn the_star_favorites_an_item_from_its_detail(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_new_version_shows_in_the_title_bar_and_in_about(cx: &mut TestAppContext) {
+    use scout_vault_app::updater::{self, State};
+    use scout_vault_core::update::{Release, Version};
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    // Nothing found yet: no button in the title bar.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("vault-update").is_none());
+    })
+    .unwrap();
+
+    // A newer release turns up.
+    let release = Release {
+        version: Version::parse("99.0.0").unwrap(),
+        page: "https://github.com/qedrohenrique/scout-vault/releases/tag/v99.0.0".into(),
+        notes: String::new(),
+        installer: None,
+        installer_sha256: None,
+    };
+    cx.update(|cx| updater::set_state(State::Available(Box::new(release)), cx));
+    cx.update(|cx| assert_eq!(updater::available(cx).unwrap().to_string(), "99.0.0"));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        // The title bar's button opens Settings.
+        window.click("vault-update", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(app.read(cx).settings_view().is_some());
+    })
+    .unwrap();
+
+    // "Check for updates" in the tests (offline): up to date, and the button goes away.
+    cx.update(|cx| updater::check(false, cx));
+    cx.update(|cx| assert_eq!(updater::state(cx), State::UpToDate));
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.close_settings(cx));
+        window.render_frame(cx);
+        assert!(window.try_find("vault-update").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());

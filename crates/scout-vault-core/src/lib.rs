@@ -12,6 +12,7 @@
 //! - [`ssh_agent`]  — SSH agent protocol: list the vault's keys and sign
 //! - [`sync`]       — sync response, still encrypted (safe to cache)
 //! - [`totp`]       — authenticator codes (RFC 6238, Steam)
+//! - [`update`]     — newer releases on GitHub, installer download checked by SHA-256
 //! - [`vault`]      — decrypted vault: items, folders, organizations, search
 
 pub mod api;
@@ -31,6 +32,7 @@ pub mod ssh;
 pub mod ssh_agent;
 pub mod sync;
 pub mod totp;
+pub mod update;
 pub mod vault;
 
 pub use enc_string::EncString;

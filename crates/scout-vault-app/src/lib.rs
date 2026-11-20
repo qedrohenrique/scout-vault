@@ -55,6 +55,7 @@ pub mod tray;
 pub mod tray_menu;
 mod ui;
 pub mod unlock;
+pub mod updater;
 pub mod vault_view;
 pub mod webauthn;
 pub mod windows_events;
@@ -100,6 +101,7 @@ pub fn run() {
             // Closing the window leaves the app in the Windows tray.
             tray::enable_system();
             site_icons::enable_network();
+            updater::enable_network();
             // Unlock with Windows Hello (if set up in Windows).
             hello::install_system(cx);
             // The app draws its own title bar (`app.rs`), in the screen's colors.

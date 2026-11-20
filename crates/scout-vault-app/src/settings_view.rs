@@ -80,6 +80,7 @@ pub struct SettingsView {
     browser_fill: bool,
     ssh_agent: bool,
     ssh_agent_hello: bool,
+    check_updates: bool,
     browser_error: Option<SharedString>,
     /// Floating windows opacity, 1–100%.
     hud_slider: Entity<SliderState>,
@@ -155,6 +156,7 @@ impl SettingsView {
             auto_lock_minutes: loaded.auto_lock_minutes,
             browser_fill: loaded.browser_fill,
             ssh_agent: loaded.ssh_agent,
+            check_updates: loaded.check_updates,
             ssh_agent_hello: loaded.ssh_agent_hello,
             browser_error: None,
             hud_slider,
@@ -276,6 +278,100 @@ impl SettingsView {
     }
 
     /// Website icons on/off (applied at once; downloading happens when settings close).
+    pub fn set_check_updates(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.check_updates = on;
+        let mut settings = self.store.load();
+        settings.check_updates = on;
+        self.store.save(&settings);
+        cx.notify();
+    }
+
+    /// The "Updates" row: where it stands and the button that moves it on.
+    fn render_update_row(&self, cx: &mut Context<Self>) -> Div {
+        use crate::updater::State;
+        let theme = cx.theme();
+        let (muted, danger, accent) = (
+            theme.muted_foreground,
+            theme.danger,
+            crate::appearance::accent(cx),
+        );
+        let state = crate::updater::state(cx);
+        let (text, color): (SharedString, Hsla) = match &state {
+            State::Idle => (t!("update.idle").into(), muted),
+            State::Checking => (t!("update.checking").into(), muted),
+            State::UpToDate => (t!("update.up_to_date").into(), muted),
+            State::Available(r) => (t!("update.available", v = r.version).into(), accent),
+            State::Downloading(v) => (t!("update.downloading", v = v).into(), muted),
+            State::Installing(v) => (t!("update.installing", v = v).into(), accent),
+            State::Failed(e) => (e.clone().into(), danger),
+        };
+        let busy = matches!(
+            state,
+            State::Checking | State::Downloading(_) | State::Installing(_)
+        );
+        let button = match &state {
+            State::Available(r) => {
+                let page = r.page.clone();
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("about-update-notes")
+                            .ghost()
+                            .small()
+                            .label(t!("update.whats_new"))
+                            .on_click(move |_, _, cx| {
+                                if let Err(e) = crate::sso::open_browser(&page) {
+                                    crate::toast::error(e, cx);
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("about-update")
+                            .primary()
+                            .small()
+                            .icon(IconName::Download)
+                            .label(if crate::updater::is_installed() {
+                                t!("update.install")
+                            } else {
+                                t!("update.download")
+                            })
+                            .on_click(|_, _, cx| crate::updater::install(cx)),
+                    )
+                    .into_any_element()
+            }
+            _ => Button::new("about-check-updates")
+                .outline()
+                .small()
+                .icon(IconName::RefreshCw)
+                .label(t!("update.check"))
+                .loading(busy)
+                .disabled(busy)
+                .on_click(|_, _, cx| crate::updater::check(false, cx))
+                .into_any_element(),
+        };
+        h_flex()
+            .gap_6()
+            .px_4()
+            .py_3p5()
+            .justify_between()
+            .child(
+                v_flex()
+                    .gap_0p5()
+                    .min_w_0()
+                    .child(div().text_sm().font_semibold().child(t!("update.title")))
+                    .child(
+                        div()
+                            .id("about-update-status")
+                            .test_support()
+                            .aria_label(text.clone())
+                            .text_xs()
+                            .text_color(color)
+                            .child(text),
+                    ),
+            )
+            .child(button)
+    }
+
     /// SSH agent on Windows' OpenSSH pipe (starts or stops right away).
     pub fn set_ssh_agent(&mut self, on: bool, cx: &mut Context<Self>) {
         self.ssh_agent = on;
@@ -1056,7 +1152,7 @@ impl Render for SettingsView {
             .gap_1()
             .child(link(
                 "about-source",
-                IconName::Code,
+                IconName::Github,
                 t!("about.source").into(),
                 "https://github.com/qedrohenrique/scout-vault",
             ))
@@ -1077,6 +1173,17 @@ impl Render for SettingsView {
             vec![
                 div().px_4().py_3p5().child(about_hero),
                 div().px_3().py_2().child(about_links),
+                self.render_update_row(cx),
+                Self::row(
+                    t!("update.auto"),
+                    t!("update.auto_desc"),
+                    Switch::new("check-updates-setting")
+                        .checked(self.check_updates)
+                        .on_click(
+                            cx.listener(|this, v: &bool, _, cx| this.set_check_updates(*v, cx)),
+                        ),
+                    cx,
+                ),
                 Self::row(
                     t!("about.license"),
                     t!("about.license_desc"),

@@ -82,6 +82,8 @@ pub struct ScoutVaultApp {
     /// The window was in the tray when the SSH request came: goes back after.
     ssh_was_hidden: bool,
     _ssh_task: Task<()>,
+    /// Looks for new versions now and then.
+    _update_task: Task<()>,
     /// Typing waiting for "type anyway" (the app doesn't tell its fields).
     pending_type_anyway: Option<(Item, Request)>,
     /// Browser login waiting for unlock to be saved (url, username, password).
@@ -315,6 +317,26 @@ impl ScoutVaultApp {
                 }
             }
         });
+        // Updates: on start (if the last check is old) and then twice a day.
+        let update_store = store.clone();
+        let update_task = cx.spawn(async move |_, cx| loop {
+            let due = {
+                let s = update_store.load();
+                crate::updater::network_enabled()
+                    && s.check_updates
+                    && crate::flow::now_secs().saturating_sub(s.last_update_check)
+                        >= crate::updater::CHECK_EVERY.as_secs()
+            };
+            if due {
+                let mut s = update_store.load();
+                s.last_update_check = crate::flow::now_secs();
+                update_store.save(&s);
+                cx.update(|cx| crate::updater::check(true, cx));
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(30 * 60))
+                .await;
+        });
         let auto_lock_after = Self::auto_lock_from_settings(&store);
         let lock_on_minimize = store.load().lock_on_minimize;
         let mut this = Self {
@@ -331,6 +353,7 @@ impl ScoutVaultApp {
             ssh_password_error: None,
             ssh_was_hidden: false,
             _ssh_task: ssh_task,
+            _update_task: update_task,
             pending_browser_save: None,
             reprompt_autotype: None,
             reprompt_counter: 0,
