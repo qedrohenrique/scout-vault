@@ -153,6 +153,10 @@ impl ScoutVaultApp {
         view.update(cx, |v, _| {
             v.set_password_options(settings.generator);
             v.set_pinned(settings.pinned_items.clone());
+            v.set_sidebar(
+                settings.sidebar_collapsed.clone(),
+                settings.sidebar_icons.clone(),
+            );
             v.set_background_sync(settings.background_sync);
         });
         crate::site_icons::set_enabled(settings.site_icons, cx);
@@ -2246,6 +2250,12 @@ impl ScoutVaultApp {
                     VaultEvent::IconsChanged(icons) => {
                         let mut settings = this.store.load();
                         settings.item_icons = icons.clone();
+                        this.store.save(&settings);
+                    }
+                    VaultEvent::SidebarChanged { collapsed, icons } => {
+                        let mut settings = this.store.load();
+                        settings.sidebar_collapsed = collapsed.clone();
+                        settings.sidebar_icons = icons.clone();
                         this.store.save(&settings);
                     }
                     VaultEvent::RepromptPassed(token) => {

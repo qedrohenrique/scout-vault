@@ -638,6 +638,7 @@
   "vault.select_item_hint": "Use as setas na lista. Enter abre o item.",
   "vault.settings_tooltip": "Configurações (Ctrl+,)",
   "vault.show": "Mostrar",
+  "vault.sidebar_icon_reset": "Ícone padrão",
   "vault.sync": "Sincronizar",
   "vault.sync_failed": "Não deu para sincronizar",
   "vault.synced": "Sincronizado",

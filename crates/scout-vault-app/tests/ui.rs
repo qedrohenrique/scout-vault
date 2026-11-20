@@ -1796,6 +1796,98 @@ fn a_line_separates_the_title_bar_from_the_vault(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn sidebar_sections_collapse_and_entries_take_custom_icons(cx: &mut TestAppContext) {
+    let (_dir, store) = file_store("sidebar");
+    cx.update(gpui_kit::init);
+    let (handle, app) = open_with_store(cx, &store, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+
+    // "Types" collapses: its entries leave; the choice is saved.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("filter-login").is_some());
+        window.click("section-types", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("filter-login").is_none());
+        assert!(window.try_find("filter-all").is_some());
+    })
+    .unwrap();
+    assert_eq!(store.load().sidebar_collapsed, ["types"]);
+
+    // Folders too (the folders and "No folder").
+    cx.update_window(handle, |_, window, cx| window.click("section-folders", cx))
+        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("filter-no-folder").is_none());
+    })
+    .unwrap();
+    assert_eq!(store.load().sidebar_collapsed, ["folders", "types"]);
+
+    // Next time the vault opens, it comes back the same way.
+    cx.update(|cx| {
+        vault.update(cx, |v, _| {
+            v.set_sidebar(vec!["types".into()], Default::default())
+        })
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("filter-login").is_none());
+        assert!(window.try_find("filter-no-folder").is_some());
+        // Expanding again.
+        window.click("section-types", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("filter-login").is_some());
+        // Right click on an entry: icon menu; pick an icon and a color.
+        window.right_click("filter-login", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("sidebar-icon-menu-filter-login").is_some());
+        window.click("sidebar-icon-rocket", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("sidebar-color-red", cx);
+    })
+    .unwrap();
+    let saved = store.load().sidebar_icons;
+    let chosen = saved.get("filter-login").expect("saved");
+    assert_eq!(chosen.icon, "rocket");
+    assert_eq!(chosen.color.as_deref(), Some("red"));
+    cx.update(|cx| {
+        assert_eq!(
+            vault
+                .read(cx)
+                .sidebar_icon("filter-login")
+                .map(|c| c.icon.as_str()),
+            Some("rocket")
+        )
+    });
+
+    // "Default icon": back to the globe, and forgotten.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("sidebar-icon-reset", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("sidebar-icon-menu-filter-login").is_none());
+    })
+    .unwrap();
+    assert!(store.load().sidebar_icons.is_empty());
+}
+
+#[gpui_kit::test]
 fn edit_button_prefills_and_cancel_closes(cx: &mut TestAppContext) {
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());

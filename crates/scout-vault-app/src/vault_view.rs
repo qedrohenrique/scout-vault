@@ -39,6 +39,11 @@ pub enum VaultEvent {
     OpenHealth,
     /// Open the profile screen (who is signed in).
     OpenProfile,
+    /// A sidebar section was collapsed/expanded or an entry's icon changed: to store.
+    SidebarChanged {
+        collapsed: Vec<String>,
+        icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
+    },
     /// Some item's icon changed: all choices, to store.
     IconsChanged(std::collections::HashMap<String, crate::item_icons::CustomIcon>),
     /// The master password asked for by an item was confirmed for an app action
@@ -478,6 +483,12 @@ pub struct VaultView {
     sync_count: u32,
     /// Position of each sidebar row in the current frame (for the cascade).
     sidebar_order: std::cell::Cell<usize>,
+    /// Collapsed sidebar sections (`quick`, `types`, `orgs`, `folders`).
+    collapsed: HashSet<String>,
+    /// Icon (and color) chosen per sidebar entry, by the entry's id.
+    sidebar_icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
+    /// The sidebar entry whose icon menu is open.
+    sidebar_icon_menu: Option<String>,
     /// Attachment being downloaded right now.
     downloading: Option<String>,
     /// Temporary copies opened with another program; deleted on lock.
@@ -498,6 +509,11 @@ impl Drop for VaultView {
 }
 
 impl EventEmitter<VaultEvent> for VaultView {}
+
+/// Text color, for the ring around the chosen color.
+fn theme_fg(cx: &App) -> Hsla {
+    cx.theme().foreground
+}
 
 impl VaultView {
     pub fn new(unlocked: Unlocked, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -572,6 +588,9 @@ impl VaultView {
             confirm_remove_attachment: None,
             copied: None,
             sidebar_order: std::cell::Cell::new(0),
+            collapsed: HashSet::new(),
+            sidebar_icons: Default::default(),
+            sidebar_icon_menu: None,
             sync_feedback: None,
             new_folder: None,
             pinned: Vec::new(),
@@ -1116,6 +1135,234 @@ impl VaultView {
 
     /// How many items fit in quick access.
     pub const MAX_PINNED: usize = 10;
+
+    /// The sidebar as the person left it (from the settings).
+    pub fn set_sidebar(
+        &mut self,
+        collapsed: Vec<String>,
+        icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
+    ) {
+        self.collapsed = collapsed.into_iter().collect();
+        self.sidebar_icons = icons;
+    }
+
+    pub fn is_collapsed(&self, section: &str) -> bool {
+        self.collapsed.contains(section)
+    }
+
+    fn emit_sidebar(&self, cx: &mut Context<Self>) {
+        let mut collapsed: Vec<String> = self.collapsed.iter().cloned().collect();
+        collapsed.sort();
+        cx.emit(VaultEvent::SidebarChanged {
+            collapsed,
+            icons: self.sidebar_icons.clone(),
+        });
+    }
+
+    /// Collapses or expands a sidebar section (remembered).
+    pub fn toggle_section(&mut self, section: &str, cx: &mut Context<Self>) {
+        if !self.collapsed.remove(section) {
+            self.collapsed.insert(section.to_owned());
+        }
+        self.emit_sidebar(cx);
+        cx.notify();
+    }
+
+    /// Opens (or closes) the icon menu of a sidebar entry.
+    pub fn toggle_sidebar_icon_menu(&mut self, entry: &str, cx: &mut Context<Self>) {
+        self.sidebar_icon_menu = match &self.sidebar_icon_menu {
+            Some(open) if open == entry => None,
+            _ => Some(entry.to_owned()),
+        };
+        cx.notify();
+    }
+
+    /// Chooses the icon of a sidebar entry (`None` = back to the default).
+    pub fn set_sidebar_icon(&mut self, entry: &str, icon: Option<&str>, cx: &mut Context<Self>) {
+        let color = self.sidebar_icons.get(entry).and_then(|c| c.color.clone());
+        match (icon, color) {
+            (None, None) => {
+                self.sidebar_icons.remove(entry);
+            }
+            (icon, color) => {
+                self.sidebar_icons.insert(
+                    entry.to_owned(),
+                    crate::item_icons::CustomIcon {
+                        icon: icon.unwrap_or_default().to_owned(),
+                        color,
+                    },
+                );
+            }
+        }
+        self.emit_sidebar(cx);
+        cx.notify();
+    }
+
+    /// Chooses the icon color of a sidebar entry (`None` = the theme's).
+    pub fn set_sidebar_color(&mut self, entry: &str, color: Option<&str>, cx: &mut Context<Self>) {
+        let icon = self
+            .sidebar_icons
+            .get(entry)
+            .map(|c| c.icon.clone())
+            .unwrap_or_default();
+        if icon.is_empty() && color.is_none() {
+            self.sidebar_icons.remove(entry);
+        } else {
+            self.sidebar_icons.insert(
+                entry.to_owned(),
+                crate::item_icons::CustomIcon {
+                    icon,
+                    color: color.map(str::to_owned),
+                },
+            );
+        }
+        self.emit_sidebar(cx);
+        cx.notify();
+    }
+
+    /// Back to the entry's own icon and color.
+    pub fn reset_sidebar_icon(&mut self, entry: &str, cx: &mut Context<Self>) {
+        self.sidebar_icons.remove(entry);
+        self.sidebar_icon_menu = None;
+        self.emit_sidebar(cx);
+        cx.notify();
+    }
+
+    pub fn sidebar_icon(&self, entry: &str) -> Option<&crate::item_icons::CustomIcon> {
+        self.sidebar_icons.get(entry)
+    }
+
+    /// A section heading: click to collapse/expand; the arrow turns.
+    fn section_header(
+        &self,
+        key: &'static str,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use std::f32::consts::TAU;
+        let open = !self.collapsed.contains(key);
+        let muted = cx.theme().muted_foreground.opacity(0.8);
+        let hover = cx.theme().foreground.opacity(0.9);
+        h_flex()
+            .id(SharedString::from(format!("section-{key}")))
+            .test_support()
+            .role(Role::Button)
+            .aria_label(SharedString::from(label))
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .items_center()
+            .cursor_pointer()
+            .text_color(muted)
+            .hover(move |s| s.text_color(hover))
+            .child(div().flex_1().min_w_0().child(ui::section_label(label, cx)))
+            .child(div().pt_2().pr_1().child(
+                Icon::new(IconName::ChevronRight).xsmall().with_animation(
+                    motion::key("secao", format!("{key}:{open}")),
+                    Animation::new(motion::NORMAL).with_easing(ease_out_quint()),
+                    move |icon, t| {
+                        let (from, to) = if open { (0., TAU / 4.) } else { (TAU / 4., 0.) };
+                        icon.rotate(radians(from + (to - from) * t))
+                    },
+                ),
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_section(key, cx)))
+    }
+
+    /// The icon menu of a sidebar entry: icons and colors.
+    fn render_sidebar_icon_menu(&self, entry: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (border, bg, hover, radius) = (
+            theme.border,
+            theme.popover,
+            theme.secondary_hover,
+            theme.radius,
+        );
+        let accent = appearance::accent(cx);
+        let current = self.sidebar_icons.get(entry).cloned().unwrap_or_default();
+        let mut grid = h_flex().flex_wrap().gap_0p5();
+        for (name, icon) in crate::item_icons::CHOICES {
+            let chosen = current.icon == *name;
+            let entry_id = entry.to_owned();
+            grid = grid.child(
+                div()
+                    .id(SharedString::from(format!("sidebar-icon-{name}")))
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(*name))
+                    .size(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(radius)
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .when(chosen, |el| el.bg(accent.opacity(0.18)).text_color(accent))
+                    .child(Icon::new(*icon).small())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_sidebar_icon(&entry_id, Some(name), cx)
+                    })),
+            );
+        }
+        let mut colors = h_flex().gap_1p5().items_center();
+        for (id, _, _) in crate::item_icons::COLORS {
+            let color = crate::item_icons::color_by_id(id, cx).unwrap_or(accent);
+            let chosen = current.color.as_deref() == Some(*id);
+            let entry_id = entry.to_owned();
+            colors = colors.child(
+                div()
+                    .id(SharedString::from(format!("sidebar-color-{id}")))
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(*id))
+                    .size(px(16.))
+                    .rounded_full()
+                    .cursor_pointer()
+                    .bg(color)
+                    .when(chosen, |el| el.border_2().border_color(theme_fg(cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_sidebar_color(&entry_id, Some(id), cx)
+                    })),
+            );
+        }
+        let entry_id = entry.to_owned();
+        let closing = entry.to_owned();
+        motion::rise(
+            v_flex()
+                .id(SharedString::from(format!("sidebar-icon-menu-{entry}")))
+                .test_support()
+                .mx_1()
+                .my_1()
+                .p_2()
+                .gap_2()
+                .rounded(radius)
+                .border_1()
+                .border_color(border)
+                .bg(bg)
+                .shadow_md()
+                .child(grid)
+                .child(colors)
+                .child(
+                    h_flex().justify_end().child(
+                        Button::new("sidebar-icon-reset")
+                            .ghost()
+                            .xsmall()
+                            .label(t!("vault.sidebar_icon_reset"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.reset_sidebar_icon(&entry_id, cx)
+                            })),
+                    ),
+                )
+                .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
+                    if this.sidebar_icon_menu.as_deref() == Some(closing.as_str()) {
+                        this.sidebar_icon_menu = None;
+                        cx.notify();
+                    }
+                })),
+            motion::key("menu-icone-lateral", entry),
+            4.,
+        )
+    }
 
     pub fn set_pinned(&mut self, ids: Vec<String>) {
         self.pinned = ids;
@@ -2318,6 +2565,22 @@ impl VaultView {
             theme.secondary_hover,
         );
         let id_text = id.clone();
+        let custom = self.sidebar_icons.get(id.as_ref()).cloned();
+        let icon = custom
+            .as_ref()
+            .and_then(|c| {
+                crate::item_icons::CHOICES
+                    .iter()
+                    .find(|(n, _)| *n == c.icon)
+            })
+            .map(|(_, i)| *i)
+            .unwrap_or(icon);
+        let icon_color = custom
+            .as_ref()
+            .and_then(|c| c.color.as_deref())
+            .and_then(|c| crate::item_icons::color_by_id(c, cx));
+        let menu_open = self.sidebar_icon_menu.as_deref() == Some(id.as_ref());
+        let menu_entry = id.to_string();
         let row = h_flex()
             .id(id)
             .test_support()
@@ -2344,7 +2607,8 @@ impl VaultView {
                 let icon = div().flex().child(
                     Icon::new(icon)
                         .small()
-                        .when(!selected, |i| i.text_color(muted)),
+                        .when(!selected, |i| i.text_color(muted))
+                        .when_some(icon_color, |i, c| i.text_color(c)),
                 );
                 if selected {
                     motion::nudge(icon, motion::key("filtro-icone", &id_text), 2.)
@@ -2368,6 +2632,14 @@ impl VaultView {
             .on_click(
                 cx.listener(move |this, _, window, cx| this.set_filter(filter.clone(), window, cx)),
             )
+            // Right click: choose the entry's icon.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, _, cx| {
+                    this.toggle_sidebar_icon_menu(&menu_entry, cx);
+                    cx.stop_propagation();
+                }),
+            )
             // The chosen filter's highlight lights up softly.
             .with_animation(
                 motion::key("filtro", format!("{id_text}:{selected}")),
@@ -2381,8 +2653,9 @@ impl VaultView {
                 },
             );
         // When the vault opens, the rows cascade in (once per screen).
+        let menu = menu_open.then(|| self.render_sidebar_icon_menu(&id_text, cx));
         motion::cascade(
-            div().w_full().child(row),
+            div().w_full().child(row).children(menu),
             motion::key("filtro-entra", &id_text),
             order,
         )
@@ -2520,13 +2793,18 @@ impl VaultView {
         // Quick access: items pinned by the person, right at the top.
         let pinned = self.pinned_items(cx);
         if !pinned.is_empty() {
-            nav = nav.child(ui::section_label(t!("vault.quick_access"), cx));
-            for item in &pinned {
-                nav = nav.child(self.pinned_row(item, cx));
+            nav = nav.child(self.section_header("quick", t!("vault.quick_access"), cx));
+            if !self.is_collapsed("quick") {
+                for item in &pinned {
+                    nav = nav.child(self.pinned_row(item, cx));
+                }
             }
         }
-        nav = nav.child(ui::section_label(t!("vault.types"), cx));
-        for k in KindFilter::ALL {
+        nav = nav.child(self.section_header("types", t!("vault.types"), cx));
+        for k in KindFilter::ALL
+            .into_iter()
+            .filter(|_| !self.is_collapsed("types"))
+        {
             let icon = match k {
                 KindFilter::Login => IconName::Globe,
                 KindFilter::Card => IconName::CreditCard,
@@ -2543,8 +2821,8 @@ impl VaultView {
             ));
         }
         if !orgs.is_empty() {
-            nav = nav.child(ui::section_label(t!("vault.organizations"), cx));
-            for (id, name) in orgs {
+            nav = nav.child(self.section_header("orgs", t!("vault.organizations"), cx));
+            for (id, name) in orgs.into_iter().filter(|_| !self.is_collapsed("orgs")) {
                 nav = nav.child(self.filter_row(
                     format!("filter-org-{id}").into(),
                     Filter::Organization(id.clone()),
@@ -2575,7 +2853,7 @@ impl VaultView {
                 .on_drop(cx.listener(|this, f: &crate::dnd::DraggedFolder, _, cx| {
                     this.move_folder_into(&f.id, None, cx)
                 }))
-                .child(ui::section_label(t!("vault.folders"), cx))
+                .child(self.section_header("folders", t!("vault.folders"), cx))
                 .child(
                     Button::new("folder-new")
                         .ghost()
@@ -2622,27 +2900,30 @@ impl VaultView {
                 4.,
             ));
         }
-        for row in folders {
+        let folders_open = !self.is_collapsed("folders");
+        for row in folders.into_iter().filter(|_| folders_open) {
             nav = nav.child(self.folder_row(row, cx));
         }
         nav = nav
-            .child(
-                div()
-                    .id("drop-no-folder")
-                    .w_full()
-                    .rounded(cx.theme().radius)
-                    .drag_over::<crate::dnd::DraggedItem>(Self::drop_style(cx))
-                    .on_drop(cx.listener(|this, item: &crate::dnd::DraggedItem, _, cx| {
-                        this.move_item_to_folder(&item.id, None, cx)
-                    }))
-                    .child(self.filter_row(
-                        "filter-no-folder".into(),
-                        Filter::Folder(None),
-                        IconName::FolderOpen,
-                        t!("vault.no_folder").into(),
-                        cx,
-                    )),
-            )
+            .when(folders_open, |nav| {
+                nav.child(
+                    div()
+                        .id("drop-no-folder")
+                        .w_full()
+                        .rounded(cx.theme().radius)
+                        .drag_over::<crate::dnd::DraggedItem>(Self::drop_style(cx))
+                        .on_drop(cx.listener(|this, item: &crate::dnd::DraggedItem, _, cx| {
+                            this.move_item_to_folder(&item.id, None, cx)
+                        }))
+                        .child(self.filter_row(
+                            "filter-no-folder".into(),
+                            Filter::Folder(None),
+                            IconName::FolderOpen,
+                            t!("vault.no_folder").into(),
+                            cx,
+                        )),
+                )
+            })
             .child(div().h_3())
             .child(self.filter_row(
                 "filter-trash".into(),

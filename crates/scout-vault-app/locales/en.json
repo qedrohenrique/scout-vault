@@ -638,6 +638,7 @@
   "vault.select_item_hint": "Use the arrow keys in the list. Enter opens the item.",
   "vault.settings_tooltip": "Settings (Ctrl+,)",
   "vault.show": "Show",
+  "vault.sidebar_icon_reset": "Default icon",
   "vault.sync": "Sync",
   "vault.sync_failed": "Couldn't sync",
   "vault.synced": "Synced",

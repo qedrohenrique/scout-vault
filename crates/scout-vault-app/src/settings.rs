@@ -64,6 +64,12 @@ pub struct Settings {
     /// Lock after this many minutes without use (0 = never).
     #[serde(default = "default_auto_lock_minutes")]
     pub auto_lock_minutes: u32,
+    /// Sidebar sections the person collapsed (`quick`, `types`, `orgs`, `folders`).
+    #[serde(default)]
+    pub sidebar_collapsed: Vec<String>,
+    /// Icon and color chosen per sidebar entry (by the entry's id, e.g. `filter-login`).
+    #[serde(default)]
+    pub sidebar_icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
     /// Icon and color chosen per item (on this computer only).
     #[serde(default)]
     pub item_icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
@@ -168,6 +174,8 @@ impl Default for Settings {
             pinned_items: Vec::new(),
             close_to_tray: true,
             item_icons: Default::default(),
+            sidebar_collapsed: Vec::new(),
+            sidebar_icons: Default::default(),
             lock_with_windows: true,
             clipboard_clear_secs: default_clipboard_clear_secs(),
             hud_opacity: default_hud_opacity(),

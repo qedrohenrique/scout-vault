@@ -7,6 +7,14 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-19
+
+### Added
+- **Collapsible sidebar sections**: click "Quick access", "Types", "Organizations" or "Folders"
+  to collapse or expand it. The choice is remembered between sessions.
+- **Custom icons in the sidebar**: right-click an entry (a type, folder, organization,
+  collection, "All items", "Trash"…) to choose its icon and color, or go back to the default.
+
 ## [0.10.0] - 2026-11-19
 
 ### Added

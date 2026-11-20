@@ -91,6 +91,8 @@ close, without the weight of an Electron app.
 - Scout Vault only changes what you edited: passkeys, URI rules, linked fields and other data
   created by other clients go back to the server untouched.
 - **Trash**: move, restore and **delete permanently** (asks for confirmation).
+- **Sidebar your way**: click a section's heading (Quick access, Types, Organizations, Folders)
+  to collapse it, and right-click any entry to choose its icon and color. Both are remembered.
 - **Quick access**: the pin in an item's detail pins it to a section at the top of the sidebar
   (up to 10). Clicking opens the item directly, even with another filter active. Saved on the
   computer.
