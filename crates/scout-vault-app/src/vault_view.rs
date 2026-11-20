@@ -1248,7 +1248,9 @@ impl VaultView {
             .test_support()
             .role(Role::Button)
             .aria_label(SharedString::from(label))
-            .flex_1()
+            // As wide as there is room for, and only as tall as its text: a heading
+            // that grew (`flex_1`) in the sidebar's column took all the empty space.
+            .w_full()
             .min_w_0()
             .gap_1()
             .items_center()

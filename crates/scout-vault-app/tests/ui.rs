@@ -1806,6 +1806,19 @@ fn sidebar_sections_collapse_and_entries_take_custom_icons(cx: &mut TestAppConte
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("filter-login").is_some());
+        // Headings are one line tall (they once grew to fill the sidebar's empty space).
+        for section in ["section-types", "section-folders"] {
+            let h = f32::from(window.find(section).bounds().size.height);
+            assert!(h < 40.0, "{section}: {h}");
+        }
+        let types = window.find("section-types").bounds();
+        let login = window.find("filter-login").bounds();
+        assert!(f32::from(login.top() - types.bottom()) < 12.0);
+        // The "+" of Folders stays beside the heading, inside the sidebar.
+        let plus = window.find("folder-new").bounds();
+        let folders = window.find("section-folders").bounds();
+        assert!(plus.left() >= folders.right() - gpui_kit::px(1.));
+        assert!(f32::from(plus.right()) <= scout_vault_app::vault_view::SIDEBAR_WIDTH);
         window.click("section-types", cx);
     })
     .unwrap();

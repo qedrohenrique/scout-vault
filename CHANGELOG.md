@@ -7,6 +7,12 @@ Every change that matters to Scout Vault users. The format follows
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-11-20
+
+### Fixed
+- The "Types" heading in the sidebar no longer stretches over all the empty space, which left
+  a big gap above and below it (introduced with collapsible sections in 0.11.0).
+
 ## [0.11.2] - 2026-11-20
 
 ### Added
