@@ -498,6 +498,7 @@
   "ssh_agent.deny": "Deny",
   "ssh_agent.more_waiting": "{n} more request(s) waiting.",
   "ssh_agent.remember": "Don't ask again for this program for 10 minutes",
+  "ssh_agent.reprompt_hint": "This key asks for the master password every time it is used.",
   "ssh_agent.request_text": "{program} wants to use the key “{key}”.",
   "ssh_agent.request_title": "Use an SSH key?",
   "ssh_agent.unknown_program": "A program",

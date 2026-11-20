@@ -498,6 +498,7 @@
   "ssh_agent.deny": "Negar",
   "ssh_agent.more_waiting": "Mais {n} pedido(s) na fila.",
   "ssh_agent.remember": "Não perguntar de novo para este programa por 10 minutos",
+  "ssh_agent.reprompt_hint": "Esta chave pede a senha mestra a cada uso.",
   "ssh_agent.request_text": "{program} quer usar a chave “{key}”.",
   "ssh_agent.request_title": "Usar chave SSH?",
   "ssh_agent.unknown_program": "Um programa",

@@ -71,8 +71,11 @@ pub struct ScoutVaultApp {
     ssh_requests: std::collections::VecDeque<crate::ssh_agent::Approval>,
     /// "Remember for 10 minutes" in the SSH prompt.
     ssh_remember: bool,
-    /// Windows Hello is being asked for the SSH request on screen.
+    /// Windows Hello (or the master password) is being checked for the SSH request on screen.
     ssh_confirming: bool,
+    /// Master password field, when the key on screen asks for it ("reprompt").
+    ssh_password: Option<Entity<gpui_kit::component::input::InputState>>,
+    ssh_password_error: Option<SharedString>,
     /// The window was in the tray when the SSH request came: goes back after.
     ssh_was_hidden: bool,
     _ssh_task: Task<()>,
@@ -317,6 +320,8 @@ impl ScoutVaultApp {
             ssh_requests: Default::default(),
             ssh_remember: false,
             ssh_confirming: false,
+            ssh_password: None,
+            ssh_password_error: None,
             ssh_was_hidden: false,
             _ssh_task: ssh_task,
             pending_browser_save: None,
@@ -395,21 +400,99 @@ impl ScoutVaultApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(self.screen, Screen::Vault(_)) {
+        let mut request = request;
+        let Screen::Vault(view) = &self.screen else {
             request.answer(false);
             return;
-        }
-        if crate::ssh_agent::is_remembered(&request, cx) {
+        };
+        // A key whose item asks for the master password needs it for every
+        // signature, and is never remembered.
+        let reprompt = {
+            let list = view.read(cx).list().clone();
+            let vault = list.read(cx).delegate().vault();
+            vault
+                .items
+                .iter()
+                .find(|i| i.id == request.item_id)
+                .map(|i| i.reprompt)
+        };
+        let Some(reprompt) = reprompt else {
+            request.answer(false);
+            return;
+        };
+        request.reprompt = reprompt;
+        if !reprompt && crate::ssh_agent::is_remembered(&request, cx) {
             request.answer(true);
             return;
         }
-        if self.ssh_requests.is_empty() {
+        let first = self.ssh_requests.is_empty();
+        if first {
             self.ssh_was_hidden = crate::tray::is_hidden(window);
             self.ssh_remember = false;
         }
         self.ssh_requests.push_back(request);
+        if first {
+            self.prepare_ssh_front(window, cx);
+        }
         crate::tray::show_window(window);
         cx.notify();
+    }
+
+    /// Gets the prompt ready for the request now on screen (the password field, if needed).
+    fn prepare_ssh_front(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::input::{InputEvent, InputState};
+        self.ssh_password_error = None;
+        self.ssh_password = None;
+        if !self.ssh_requests.front().is_some_and(|r| r.reprompt) {
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(t!("common.vault_password"))
+        });
+        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.allow_ssh(window, cx);
+            }
+        })
+        .detach();
+        input.update(cx, |i, cx| i.focus(window, cx));
+        self.ssh_password = Some(input);
+    }
+
+    /// The SSH request on screen asks for the master password: checks it, then signs.
+    fn allow_ssh_with_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Screen::Vault(view)) = (&self.ssh_password, &self.screen) else {
+            return;
+        };
+        let password = zeroize::Zeroizing::new(input.read(cx).value().to_string());
+        if password.is_empty() {
+            self.ssh_password_error = Some(t!("vault.type_password").into());
+            cx.notify();
+            return;
+        }
+        let session = view.read(cx).session().clone();
+        self.ssh_confirming = true;
+        self.ssh_password_error = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let ok = crate::flow::check_master_password(&session, password).await;
+            this.update_in(cx, |this, window, cx| {
+                this.ssh_confirming = false;
+                if ok {
+                    this.finish_ssh(true, window, cx);
+                } else {
+                    this.ssh_password_error = Some(t!("vault.wrong_password").into());
+                    if let Some(input) = &this.ssh_password {
+                        input.update(cx, |i, cx| i.set_value("", window, cx));
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The SSH request on screen, if any.
@@ -425,6 +508,10 @@ impl ScoutVaultApp {
     /// "Allow": with Windows Hello first, if the setting asks for it.
     pub fn allow_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ssh_confirming || self.ssh_requests.is_empty() {
+            return;
+        }
+        if self.ssh_requests.front().is_some_and(|r| r.reprompt) {
+            self.allow_ssh_with_password(window, cx);
             return;
         }
         let hello = self.store.load().ssh_agent_hello && crate::hello::available(cx);
@@ -464,22 +551,25 @@ impl ScoutVaultApp {
         let Some(request) = self.ssh_requests.pop_front() else {
             return;
         };
-        if allow && self.ssh_remember {
+        // Keys that ask for the master password are never remembered.
+        let remember = allow && self.ssh_remember && !request.reprompt;
+        if remember {
             crate::ssh_agent::remember(&request, cx);
         }
         request.answer(allow);
         // Others waiting for the same key and program get the same answer.
-        if allow && self.ssh_remember {
+        if remember {
             let (same, rest): (Vec<_>, Vec<_>) = self
                 .ssh_requests
                 .drain(..)
-                .partition(|r| crate::ssh_agent::is_remembered(r, cx));
+                .partition(|r| !r.reprompt && crate::ssh_agent::is_remembered(r, cx));
             self.ssh_requests = rest.into();
             for r in same {
                 r.answer(true);
             }
         }
         self.ssh_remember = false;
+        self.prepare_ssh_front(window, cx);
         if self.ssh_requests.is_empty() && self.ssh_was_hidden {
             crate::tray::hide_window(window);
         }
@@ -491,7 +581,11 @@ impl ScoutVaultApp {
         if self.ssh_confirming || !self.ssh_requests.iter().any(|r| r.is_stale()) {
             return;
         }
+        let front_stale = self.ssh_requests.front().is_some_and(|r| r.is_stale());
         self.ssh_requests.retain(|r| !r.is_stale());
+        if front_stale {
+            self.prepare_ssh_front(window, cx);
+        }
         if self.ssh_requests.is_empty() && self.ssh_was_hidden {
             crate::tray::hide_window(window);
         }
@@ -502,6 +596,7 @@ impl ScoutVaultApp {
         use gpui_kit::assets::IconName;
         use gpui_kit::component::button::*;
         use gpui_kit::component::checkbox::Checkbox;
+        use gpui_kit::component::input::Input;
         use gpui_kit::component::*;
         let request = self.ssh_requests.front()?;
         let theme = cx.theme();
@@ -570,12 +665,45 @@ impl ScoutVaultApp {
                     .child(request.fingerprint.clone()),
             )
             .child(
-                Checkbox::new("ssh-remember")
-                    .label(t!("ssh_agent.remember"))
-                    .checked(self.ssh_remember)
-                    .disabled(busy)
-                    .on_change(cx.listener(|this, v: &bool, _, cx| this.set_ssh_remember(*v, cx))),
+                div()
+                    .id("ssh-request-path")
+                    .test_support()
+                    .aria_label(SharedString::from(request.client.path_line()))
+                    .text_xs()
+                    .text_color(muted)
+                    .font_family("monospace")
+                    .child(request.client.path_line()),
             )
+            .when_some(self.ssh_password.clone(), |el, input| {
+                el.child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_sm().child(t!("ssh_agent.reprompt_hint")))
+                        .child(Input::new(&input).id("ssh-password").small())
+                        .when_some(self.ssh_password_error.clone(), |el, error| {
+                            el.child(
+                                div()
+                                    .id("ssh-password-error")
+                                    .test_support()
+                                    .aria_label(error.clone())
+                                    .text_xs()
+                                    .text_color(cx.theme().danger)
+                                    .child(error),
+                            )
+                        }),
+                )
+            })
+            .when(!request.reprompt, |el| {
+                el.child(
+                    Checkbox::new("ssh-remember")
+                        .label(t!("ssh_agent.remember"))
+                        .checked(self.ssh_remember)
+                        .disabled(busy)
+                        .on_change(
+                            cx.listener(|this, v: &bool, _, cx| this.set_ssh_remember(*v, cx)),
+                        ),
+                )
+            })
             .when(waiting > 0, |el| {
                 el.child(
                     div()

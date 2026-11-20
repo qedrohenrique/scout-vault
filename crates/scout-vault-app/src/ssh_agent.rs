@@ -29,12 +29,20 @@ pub const REMEMBER_FOR: Duration = Duration::from_secs(10 * 60);
 pub const ANSWER_WITHIN: Duration = Duration::from_secs(120);
 
 /// The program asking for a key.
+///
+/// Both are **full paths** (`C:\Windows\System32\OpenSSH\ssh.exe`), not just file
+/// names: "Remember" is keyed on them, so another program that merely calls itself
+/// `ssh.exe` (from `%TEMP%`, say) is asked again, and the prompt shows where it runs from.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Client {
-    /// `ssh.exe`
+    /// Full path of the executable (`…\ssh.exe`).
     pub program: String,
-    /// Who started it (`git.exe`, `pwsh.exe`…), when Windows says.
+    /// Who started it (`…\git.exe`, `…\pwsh.exe`): full path, or the name if Windows won't say.
     pub parent: Option<String>,
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 impl Client {
@@ -43,11 +51,20 @@ impl Client {
         let program = if self.program.is_empty() {
             t!("ssh_agent.unknown_program").to_owned()
         } else {
-            self.program.clone()
+            file_name(&self.program).to_owned()
         };
         match &self.parent {
-            Some(parent) => format!("{program} ({parent})"),
+            Some(parent) => format!("{program} ({})", file_name(parent)),
             None => program,
+        }
+    }
+
+    /// Where the program runs from, shown under [`Self::describe`].
+    pub fn path_line(&self) -> String {
+        if self.program.is_empty() {
+            "?".to_owned()
+        } else {
+            self.program.clone()
         }
     }
 }
@@ -58,6 +75,8 @@ pub struct Approval {
     pub key_name: String,
     pub fingerprint: String,
     pub client: Client,
+    /// The item asks for the master password: every signature needs it (set by the app).
+    pub reprompt: bool,
     reply: oneshot::Sender<bool>,
 }
 
@@ -252,6 +271,7 @@ async fn respond(
                 key_name: key.name.clone(),
                 fingerprint: key.fingerprint.clone(),
                 client: client.clone(),
+                reprompt: false,
                 reply,
             });
             if sent.is_err() {
@@ -370,10 +390,7 @@ mod platform {
 
     use super::Client;
 
-    fn file_name(path: &str) -> String {
-        path.rsplit(['\\', '/']).next().unwrap_or(path).to_owned()
-    }
-
+    /// Full path of a process's executable.
     fn image_of(pid: u32) -> Option<String> {
         // SAFETY: only reads the name of a process's executable; the handle is closed.
         unsafe {
@@ -388,11 +405,11 @@ mod platform {
             );
             let _ = CloseHandle(process);
             ok.ok()?;
-            Some(file_name(&String::from_utf16_lossy(&buf[..len as usize])))
+            Some(String::from_utf16_lossy(&buf[..len as usize]))
         }
     }
 
-    /// The parent process's id and executable name, from a process snapshot.
+    /// The parent process's executable: full path, or its name if Windows won't say.
     fn parent_of(pid: u32) -> Option<String> {
         // SAFETY: a snapshot of the process list, walked and closed.
         unsafe {
@@ -421,7 +438,11 @@ mod platform {
             }
             let _ = CloseHandle(snap);
             let parent = entries.iter().find(|e| e.0 == pid)?.1;
-            entries.iter().find(|e| e.0 == parent).map(|e| e.2.clone())
+            let name = entries
+                .iter()
+                .find(|e| e.0 == parent)
+                .map(|e| e.2.clone())?;
+            Some(image_of(parent).unwrap_or(name))
         }
     }
 
@@ -475,10 +496,18 @@ mod tests {
         let keys = keys();
         let blob = keys.lock().unwrap()[0].blob.clone();
         let client = Client {
-            program: "ssh.exe".into(),
-            parent: Some("git.exe".into()),
+            program: r"C:\Windows\System32\OpenSSH\ssh.exe".into(),
+            parent: Some(r"C:\Program Files\Git\cmd\git.exe".into()),
         };
         assert_eq!(client.describe(), "ssh.exe (git.exe)");
+        assert_eq!(client.path_line(), r"C:\Windows\System32\OpenSSH\ssh.exe");
+        // Same name somewhere else: a different client (not covered by "Remember").
+        let impostor = Client {
+            program: r"C:\Users\x\AppData\Local\Temp\ssh.exe".into(),
+            ..client.clone()
+        };
+        assert_eq!(impostor.describe(), client.describe());
+        assert_ne!(impostor, client);
         for allow in [true, false] {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let expected = client.clone();

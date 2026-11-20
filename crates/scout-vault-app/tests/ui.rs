@@ -1420,6 +1420,137 @@ fn ssh_keys_are_generated_checked_and_unlocked(cx: &mut TestAppContext) {
         .is_encrypted());
 }
 
+/// A key whose item asks for the master password: every signature asks for it,
+/// and "Remember" isn't offered.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn ssh_agent_asks_the_master_password_for_reprompt_keys(cx: &mut TestAppContext) {
+    use scout_vault_app::ssh_agent;
+    use scout_vault_core::vault::{Item, ItemKind, SshKey};
+    use std::io::{Read, Write};
+    cx.executor().allow_parking();
+
+    let (password, _) = fixture_password_and_email();
+    let key = scout_vault_core::ssh::generate();
+    let blob = ssh_key::PrivateKey::from_openssh(key.private_key.as_str())
+        .unwrap()
+        .public_key()
+        .to_bytes()
+        .unwrap();
+    let mut unlocked = unlocked_fixture();
+    unlocked.vault.items.push(Item {
+        id: "ssh-reprompt".into(),
+        organization_id: None,
+        folder_id: None,
+        name: "Produção".into(),
+        notes: None,
+        favorite: false,
+        reprompt: true,
+        deleted: false,
+        revision_date: None,
+        attachments: Vec::new(),
+        collection_ids: Vec::new(),
+        fields: Vec::new(),
+        kind: ItemKind::SshKey(SshKey {
+            private_key: Some(scout_vault_core::Secret::new(key.private_key.to_string())),
+            public_key: Some(key.public_key.clone()),
+            fingerprint: Some(key.fingerprint.clone()),
+        }),
+    });
+    let (handle, app) = open_app(cx, Some(unlocked));
+    let pipe = format!(
+        r"\\.\pipe\scout-vault-test-agent-reprompt-{}",
+        std::process::id()
+    );
+    cx.update(|cx| {
+        ssh_agent::set_pipe(&pipe, cx);
+        ssh_agent::set_enabled(true, cx);
+    });
+    let sign = {
+        let pipe = pipe.clone();
+        let mut body = vec![13];
+        body.extend_from_slice(&(blob.len() as u32).to_be_bytes());
+        body.extend_from_slice(&blob);
+        body.extend_from_slice(&5u32.to_be_bytes());
+        body.extend_from_slice(b"hello");
+        body.extend_from_slice(&0u32.to_be_bytes());
+        move || {
+            let (pipe, body) = (pipe.clone(), body.clone());
+            std::thread::spawn(move || {
+                let mut conn = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&pipe)
+                    .unwrap();
+                conn.write_all(&(body.len() as u32).to_be_bytes()).unwrap();
+                conn.write_all(&body).unwrap();
+                let mut len = [0u8; 4];
+                conn.read_exact(&mut len).unwrap();
+                let mut answer = vec![0u8; u32::from_be_bytes(len) as usize];
+                conn.read_exact(&mut answer).unwrap();
+                answer[0]
+            })
+        }
+    };
+
+    let waiting = sign();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).ssh_request().is_some())
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("ssh-password").is_some());
+        assert!(
+            window.try_find("ssh-remember").is_none(),
+            "never remembered"
+        );
+        let path = window.find("ssh-request-path").label().unwrap().to_owned();
+        assert!(path.contains('\\'), "full path shown: {path}");
+        // "Allow" alone (or a wrong password) doesn't sign.
+        window.click("ssh-password", cx);
+        window.input("errada", cx);
+        window.click("ssh-allow", cx);
+    })
+    .unwrap();
+    wait_until(cx, |cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("ssh-password-error").is_some()
+        })
+        .unwrap()
+    });
+    assert!(
+        !waiting.is_finished(),
+        "still waiting after a wrong password"
+    );
+    cx.update_window(handle, |_, window, cx| {
+        window.click("ssh-password", cx);
+        window.input(&password, cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    wait_until(cx, |_| waiting.is_finished());
+    assert_eq!(
+        waiting.join().unwrap(),
+        14,
+        "signed with the master password"
+    );
+
+    // The next signature asks again.
+    let again = sign();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).ssh_request().is_some())
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("ssh-password").is_some());
+        window.click("ssh-deny", cx);
+    })
+    .unwrap();
+    assert_eq!(again.join().unwrap(), 5);
+    cx.update(|cx| ssh_agent::set_enabled(false, cx));
+}
+
 #[cfg(windows)]
 #[gpui_kit::test]
 fn ssh_agent_offers_vault_keys_and_signs_only_when_allowed(cx: &mut TestAppContext) {
