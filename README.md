@@ -81,6 +81,10 @@ close, without the weight of an Electron app.
   Brave, Opera, Firefox and Safari (or any CSV with `name`, `url`, `username`, `password`, `notes`).
   It shows what's in the file first (types, folders, entries left out) and skips items already in
   the vault; everything is encrypted here and sent in one request. Delete the export afterwards.
+  Password-protected Bitwarden exports open with the file's password.
+- **Export** (Settings → Data → Export…): password-protected JSON (recommended), JSON or CSV,
+  compatible with Bitwarden. Asks for the master password first; organization items and the trash
+  stay out.
 - **New item** (`+` in the list or `Ctrl+N`): login, note, card, identity or SSH key (a new
   Ed25519 key is generated, or import yours: OpenSSH, PuTTY `.ppk`, RSA PEM; the public key and
   fingerprint are filled in). **Edit**
@@ -124,7 +128,7 @@ close, without the weight of an Electron app.
   (`services.msc`) to use Scout Vault's. For git, point it at Windows' ssh:
   `git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe`.
 
-**Browser autofill** (Chrome, Edge, Brave)
+**Browser autofill** (Chrome, Edge, Brave, Firefox)
 - Its own extension in the [`extension/`](extension/) folder. Turn it on in Settings → Browser and
   follow the instructions shown there (load the unpacked extension).
 - On a site, click the Scout Vault icon or use `Ctrl+Shift+L`: the site's logins show up (base
@@ -263,8 +267,11 @@ copies the selected text in the search box.
 
 Found a vulnerability? Report it privately, as explained in [SECURITY.md](SECURITY.md).
 
-- **Nothing decrypted goes to disk.** Secrets live in memory inside `Secret`/`Zeroizing` and are
-  wiped when dropped. Their `Debug` never shows the contents.
+- **Nothing decrypted goes to disk**, with two explicit exceptions: "open without password for
+  N days" (the user key in Credential Manager, off by default) and attachments opened in another
+  program (a temp copy, deleted on lock). Secrets live in memory inside `Secret`/`Zeroizing` and
+  are wiped when dropped; their `Debug` never shows the contents. The full picture, with what is
+  and isn't defended, is in the [threat model](docs/THREAT-MODEL.md).
 - `settings.json` (`%APPDATA%\Scout Vault\settings.json` on Windows and
   `~/.config/scout-vault/settings.json` elsewhere) stores **only** the server, the last email, the
   device identity and the appearance.
@@ -459,6 +466,6 @@ published.
 
 ## Roadmap
 See [docs/ROADMAP.md](docs/ROADMAP.md), which includes a comparison with Bitwarden, 1Password,
-KeePassXC and Proton Pass. Windows Hello, locking together with Windows, re-prompt, the inline
-field menu, global quick search and the password health report are already in; next up are
-passkeys, card and identity filling, and an installer.
+KeePassXC and Proton Pass, and the **road to 1.0**: an external security review, code signing
+(with signed updates), validation on the official Bitwarden cloud, the extension in the browser
+stores and a beta with a frozen scope.

@@ -1716,17 +1716,13 @@ fn import_reads_an_export_skips_duplicates_and_sends_it(cx: &mut TestAppContext)
     .unwrap();
     let import = cx.update(|cx| app.read(cx).import_view().cloned().expect("import open"));
 
-    // A password-protected export: explained, nothing to import.
+    // A password-protected export: asks for its password, nothing to import yet.
     let locked = dir.join("locked.json");
     std::fs::write(&locked, r#"{"encrypted":true,"passwordProtected":true}"#).unwrap();
     cx.update(|cx| import.update(cx, |v, cx| v.load_path(locked.clone(), cx)));
     cx.run_until_parked();
     cx.update(|cx| {
-        assert!(import
-            .read(cx)
-            .error()
-            .unwrap()
-            .contains("protegido por senha"));
+        assert!(import.read(cx).needs_password());
         assert!(import.read(cx).to_import().is_empty());
     });
 
@@ -1957,6 +1953,7 @@ fn a_new_version_shows_in_the_title_bar_and_in_about(cx: &mut TestAppContext) {
         notes: String::new(),
         installer: None,
         installer_sha256: None,
+        installer_sig: None,
     };
     cx.update(|cx| updater::set_state(State::Available(Box::new(release)), cx));
     cx.update(|cx| assert_eq!(updater::available(cx).unwrap().to_string(), "99.0.0"));
@@ -1971,6 +1968,24 @@ fn a_new_version_shows_in_the_title_bar_and_in_about(cx: &mut TestAppContext) {
         assert!(app.read(cx).settings_view().is_some());
     })
     .unwrap();
+
+    // With an item open in the editor, updating (which closes the app) is refused.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.close_settings(cx));
+        window.render_frame(cx);
+        window.click("vault-new", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        updater::install(cx);
+        assert!(matches!(updater::state(cx), State::Available(_)));
+        let toasts = app.read(cx).toasts().read(cx).texts();
+        assert!(
+            toasts.iter().any(|t| t.contains("antes de atualizar")),
+            "{toasts:?}"
+        );
+    });
 
     // "Check for updates" in the tests (offline): up to date, and the button goes away.
     cx.update(|cx| updater::check(false, cx));
@@ -2007,6 +2022,224 @@ fn the_back_arrow_lines_up_with_its_text(cx: &mut TestAppContext) {
         assert_eq!(window.find("settings-close").label(), Some("Voltar"));
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn icon_pickers_search_by_name(cx: &mut TestAppContext) {
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| {
+            v.select_item("login-1", window, cx);
+            v.toggle_icon_picker(cx);
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+
+    // The search box has the focus: typing filters right away.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("icon-choice-globe").is_some());
+        window.input("jogo", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("icon-choice-gamepad").is_some());
+        assert!(window.try_find("icon-choice-globe").is_none());
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        // Brands too, by name.
+        for _ in 0..4 {
+            window.press("backspace", cx);
+        }
+        window.input("github", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("icon-choice-brand-github").is_some());
+        assert!(window.try_find("icon-choice-gamepad").is_none());
+        // Nothing found: says so.
+        window.input("zzz", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("icon-search-empty").is_some());
+    })
+    .unwrap();
+
+    // The sidebar's menu has its own search, empty when it opens.
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.toggle_sidebar_icon_menu("filter-login", cx));
+        window.render_frame(cx);
+        window.render_frame(cx);
+        assert!(window.try_find("sidebar-icon-rocket").is_some());
+        window.input("foguete", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("sidebar-icon-rocket").is_some());
+        assert!(window.try_find("sidebar-icon-globe").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn export_asks_the_master_password_and_round_trips_through_import(cx: &mut TestAppContext) {
+    use scout_vault_app::export_view::ExportFormat;
+    cx.executor().allow_parking();
+    let (password, _) = fixture_password_and_email();
+    let (handle, app) = open_app(cx, Some(unlocked_fixture()));
+    let dir = std::env::temp_dir().join(format!("scout-vault-ui-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| a.open_export(window, cx));
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let export = cx.update(|cx| app.read(cx).export_view().cloned().expect("export open"));
+    let wait = |cx: &mut TestAppContext| {
+        wait_until(cx, |cx| cx.update(|cx| !export.read(cx).is_busy()));
+    };
+    let type_in = |cx: &mut TestAppContext, id: &'static str, text: &str| {
+        let text = text.to_owned();
+        cx.update_window(handle, move |_, window, cx| {
+            window.render_frame(cx);
+            window.click(id, cx);
+            window.input(&text, cx);
+        })
+        .unwrap();
+    };
+
+    // CSV, with a wrong master password: refused, nothing written.
+    let csv = dir.join("vault.csv");
+    cx.update(|cx| export.update(cx, |v, cx| v.set_format(ExportFormat::Csv, cx)));
+    type_in(cx, "export-master", "errada");
+    cx.update(|cx| export.update(cx, |v, cx| v.export_to(csv.clone(), cx)));
+    wait(cx);
+    cx.update(|cx| {
+        assert_eq!(
+            export.read(cx).error().map(|e| e.to_string()),
+            Some("Senha mestra incorreta.".into())
+        )
+    });
+    assert!(!csv.exists());
+
+    // The right one: the CSV is written.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("export-master", cx);
+        window.press("ctrl-a", cx);
+        window.press("backspace", cx);
+    })
+    .unwrap();
+    type_in(cx, "export-master", &password);
+    cx.update(|cx| export.update(cx, |v, cx| v.export_to(csv.clone(), cx)));
+    wait(cx);
+    cx.update(|cx| assert!(export.read(cx).error().is_none()));
+    let text = std::fs::read_to_string(&csv).unwrap();
+    assert!(text.starts_with("folder,favorite,type,name"));
+    assert!(text.contains("Meu Banco"));
+
+    // Protected JSON: the file password has to be long enough and match.
+    let json = dir.join("vault.json");
+    cx.update(|cx| export.update(cx, |v, cx| v.set_format(ExportFormat::Protected, cx)));
+    type_in(cx, "export-file-password", "curta");
+    cx.update(|cx| export.update(cx, |v, cx| v.export_to(json.clone(), cx)));
+    cx.update(|cx| {
+        assert!(export
+            .read(cx)
+            .error()
+            .unwrap()
+            .contains("ao menos 8 caracteres"))
+    });
+    type_in(cx, "export-file-password", " e longa");
+    type_in(cx, "export-file-password-again", "curta e longa");
+    cx.update(|cx| export.update(cx, |v, cx| v.export_to(json.clone(), cx)));
+    wait(cx);
+    cx.update(|cx| {
+        assert!(
+            export.read(cx).error().is_none(),
+            "{:?}",
+            export.read(cx).error()
+        )
+    });
+    let file = std::fs::read_to_string(&json).unwrap();
+    assert!(file.contains("\"passwordProtected\": true"));
+    assert!(!file.contains("Meu Banco"));
+
+    // Importing it back: asks for the file's password.
+    cx.update_window(handle, |_, window, cx| {
+        app.update(cx, |a, cx| {
+            a.close_export(cx);
+            a.open_import(window, cx);
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let import = cx.update(|cx| app.read(cx).import_view().cloned().unwrap());
+    cx.update(|cx| import.update(cx, |v, cx| v.load_path(json.clone(), cx)));
+    cx.run_until_parked();
+    cx.update(|cx| assert!(import.read(cx).needs_password()));
+    type_in(cx, "import-password", "outra senha");
+    cx.update(|cx| import.update(cx, |v, cx| v.unlock(cx)));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            import.read(cx).error().map(|e| e.to_string()),
+            Some("Senha incorreta para este arquivo.".into())
+        )
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.click("import-password", cx);
+        window.press("ctrl-a", cx);
+        window.press("backspace", cx);
+    })
+    .unwrap();
+    type_in(cx, "import-password", "curta e longa");
+    cx.update(|cx| import.update(cx, |v, cx| v.unlock(cx)));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let v = import.read(cx);
+        assert!(!v.needs_password());
+        // Everything in it is already in the vault (it came from it).
+        assert!(v.duplicates() > 0);
+        assert!(v.to_import().is_empty());
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// WCAG AA: text 4.5:1 against its background, in both themes and with every preset accent.
+#[gpui_kit::test]
+fn text_has_enough_contrast_in_both_themes(cx: &mut TestAppContext) {
+    use scout_vault_app::appearance::{self, Accent, Appearance, ThemeChoice};
+    use scout_vault_app::colors::contrast;
+    let (handle, _app) = open_app(cx, Some(unlocked_fixture()));
+    for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+        for accent in Accent::ALL {
+            cx.update_window(handle, |_, window, cx| {
+                let a = Appearance {
+                    theme,
+                    accent,
+                    ..Default::default()
+                };
+                appearance::apply(&a, Some(window), cx);
+                let t = cx.theme();
+                let pairs = [
+                    ("text", t.foreground, t.background),
+                    ("muted text", t.muted_foreground, t.background),
+                    ("muted text on the sidebar", t.muted_foreground, t.sidebar),
+                    ("popover text", t.popover_foreground, t.popover),
+                    ("button text", t.primary_foreground, t.primary),
+                ];
+                for (what, fg, bg) in pairs {
+                    let ratio = contrast(fg, bg);
+                    assert!(
+                        ratio >= 4.5,
+                        "{what}: {ratio:.2}:1 in {theme:?} with {accent:?}"
+                    );
+                }
+            })
+            .unwrap();
+        }
+    }
 }
 
 #[gpui_kit::test]

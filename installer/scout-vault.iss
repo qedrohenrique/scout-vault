@@ -95,6 +95,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.scoutvault.desktop"; Flags: uninsdeletekey dontcreatekey
 Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.scoutvault.desktop"; Flags: uninsdeletekey dontcreatekey
 Root: HKCU; Subkey: "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.scoutvault.desktop"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Mozilla\NativeMessagingHosts\com.scoutvault.desktop"; Flags: uninsdeletekey dontcreatekey
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
@@ -104,12 +105,41 @@ Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchAfterUpdate
 [UninstallDelete]
 ; The browser manifest the app writes next to its preferences.
 Type: files; Name: "{userappdata}\{#AppName}\navegador-host.json"
+Type: files; Name: "{userappdata}\{#AppName}\navegador-host-firefox.json"
 
 [Code]
 { `/RELAUNCH=1`: the app ran this installer to update itself and wants to come back. }
 function RelaunchAfterUpdate(): Boolean;
 begin
   Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
+var
+  InstallDone: Boolean;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    InstallDone := True;
+end;
+
+{ An update from the app that didn't finish (error, canceled): the app already closed
+  itself, so open the version that is still installed instead of leaving nothing. }
+procedure DeinitializeSetup();
+var
+  Exe: String;
+  Code: Integer;
+begin
+  if RelaunchAfterUpdate() and not InstallDone then
+  begin
+    try
+      Exe := ExpandConstant('{app}\{#AppExe}');
+      if FileExists(Exe) then
+        Exec(Exe, '', '', SW_SHOWNORMAL, ewNoWait, Code);
+    except
+      // The app folder isn't known when setup stopped before choosing it: nothing to reopen.
+    end;
+  end;
 end;
 
 { Asks a running Scout Vault (even hidden in the tray) to quit, so its files can be replaced. }

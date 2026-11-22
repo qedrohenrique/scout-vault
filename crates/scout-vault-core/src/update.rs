@@ -5,9 +5,11 @@
 //! (`https://github.com/qedrohenrique/scout-vault/releases/download/…`), and nothing
 //! about the vault is sent: GitHub sees an ordinary request for the release list.
 //!
-//! The checksum protects against a broken or swapped download on the way; it is not a
-//! signature (the files aren't signed yet), so it doesn't protect against someone who
-//! controls the releases themselves.
+//! Every installer also comes with a `.sig`: an **Ed25519 signature** made in the release
+//! workflow with a key kept as a GitHub secret. The app has the public key built in
+//! ([`RELEASE_PUBLIC_KEY`]) and runs nothing whose signature doesn't match — so someone
+//! who could replace the files on the release page still can't make the app install them.
+//! The SHA-256 next to it only catches broken downloads.
 
 use std::cmp::Ordering;
 use std::time::Duration;
@@ -19,6 +21,9 @@ use sha2::{Digest, Sha256};
 pub const REPOSITORY: &str = "qedrohenrique/scout-vault";
 /// Biggest installer accepted.
 pub const MAX_INSTALLER: usize = 200 * 1024 * 1024;
+/// Public half of the key that signs the releases (Ed25519, base64). The private half is
+/// the `RELEASE_SIGNING_KEY` secret of the release workflow.
+pub const RELEASE_PUBLIC_KEY: &str = "xN9t1ZichP3gJX7x4NsXGSb1pbFyvUtQT7NNU6XpmcE=";
 /// GitHub asks automated clients for a User-Agent; a generic one says nothing about the user.
 const USER_AGENT: &str = "scout-vault-updater";
 
@@ -99,6 +104,8 @@ pub struct Release {
     pub installer: Option<Asset>,
     /// `<sha256> *<file name>`, next to the installer.
     pub installer_sha256: Option<Asset>,
+    /// The installer's Ed25519 signature (base64), next to it.
+    pub installer_sig: Option<Asset>,
 }
 
 fn download_prefix() -> String {
@@ -141,6 +148,7 @@ pub fn parse_releases(json: &str) -> Vec<Release> {
                 notes: r["body"].as_str().unwrap_or_default().to_owned(),
                 installer: find(&installer_name),
                 installer_sha256: find(&format!("{installer_name}.sha256")),
+                installer_sig: find(&format!("{installer_name}.sig")),
                 version,
             })
         })
@@ -180,6 +188,27 @@ pub fn matches(bytes: &[u8], expected: &[u8; 32]) -> bool {
     Sha256::digest(bytes).as_slice() == expected
 }
 
+/// Is `signature` (a `.sig` file: base64 of 64 bytes) a valid Ed25519 signature of `bytes`
+/// by `public_key` (base64 of 32 bytes)?
+pub fn signature_ok(bytes: &[u8], signature: &str, public_key: &str) -> bool {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    let (Ok(sig), Ok(key)) = (
+        STANDARD.decode(signature.trim()),
+        STANDARD.decode(public_key.trim()),
+    ) else {
+        return false;
+    };
+    let (Ok(sig), Ok(key)) = (<[u8; 64]>::try_from(sig), <[u8; 32]>::try_from(key)) else {
+        return false;
+    };
+    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(&key) else {
+        return false;
+    };
+    key.verify_strict(bytes, &ed25519_dalek::Signature::from_bytes(&sig))
+        .is_ok()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     #[error("network: {0}")]
@@ -188,6 +217,8 @@ pub enum UpdateError {
     NoInstaller,
     #[error("the downloaded file doesn't match its published checksum")]
     Checksum,
+    #[error("the installer isn't signed with the project's key")]
+    Signature,
     #[error("the download is too big")]
     TooBig,
 }
@@ -241,17 +272,30 @@ async fn fetch(url: &str, max: usize) -> Result<Vec<u8>, UpdateError> {
     Ok(out)
 }
 
-/// Downloads the release's installer and checks it against its `.sha256`.
+/// Downloads the release's installer and checks it against its `.sha256` and its
+/// Ed25519 signature ([`RELEASE_PUBLIC_KEY`]).
 pub async fn download_installer(release: &Release) -> Result<(String, Vec<u8>), UpdateError> {
     let (Some(installer), Some(sum)) = (&release.installer, &release.installer_sha256) else {
         return Err(UpdateError::NoInstaller);
     };
+    // No signature, no update (releases from before signing existed).
+    let Some(sig) = &release.installer_sig else {
+        return Err(UpdateError::Signature);
+    };
+    let sig_text = fetch(&sig.url, 1024).await?;
     let sum_text = fetch(&sum.url, 4096).await?;
     let expected = read_checksum(&String::from_utf8_lossy(&sum_text), &installer.name)
         .ok_or(UpdateError::Checksum)?;
     let bytes = fetch(&installer.url, MAX_INSTALLER).await?;
     if !matches(&bytes, &expected) {
         return Err(UpdateError::Checksum);
+    }
+    if !signature_ok(
+        &bytes,
+        &String::from_utf8_lossy(&sig_text),
+        RELEASE_PUBLIC_KEY,
+    ) {
+        return Err(UpdateError::Signature);
     }
     Ok((installer.name.clone(), bytes))
 }
@@ -285,7 +329,9 @@ mod tests {
          {"name":"scout-vault-0.11.4-setup.exe","size":11663003,
           "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe"},
          {"name":"scout-vault-0.11.4-setup.exe.sha256","size":94,
-          "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe.sha256"}]},
+          "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe.sha256"},
+         {"name":"scout-vault-0.11.4-setup.exe.sig","size":89,
+          "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe.sig"}]},
       {"tag_name":"v0.11.3","draft":false,"html_url":"y",
        "assets":[{"name":"scout-vault-0.11.3-setup.exe","size":1,
           "browser_download_url":"https://evil.example/scout-vault-0.11.3-setup.exe"}]},
@@ -302,6 +348,7 @@ mod tests {
         assert_eq!(newest.notes, "notes");
         assert_eq!(newest.installer.as_ref().unwrap().size, 11663003);
         assert!(newest.installer_sha256.is_some());
+        assert!(newest.installer_sig.is_some());
         // Already on it (or newer): nothing.
         assert!(newer_than(list.clone(), &v("0.11.4")).is_none());
         assert!(newer_than(list, &v("0.12.0")).is_none());
@@ -313,6 +360,32 @@ mod tests {
         let old = list.iter().find(|r| r.version == v("0.11.3")).unwrap();
         assert!(old.installer.is_none());
         assert!(parse_releases("{ not a list }").is_empty());
+    }
+
+    #[test]
+    fn signatures_are_checked_against_the_key() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        use ed25519_dalek::{Signer, SigningKey};
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let public = STANDARD.encode(key.verifying_key().to_bytes());
+        let data = b"installer bytes";
+        let sig = STANDARD.encode(key.sign(data).to_bytes());
+        assert!(signature_ok(data, &sig, &public));
+        assert!(signature_ok(data, &format!("{sig}\n"), &public));
+        // Another file, another key, or garbage: no.
+        assert!(!signature_ok(b"other bytes", &sig, &public));
+        let other = STANDARD.encode(
+            SigningKey::from_bytes(&[8u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        assert!(!signature_ok(data, &sig, &other));
+        assert!(!signature_ok(data, "not base64!", &public));
+        assert!(!signature_ok(data, &STANDARD.encode([0u8; 64]), &public));
+        // The built-in key is a valid Ed25519 public key.
+        let built_in = STANDARD.decode(RELEASE_PUBLIC_KEY).unwrap();
+        assert!(ed25519_dalek::VerifyingKey::from_bytes(&built_in.try_into().unwrap()).is_ok());
     }
 
     #[test]

@@ -6985,7 +6985,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scout-vault-app"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -7012,7 +7012,7 @@ dependencies = [
 
 [[package]]
 name = "scout-vault-core"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm",
@@ -7021,6 +7021,7 @@ dependencies = [
  "cbc 0.2.1",
  "chacha20poly1305",
  "ciborium",
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "hkdf 0.13.0",
  "hmac 0.13.0",

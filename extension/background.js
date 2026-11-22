@@ -70,7 +70,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab && sender.tab.id;
   if (tabId == null || !msg || typeof msg.type !== "string") return;
   if (msg.type === "captured") {
-    captured(tabId, msg);
+    // The address is the one of the frame that sent it, as the browser reports it: a page
+    // (or an embedded frame) can't make the prompt about another site.
+    const from = sender.url || "";
+    if (/^https?:\/\//.test(from)) captured(tabId, { ...msg, url: from });
     return;
   }
   if (msg.type === "pending") {

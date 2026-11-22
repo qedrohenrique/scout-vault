@@ -222,6 +222,101 @@ pub const CHOICES: &[(&str, I)] = &[
     ("rocket", I::Rocket),
 ];
 
+/// Search words for each icon in [`CHOICES`] (Portuguese and English, no accents),
+/// so "jogo" finds the gamepad and "banco" the bank building.
+pub fn keywords(name: &str) -> &'static str {
+    match name {
+        "globe" => "site web internet mundo planeta navegador",
+        "gamepad" => "jogo game controle videogame console steam",
+        "swords" => "jogo game espada luta rpg",
+        "trophy" => "trofeu premio jogo campeonato vitoria",
+        "landmark" => "banco bank governo predio instituicao",
+        "wallet" => "carteira dinheiro money pagamento",
+        "credit-card" => "cartao credito debito pagamento card",
+        "piggy-bank" => "porquinho poupanca economia investimento savings",
+        "bitcoin" => "cripto crypto moeda btc exchange",
+        "shopping-cart" => "compras carrinho loja mercado shop store",
+        "shopping-bag" => "compras sacola loja shop store",
+        "gift" => "presente gift card vale",
+        "mail" => "email e-mail correio mensagem",
+        "message" => "mensagem chat conversa whatsapp telegram",
+        "phone" => "telefone celular ligacao operadora",
+        "smartphone" => "celular telefone app mobile",
+        "laptop" => "notebook computador pc trabalho",
+        "monitor" => "computador tela desktop pc tv",
+        "server" => "servidor hospedagem host vps",
+        "database" => "banco de dados database sql dados",
+        "wifi" => "wi-fi rede internet roteador senha",
+        "cloud" => "nuvem cloud armazenamento backup",
+        "code" => "codigo programacao dev github git",
+        "terminal" => "terminal ssh console linha de comando shell",
+        "briefcase" => "trabalho emprego maleta empresa work",
+        "building" => "empresa escritorio predio company",
+        "graduation" => "faculdade escola estudo universidade curso",
+        "health" => "saude medico hospital plano health",
+        "dumbbell" => "academia gym treino exercicio",
+        "plane" => "viagem aviao voo companhia aerea travel",
+        "car" => "carro uber transporte veiculo",
+        "house" => "casa lar home imovel aluguel",
+        "utensils" => "comida restaurante delivery ifood food",
+        "coffee" => "cafe cafeteria coffee",
+        "music" => "musica spotify som audio",
+        "film" => "filme cinema streaming netflix video",
+        "tv" => "televisao tv streaming serie",
+        "camera" => "camera foto fotografia",
+        "palette" => "arte design desenho cores",
+        "book" => "livro leitura estudo biblioteca",
+        "file" => "arquivo documento texto",
+        "note" => "nota anotacao lembrete",
+        "id-card" => "identidade documento rg cpf cnh",
+        "key" => "chave senha acesso ssh",
+        "lock" => "cadeado seguranca senha bloqueio",
+        "shield" => "escudo seguranca protecao antivirus vpn",
+        "user" => "usuario pessoa conta perfil",
+        "users" => "usuarios pessoas grupo familia equipe time",
+        "star" => "estrela favorito destaque",
+        "sparkles" => "brilho novo especial magia",
+        "zap" => "raio energia rapido luz eletricidade",
+        "rocket" => "foguete lancamento projeto startup",
+        _ => "",
+    }
+}
+
+/// Lowercase, without accents, for searching.
+pub fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
+
+/// Does `query` find this icon? Every word of the query has to appear in its name or
+/// search words (or, for a brand, its name, slug or domains). An empty query finds all.
+pub fn matches(query: &str, haystack: &str) -> bool {
+    let haystack = fold(haystack).replace('-', " ");
+    fold(query)
+        .split_whitespace()
+        .all(|word| haystack.contains(word))
+}
+
+/// The text a Lucide choice is searched by.
+pub fn search_text(name: &str) -> String {
+    format!("{name} {}", keywords(name))
+}
+
+/// The text a brand is searched by.
+pub fn brand_search_text(brand: &Brand) -> String {
+    format!("{} {} {}", brand.name, brand.slug, brand.domains.join(" "))
+}
+
 /// Offered colors: (stored id, name, hue 0–1).
 pub const COLORS: &[(&str, &str, f32)] = &[
     ("red", "Vermelho", 0.0),
@@ -388,6 +483,40 @@ pub fn theme_color(cx: &App) -> Hsla {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn icons_are_found_by_name_and_search_words() {
+        use super::{brand_search_text, matches, search_text, BRANDS, CHOICES};
+        let found = |q: &str| -> Vec<&str> {
+            CHOICES
+                .iter()
+                .filter(|(n, _)| matches(q, &search_text(n)))
+                .map(|(n, _)| *n)
+                .collect()
+        };
+        // Name, Portuguese word, accents and case don't matter.
+        assert!(found("gamepad").contains(&"gamepad"));
+        assert!(found("JOGO").contains(&"gamepad"));
+        assert!(found("cartão").contains(&"credit-card"));
+        assert!(found("credit card").contains(&"credit-card"));
+        // Every word has to match.
+        assert_eq!(found("cartao credito"), ["credit-card"]);
+        assert!(found("zzz").is_empty());
+        // Empty: everything.
+        assert_eq!(found("  ").len(), CHOICES.len());
+        // Brands by name or domain.
+        let github = BRANDS.iter().find(|b| b.slug == "github").unwrap();
+        assert!(matches("git", &brand_search_text(github)));
+        assert!(matches("github.com", &brand_search_text(github)));
+        // Every offered icon has search words.
+        for (name, _) in CHOICES {
+            assert!(
+                !super::keywords(name).is_empty(),
+                "{name} has no search words"
+            );
+        }
+    }
+
     use gpui_kit::AssetSource;
 
     #[test]

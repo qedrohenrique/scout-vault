@@ -119,5 +119,14 @@
   },
   "inlineFillFailed": {
     "message": "Couldn't fill"
+  },
+  "popupCards": {
+    "message": "Cards"
+  },
+  "popupIdentities": {
+    "message": "Identities"
+  },
+  "popupNoWalletForm": {
+    "message": "No card or address fields found on this page."
   }
 }

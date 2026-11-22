@@ -277,7 +277,8 @@ const LIGHT: Neutrals = Neutrals {
     border: "#e6e2da",
     input_border: "#dcd7cd",
     foreground: "#1c1b19",
-    muted: "#77726a",
+    // 4.6:1 or more on every light surface (WCAG AA), hover included.
+    muted: "#6b665e",
     scrollbar: "#b9b3a8",
 };
 

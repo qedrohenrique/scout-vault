@@ -22,6 +22,10 @@ reporter (if they want it) and a security advisory in the repository.
 Only the latest version receives fixes. The project is in test versions (0.x): see the
 notes on the [releases](https://github.com/qedrohenrique/scout-vault/releases).
 
+## Threat model
+
+What is protected, against whom, and the known residual risks: [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+
 ## In scope
 
 - The app (`crates/`): cryptography, local storage of keys and session, communication with the

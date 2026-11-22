@@ -5,7 +5,45 @@ Every change that matters to Scout Vault users. The format follows
 [Semantic Versioning](https://semver.org/). Downloads are on the
 [GitHub Releases](https://github.com/qedrohenrique/scout-vault/releases) page.
 
-## [Unreleased]
+## [0.13.0] - 2026-11-21
+
+### Security
+- **Signed updates**: the release workflow signs the installer and the zip (Ed25519, `.sig` next
+  to each file), and the in-app updater only runs an installer whose signature matches the key
+  built into the app. Releases without a signature are refused by the updater.
+- A written [threat model](docs/THREAT-MODEL.md): what is protected, against whom, and the known
+  residual risks.
+- Browser extension: the "save this login?" prompt uses the address of the frame that sent the
+  login, as the browser reports it, never one the page claims.
+
+### Fixed
+- Accessibility: every icon-only button has an accessible name for screen readers, and the light
+  theme's secondary text is a little darker so it meets WCAG AA (4.5:1) on every surface (a test
+  now checks both themes with every accent).
+- Updating from inside the app is refused while an item is open in the editor or a change is
+  being sent (the app closes during the update and would lose it). If an update started by the
+  app fails or is canceled, the installer opens the version still installed.
+
+### Added
+- **Cards and identities in the browser**: the extension's popup lists them (names, brand and last
+  digits only) and fills checkout and address forms — Portuguese and English labels,
+  `autocomplete` fields, month/year selects or a single "MM/YY" field. The data leaves the app
+  only after the click; items that ask for the master password stay out.
+- **Forms inside iframes**: the in-field menu and login saving work in embedded frames too, each
+  using the frame's own address.
+- **Firefox**: the app registers itself for Firefox's native messaging too, and each release
+  carries store packages of the extension (Chrome Web Store / Edge Add-ons and Firefox).
+- **winget manifests** generated for each release (to submit to microsoft/winget-pkgs), a
+  [privacy policy](docs/PRIVACY.md) and the [store listing texts](docs/STORE-LISTING.md).
+- **Export** (Settings → Data → Export…): saves the personal vault to a password-protected
+  JSON (default; encrypted with a password chosen for the file, opens in Bitwarden too), a
+  plain JSON or a CSV (logins and notes). Asks for the master password first; organization
+  items and the trash stay out, as in Bitwarden.
+- **Import of password-protected exports**: Bitwarden's "password protected" JSON (and Scout
+  Vault's own) now opens after typing the file's password.
+- **Search in the icon pickers** (the item's icon and the sidebar's right-click menu): type a
+  name or a word in Portuguese or English (e.g. "jogo", "banco", "cartão", "github") to filter
+  the icons and brands; accents and case don't matter.
 
 ## [0.12.1] - 2026-11-20
 

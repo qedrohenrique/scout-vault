@@ -40,6 +40,12 @@ pub fn system_enabled() -> bool {
 pub const HOST_NAME: &str = "com.scoutvault.desktop";
 /// Extension ID, derived from the public key in `extension/manifest.json`.
 pub const EXTENSION_ID: &str = "emnfjpfkonpjndbkkhamknedgdljjnoe";
+/// The Firefox extension's id (`browser_specific_settings.gecko.id`, set by
+/// `tools/package_extension.py`).
+pub const FIREFOX_EXTENSION_ID: &str = "scout-vault@qedrohenrique.github.io";
+/// The same extension published in the Chrome Web Store / Edge Add-ons gets an id of
+/// its own from the store: add it here once published, so the bridge accepts it.
+pub const STORE_EXTENSION_IDS: &[&str] = &[];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -63,6 +69,18 @@ pub enum Request {
         url: String,
         username: String,
         password: String,
+    },
+    /// Cards and identities to choose from (names only, no numbers or codes).
+    Wallet,
+    /// A card's data, after the person clicked it.
+    #[serde(rename = "fillcard")]
+    FillCard {
+        id: String,
+    },
+    /// An identity's data, after the person clicked it.
+    #[serde(rename = "fillidentity")]
+    FillIdentity {
+        id: String,
     },
 }
 
@@ -221,6 +239,20 @@ fn login_for<'a>(item: &'a Item, url: &str) -> Option<&'a scout_vault_core::vaul
     }
 }
 
+/// Cards and identities the browser may see: not in the trash, and not asking for
+/// the master password (those stay in the app, like logins).
+fn wallet_item(item: &Item) -> bool {
+    !item.deleted
+        && !item.reprompt
+        && matches!(item.kind, ItemKind::Card(_) | ItemKind::Identity(_))
+}
+
+/// The last four digits, for the list ("•••• 1234").
+fn last_four(number: &str) -> String {
+    let digits: Vec<char> = number.chars().filter(char::is_ascii_digit).collect();
+    digits[digits.len().saturating_sub(4)..].iter().collect()
+}
+
 /// Answers a request. `items` is `None` with the vault locked.
 pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
     let Some(items) = items else {
@@ -271,6 +303,81 @@ pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
         },
         // Saving touches the vault: the app handles it (`ScoutVaultApp::handle_browser`).
         Request::Save { .. } => json!({ "error": t!("browser.unknown_request") }),
+        Request::Wallet => {
+            let mut cards = Vec::new();
+            let mut identities = Vec::new();
+            let mut found: Vec<&Item> = items.iter().filter(|i| wallet_item(i)).collect();
+            found.sort_by(|a, b| {
+                b.favorite
+                    .cmp(&a.favorite)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+            for item in found {
+                match &item.kind {
+                    ItemKind::Card(c) => cards.push(json!({
+                        "id": item.id,
+                        "name": item.name,
+                        "brand": c.brand,
+                        "last4": c.number.as_ref().map(|n| last_four(n.expose())),
+                    })),
+                    ItemKind::Identity(i) => identities.push(json!({
+                        "id": item.id,
+                        "name": item.name,
+                        "detail": i.email.clone().or_else(|| {
+                            let name = [i.first_name.as_deref(), i.last_name.as_deref()]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            (!name.is_empty()).then_some(name)
+                        }),
+                    })),
+                    _ => {}
+                }
+            }
+            json!({ "locked": false, "cards": cards, "identities": identities })
+        }
+        Request::FillCard { id } => match items.iter().find(|i| &i.id == id) {
+            Some(item) if item.reprompt => json!({ "error": t!("browser.reprompt") }),
+            Some(Item {
+                kind: ItemKind::Card(c),
+                deleted: false,
+                ..
+            }) => json!({
+                "cardholderName": c.cardholder_name,
+                "brand": c.brand,
+                "number": c.number.as_ref().map(|n| n.expose()),
+                "expMonth": c.exp_month,
+                "expYear": c.exp_year,
+                "code": c.code.as_ref().map(|n| n.expose()),
+            }),
+            _ => json!({ "error": t!("app.login_not_found") }),
+        },
+        Request::FillIdentity { id } => match items.iter().find(|i| &i.id == id) {
+            Some(item) if item.reprompt => json!({ "error": t!("browser.reprompt") }),
+            Some(Item {
+                kind: ItemKind::Identity(i),
+                deleted: false,
+                ..
+            }) => json!({
+                "title": i.title,
+                "firstName": i.first_name,
+                "middleName": i.middle_name,
+                "lastName": i.last_name,
+                "company": i.company,
+                "email": i.email,
+                "phone": i.phone,
+                "username": i.username,
+                "address1": i.address1,
+                "address2": i.address2,
+                "address3": i.address3,
+                "city": i.city,
+                "state": i.state,
+                "postalCode": i.postal_code,
+                "country": i.country,
+            }),
+            _ => json!({ "error": t!("app.login_not_found") }),
+        },
     }
 }
 
@@ -350,9 +457,11 @@ fn write_message(output: &mut impl Write, value: &Value) -> std::io::Result<()> 
 
 /// Did the browser start `scout-vault.exe` as a bridge? (`chrome-extension://…` in the argument)
 pub fn is_native_host_launch(args: &[String]) -> bool {
+    // Chrome/Edge/Brave pass the extension's origin; Firefox passes the manifest's path
+    // and the extension's id.
     args.iter()
         .skip(1)
-        .any(|a| a.starts_with("chrome-extension://"))
+        .any(|a| a.starts_with("chrome-extension://") || a == FIREFOX_EXTENSION_ID)
 }
 
 /// Bridge loop: forwards each browser message to the app and returns the answer.
@@ -597,14 +706,34 @@ pub fn start_server(tx: std::sync::mpsc::Sender<Incoming>) -> Option<crate::io::
 
 /// Host manifest the browser reads to start the bridge.
 pub fn host_manifest(exe: &std::path::Path) -> Value {
+    let origins: Vec<String> = std::iter::once(EXTENSION_ID)
+        .chain(STORE_EXTENSION_IDS.iter().copied())
+        .map(|id| format!("chrome-extension://{id}/"))
+        .collect();
     json!({
         "name": HOST_NAME,
         "description": "Scout Vault — preencher logins",
         "path": exe.to_string_lossy(),
         "type": "stdio",
-        "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")],
+        "allowed_origins": origins,
     })
 }
+
+/// Firefox's version of the host manifest (it lists extension ids, not origins).
+pub fn firefox_host_manifest(exe: &std::path::Path) -> Value {
+    json!({
+        "name": HOST_NAME,
+        "description": "Scout Vault — preencher logins",
+        "path": exe.to_string_lossy(),
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_EXTENSION_ID],
+    })
+}
+
+/// Where Firefox looks for the host (its manifest is a separate file).
+#[cfg(windows)]
+const FIREFOX_REGISTRY_KEY: &str = r"Software\Mozilla\NativeMessagingHosts\com.scoutvault.desktop";
+const FIREFOX_MANIFEST: &str = "navegador-host-firefox.json";
 
 /// Registry keys (HKCU) where each browser looks for the host.
 #[cfg(windows)]
@@ -630,22 +759,30 @@ pub fn register(manifest_dir: &std::path::Path) -> Result<(), String> {
     let path = manifest_dir.join("navegador-host.json");
     let text = serde_json::to_string_pretty(&host_manifest(&exe)).map_err(|e| e.to_string())?;
     std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    let firefox_path = manifest_dir.join(FIREFOX_MANIFEST);
+    let text =
+        serde_json::to_string_pretty(&firefox_host_manifest(&exe)).map_err(|e| e.to_string())?;
+    std::fs::write(&firefox_path, text).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         use windows::core::HSTRING;
         use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
-        let value: Vec<u16> = path
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
+        let wide = |p: &std::path::Path| -> Vec<u16> {
+            p.to_string_lossy().encode_utf16().chain(Some(0)).collect()
+        };
+        let value = wide(&path);
+        let firefox_value = wide(&firefox_path);
         delete_keys(OLD_REGISTRY_KEYS);
-        for key in REGISTRY_KEYS {
+        let keys = REGISTRY_KEYS
+            .iter()
+            .map(|k| (*k, &value))
+            .chain(std::iter::once((FIREFOX_REGISTRY_KEY, &firefox_value)));
+        for (key, value) in keys {
             // SAFETY: valid strings; the value is a zero-terminated REG_SZ.
             let status = unsafe {
                 RegSetKeyValueW(
                     HKEY_CURRENT_USER,
-                    &HSTRING::from(*key),
+                    &HSTRING::from(key),
                     None,
                     REG_SZ.0,
                     Some(value.as_ptr().cast()),
@@ -676,9 +813,11 @@ fn delete_keys(keys: &[&str]) {
 /// Undoes [`register`].
 pub fn unregister(manifest_dir: &std::path::Path) {
     let _ = std::fs::remove_file(manifest_dir.join("navegador-host.json"));
+    let _ = std::fs::remove_file(manifest_dir.join(FIREFOX_MANIFEST));
     #[cfg(windows)]
     {
         delete_keys(REGISTRY_KEYS);
+        delete_keys(&[FIREFOX_REGISTRY_KEY]);
         delete_keys(OLD_REGISTRY_KEYS);
     }
 }
@@ -942,6 +1081,64 @@ mod tests {
     }
 
     #[test]
+    fn cards_and_identities_list_without_secrets_and_fill_on_request() {
+        use scout_vault_core::vault::{Card, Identity};
+        let mut card = login("card", &[]);
+        card.name = "Visa".into();
+        card.kind = ItemKind::Card(Card {
+            cardholder_name: Some("Ana Souza".into()),
+            brand: Some("Visa".into()),
+            number: Some(Secret::new("4111 1111 1111 1234".into())),
+            exp_month: Some("7".into()),
+            exp_year: Some("2030".into()),
+            code: Some(Secret::new("321".into())),
+        });
+        let mut guarded = card.clone();
+        guarded.id = "guarded".into();
+        guarded.reprompt = true;
+        let mut identity = login("me", &[]);
+        identity.name = "Eu".into();
+        identity.kind = ItemKind::Identity(Box::new(Identity {
+            first_name: Some("Ana".into()),
+            email: Some("ana@example.com".into()),
+            city: Some("Recife".into()),
+            ..Default::default()
+        }));
+        let items = vec![card, guarded, identity, login("a", &["https://github.com"])];
+
+        let wallet = handle(&Request::Wallet, Some(&items));
+        let text = wallet.to_string();
+        // Names and the last digits only: no number, no code, no reprompt card.
+        assert!(!text.contains("4111") && !text.contains("321"));
+        assert!(!text.contains("guarded"));
+        assert_eq!(wallet["cards"][0]["last4"], "1234");
+        assert_eq!(wallet["identities"][0]["detail"], "ana@example.com");
+
+        let filled = handle(&Request::FillCard { id: "card".into() }, Some(&items));
+        assert_eq!(filled["number"], "4111 1111 1111 1234");
+        assert_eq!(filled["code"], "321");
+        let refused = handle(
+            &Request::FillCard {
+                id: "guarded".into(),
+            },
+            Some(&items),
+        );
+        assert!(refused.get("number").is_none());
+        // A login isn't a card.
+        assert!(handle(&Request::FillCard { id: "a".into() }, Some(&items))["error"].is_string());
+        let me = handle(&Request::FillIdentity { id: "me".into() }, Some(&items));
+        assert_eq!(me["city"], "Recife");
+        // Locked: nothing.
+        assert_eq!(handle(&Request::Wallet, None), json!({ "locked": true }));
+        // The wire names the extension uses.
+        let parsed: Request =
+            serde_json::from_value(json!({"type": "fillcard", "id": "x"})).unwrap();
+        assert_eq!(parsed, Request::FillCard { id: "x".into() });
+        let parsed: Request = serde_json::from_value(json!({"type": "wallet"})).unwrap();
+        assert_eq!(parsed, Request::Wallet);
+    }
+
+    #[test]
     fn native_messaging_framing() {
         let mut input = Vec::new();
         for m in [json!({"type": "status"}), json!({"type": "hack"})] {
@@ -970,6 +1167,19 @@ mod tests {
             format!("chrome-extension://{EXTENSION_ID}/")
         ]));
         assert!(!is_native_host_launch(&["scout-vault.exe".into()]));
+        // Firefox: the manifest's path and the extension's id.
+        let ff = firefox_host_manifest(std::path::Path::new(r"C:\Scout Vault\scout-vault.exe"));
+        assert_eq!(ff["allowed_extensions"], json!([FIREFOX_EXTENSION_ID]));
+        assert!(ff.get("allowed_origins").is_none());
+        assert!(is_native_host_launch(&[
+            "scout-vault.exe".into(),
+            r"C:\Users\x\AppData\Roaming\Scout Vault\navegador-host-firefox.json".into(),
+            FIREFOX_EXTENSION_ID.into(),
+        ]));
+        assert!(!is_native_host_launch(&[
+            "scout-vault.exe".into(),
+            "other@extension".into()
+        ]));
     }
 
     #[test]

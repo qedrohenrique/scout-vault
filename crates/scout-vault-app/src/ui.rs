@@ -230,6 +230,7 @@ pub fn entry_screen(
             .ghost()
             .small()
             .icon(IconName::Settings)
+            .accessibility_label(t!("vault.settings_tooltip"))
             .tooltip(t!("vault.settings_tooltip"))
             .on_click(on_settings),
     );

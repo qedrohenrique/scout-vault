@@ -50,6 +50,10 @@ jobs:
       - name: Package
         shell: bash
         run: python tools/package_release.py "${GITHUB_REF_NAME}" --out dist
+      # Store packages of the browser extension (Chrome Web Store / Edge Add-ons and Firefox).
+      - name: Extension packages
+        shell: bash
+        run: python tools/package_extension.py "${GITHUB_REF_NAME}" --out dist
       # Per-user installer (no administrator): Start menu, "Installed apps",
       # start with Windows and clean uninstall. Inno Setup comes from Chocolatey
       # when the runner image doesn't have it.
@@ -67,6 +71,25 @@ jobs:
           $name = "scout-vault-$version-setup.exe"
           $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
           "$hash *$name" | Out-File -Encoding ascii -NoNewline "dist\$name.sha256"
+      # Ed25519 signature of the installer and the zip (`.sig`): the in-app updater only
+      # runs an installer whose signature matches the public key built into the app.
+      # Without the secret the step fails, so nothing is published unsigned.
+      - name: Sign (Ed25519)
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          python -m pip install --disable-pip-version-check --quiet cryptography
+          python tools/sign_release.py dist
+      # winget manifests (submitted by hand to microsoft/winget-pkgs), kept as a workflow artifact.
+      - name: winget manifests
+        shell: bash
+        run: python tools/winget_manifest.py "${GITHUB_REF_NAME}" --out winget
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winget
+          path: winget/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
           name: release
@@ -74,6 +97,7 @@ jobs:
             dist/*.zip
             dist/*.exe
             dist/*.sha256
+            dist/*.sig
             release-notes.md
           if-no-files-found: error
 
@@ -103,4 +127,4 @@ jobs:
             --title "Scout Vault $version" \
             --notes-file release-notes.md \
             "${flags[@]}" \
-            dist/*.exe dist/*.zip dist/*.sha256
+            dist/*.exe dist/*.zip dist/*.sha256 dist/*.sig

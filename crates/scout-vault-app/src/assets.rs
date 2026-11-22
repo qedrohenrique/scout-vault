@@ -46,6 +46,7 @@ gpui_kit::assets::icon_assets!(
         CircleCheck,
         ChevronRight,
         Github,
+        Upload,
         // Icons that can be chosen for an item (item_icons.rs).
         Gamepad2,
         Swords,
@@ -188,6 +189,7 @@ mod tests {
         IconName::CircleCheck,
         IconName::ChevronRight,
         IconName::Github,
+        IconName::Upload,
     ];
 
     /// No icon used in code (`IconName::…`) may be missing from `USED` (and therefore from the binary).

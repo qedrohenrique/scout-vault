@@ -713,6 +713,7 @@ impl Render for QuickSearch {
                         Button::new("quick-search-close")
                             .ghost()
                             .icon(IconName::Close)
+                            .accessibility_label(t!("autotype.cancel_esc"))
                             .tooltip(t!("autotype.cancel_esc"))
                             .on_click(cx.listener(|_, _, window, _| window.remove_window())),
                     ),
@@ -750,6 +751,7 @@ impl Render for QuickSearch {
                         Button::new("quick-search-close")
                             .ghost()
                             .icon(IconName::Close)
+                            .accessibility_label(t!("autotype.cancel_esc"))
                             .tooltip(t!("autotype.cancel_esc"))
                             .on_click(cx.listener(|_, _, window, _| window.remove_window())),
                     )
@@ -893,6 +895,7 @@ impl QuickSearch {
                         Button::new("quick-search-close")
                             .ghost()
                             .icon(IconName::Close)
+                            .accessibility_label(t!("autotype.cancel_esc"))
                             .tooltip(t!("autotype.cancel_esc"))
                             .on_click(cx.listener(|_, _, window, _| window.remove_window())),
                     ),

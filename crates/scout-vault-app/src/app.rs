@@ -8,6 +8,7 @@ use gpui_kit::*;
 
 use crate::appearance::{self, ThemeChoice};
 use crate::autotype::{self, Request, Typer};
+use crate::export_view::{ExportEvent, ExportView};
 use crate::flow::{Handoff, Session, Unlocked};
 use crate::generator_view::{GeneratorEvent, GeneratorView};
 use crate::health_view::{HealthEvent, HealthView};
@@ -53,6 +54,8 @@ pub struct ScoutVaultApp {
     health: Option<(Entity<HealthView>, Subscription)>,
     /// "Import" open (holds a copy of the vault's items: goes away on lock).
     import: Option<(Entity<ImportView>, Subscription)>,
+    /// "Export" open (also holds a copy of the vault's items).
+    export: Option<(Entity<ExportView>, Subscription)>,
     _screen_subscription: Subscription,
     _appearance_subscription: Subscription,
     _idle_task: Task<()>,
@@ -383,6 +386,7 @@ impl ScoutVaultApp {
             generator: None,
             health: None,
             import: None,
+            export: None,
             _screen_subscription: sub,
             _appearance_subscription: appearance_sub,
             _idle_task: idle_task,
@@ -390,6 +394,15 @@ impl ScoutVaultApp {
             toasts: crate::toast::init(cx),
         };
         this.refresh_ssh_keys(cx);
+        // An update closes the app: not while that would lose an edit or a change in flight.
+        let weak = cx.entity().downgrade();
+        crate::updater::set_quit_check(
+            move |cx| {
+                weak.upgrade()
+                    .and_then(|app| app.read(cx).unsafe_to_quit(cx))
+            },
+            cx,
+        );
         this.refresh_hotkey(window, cx);
         this.refresh_browser();
         this.refresh_tray(window, cx);
@@ -400,6 +413,21 @@ impl ScoutVaultApp {
                 .unwrap_or(true)
         });
         this
+    }
+
+    /// Why closing the app now would lose something (`None` = safe to close).
+    pub fn unsafe_to_quit(&self, cx: &App) -> Option<SharedString> {
+        let Screen::Vault(view) = &self.screen else {
+            return None;
+        };
+        let v = view.read(cx);
+        if v.editor().is_some() {
+            Some(t!("update.blocked_editing").into())
+        } else if v.is_syncing() {
+            Some(t!("update.blocked_syncing").into())
+        } else {
+            None
+        }
     }
 
     /// Gives the SSH agent the open vault's keys (none when locked).
@@ -1651,6 +1679,7 @@ impl ScoutVaultApp {
                 }
                 SettingsEvent::Language => this.language_changed(window, cx),
                 SettingsEvent::OpenImport => this.open_import(window, cx),
+                SettingsEvent::OpenExport => this.open_export(window, cx),
             },
         );
         self.settings = Some((view, sub));
@@ -1694,7 +1723,7 @@ impl ScoutVaultApp {
                 ..Default::default()
             }
         };
-        let view = cx.new(|_| ImportView::new(copy));
+        let view = cx.new(|cx| ImportView::new(copy, window, cx));
         let sub = cx.subscribe_in(
             &view,
             window,
@@ -1711,6 +1740,54 @@ impl ScoutVaultApp {
         );
         self.import = Some((view, sub));
         cx.notify();
+    }
+
+    pub fn export_view(&self) -> Option<&Entity<ExportView>> {
+        self.export.as_ref().map(|(v, _)| v)
+    }
+
+    /// Opens "Export" (needs the vault open; the master password is asked there).
+    pub fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Vault(vault) = &self.screen else {
+            crate::toast::error(t!("export.needs_vault"), cx);
+            return;
+        };
+        if self.export.is_some() {
+            return;
+        }
+        self.settings = None;
+        self.generator = None;
+        self.health = None;
+        self.profile = None;
+        self.import = None;
+        let (copy, session) = {
+            let v = vault.read(cx);
+            let open = v.list().read(cx).delegate().vault();
+            (
+                scout_vault_core::vault::Vault {
+                    folders: open.folders.clone(),
+                    items: open.items.clone(),
+                    ..Default::default()
+                },
+                v.session().clone(),
+            )
+        };
+        let view = cx.new(|cx| ExportView::new(copy, session, window, cx));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ExportEvent, _, cx| match event {
+                ExportEvent::Close => this.close_export(cx),
+            },
+        );
+        self.export = Some((view, sub));
+        cx.notify();
+    }
+
+    pub fn close_export(&mut self, cx: &mut Context<Self>) {
+        if self.export.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub fn close_import(&mut self, cx: &mut Context<Self>) {
@@ -1902,6 +1979,8 @@ impl ScoutVaultApp {
             self.close_health(cx);
         } else if k.key == "escape" && self.import.is_some() {
             self.close_import(cx);
+        } else if k.key == "escape" && self.export.is_some() {
+            self.close_export(cx);
         } else if k.key == "escape" && self.profile.is_some() {
             let profile = self.profile_view().unwrap().clone();
             if profile.read(cx).cropping() {
@@ -2005,6 +2084,7 @@ impl ScoutVaultApp {
         // (including the copy the fill list had and the health screen's).
         self.health = None;
         self.import = None;
+        self.export = None;
         self.profile = None;
         self.screen = screen;
         self._screen_subscription = sub;
@@ -2340,6 +2420,7 @@ impl Render for ScoutVaultApp {
             _ if self.generator.is_some() => self.generator_view().unwrap().clone().into(),
             _ if self.health.is_some() => self.health_view().unwrap().clone().into(),
             _ if self.import.is_some() => self.import_view().unwrap().clone().into(),
+            _ if self.export.is_some() => self.export_view().unwrap().clone().into(),
             _ if self.profile.is_some() => self.profile_view().unwrap().clone().into(),
             (Some((v, _)), _) => v.clone().into(),
             (None, Screen::Login(v)) => v.clone().into(),
@@ -2357,6 +2438,7 @@ impl Render for ScoutVaultApp {
                     || self.health.is_some()
                     || self.profile.is_some()
                     || self.import.is_some()
+                    || self.export.is_some()
             ),
             (None, Screen::Vault(_), false)
         );

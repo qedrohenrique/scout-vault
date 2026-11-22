@@ -119,5 +119,14 @@
   },
   "inlineFillFailed": {
     "message": "Não deu para preencher"
+  },
+  "popupCards": {
+    "message": "Cartões"
+  },
+  "popupIdentities": {
+    "message": "Identidades"
+  },
+  "popupNoWalletForm": {
+    "message": "Não achei campos de cartão ou endereço nesta página."
   }
 }

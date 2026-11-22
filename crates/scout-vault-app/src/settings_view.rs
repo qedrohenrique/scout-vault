@@ -26,6 +26,8 @@ pub enum SettingsEvent {
     RecordingShortcut(bool),
     /// "Import…": the app opens the import screen.
     OpenImport,
+    /// "Export…": the app opens the export screen.
+    OpenExport,
 }
 
 /// Which global shortcut.
@@ -601,6 +603,7 @@ impl SettingsView {
                             .ghost()
                             .small()
                             .icon(IconName::Undo2)
+                            .accessibility_label(t!("shortcuts.reset"))
                             .tooltip(t!("shortcuts.reset"))
                             .disabled(current.to_storage() == default)
                             .on_click(
@@ -1342,17 +1345,30 @@ impl Render for SettingsView {
         };
         let data_group = Self::group(
             t!("settings.group_data"),
-            vec![Self::row(
-                t!("settings.import"),
-                t!("settings.import_desc"),
-                Button::new("settings-import")
-                    .outline()
-                    .small()
-                    .icon(IconName::Download)
-                    .label(t!("settings.import_button"))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::OpenImport))),
-                cx,
-            )],
+            vec![
+                Self::row(
+                    t!("settings.import"),
+                    t!("settings.import_desc"),
+                    Button::new("settings-import")
+                        .outline()
+                        .small()
+                        .icon(IconName::Download)
+                        .label(t!("settings.import_button"))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::OpenImport))),
+                    cx,
+                ),
+                Self::row(
+                    t!("settings.export"),
+                    t!("settings.export_desc"),
+                    Button::new("settings-export")
+                        .outline()
+                        .small()
+                        .icon(IconName::Upload)
+                        .label(t!("settings.export_button"))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::OpenExport))),
+                    cx,
+                ),
+            ],
             cx,
         );
         let unlock_control = self.number_choice(

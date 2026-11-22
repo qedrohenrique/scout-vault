@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::*;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::*;
 use gpui_kit::prelude::*;
@@ -40,6 +41,12 @@ struct Loaded {
     duplicate: Vec<bool>,
 }
 
+/// A password-protected export waiting for its password.
+struct Locked {
+    file_name: String,
+    text: zeroize::Zeroizing<String>,
+}
+
 pub struct ImportView {
     /// The vault's folders (decrypted names), to reuse them.
     folders: Vec<Folder>,
@@ -49,13 +56,18 @@ pub struct ImportView {
     error: Option<SharedString>,
     reading: bool,
     skip_duplicates: bool,
+    locked: Option<Locked>,
+    password: Entity<InputState>,
+    _password_sub: Subscription,
 }
 
 impl EventEmitter<ImportEvent> for ImportView {}
 
 fn describe(e: &ImportError) -> SharedString {
     match e {
-        ImportError::Encrypted => t!("import.encrypted").into(),
+        ImportError::NeedsPassword => t!("import.needs_password").into(),
+        ImportError::WrongPassword => t!("import.wrong_password").into(),
+        ImportError::AccountEncrypted => t!("import.encrypted").into(),
         ImportError::Unknown => t!("import.unknown").into(),
         ImportError::Invalid(why) => t!("import.invalid", e = why).into(),
     }
@@ -73,7 +85,17 @@ fn read_file(path: &Path) -> Result<String, SharedString> {
 }
 
 impl ImportView {
-    pub fn new(vault: Vault) -> Self {
+    pub fn new(vault: Vault, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(t!("import.password_placeholder"))
+        });
+        let _password_sub = cx.subscribe(&password, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.unlock(cx);
+            }
+        });
         Self {
             folders: vault.folders.clone(),
             vault,
@@ -81,7 +103,59 @@ impl ImportView {
             error: None,
             reading: false,
             skip_duplicates: true,
+            locked: None,
+            password,
+            _password_sub,
         }
+    }
+
+    /// A protected export is waiting for its password.
+    pub fn needs_password(&self) -> bool {
+        self.locked.is_some()
+    }
+
+    fn show(&mut self, file_name: String, parsed: Parsed) {
+        let duplicate = parsed
+            .items
+            .iter()
+            .map(|i| import::already_in(&self.vault, &i.item))
+            .collect();
+        self.locked = None;
+        self.loaded = Some(Loaded {
+            file_name,
+            parsed,
+            duplicate,
+        });
+    }
+
+    /// Opens the protected export with the password typed.
+    pub fn unlock(&mut self, cx: &mut Context<Self>) {
+        let Some(locked) = &self.locked else { return };
+        if self.reading {
+            return;
+        }
+        let password = zeroize::Zeroizing::new(self.password.read(cx).value().to_string());
+        let text = locked.text.clone();
+        let file_name = locked.file_name.clone();
+        self.reading = true;
+        self.error = None;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            import::parse_with_password(&text, &password).map_err(|e| describe(&e))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.reading = false;
+                match result {
+                    Ok(parsed) => this.show(file_name, parsed),
+                    Err(e) => this.error = Some(e),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Reads and checks an export (in the background: big files take a moment).
@@ -94,25 +168,25 @@ impl ImportView {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let task = cx.background_spawn(async move {
-            let text = read_file(&path)?;
-            import::parse(&text).map_err(|e| describe(&e))
+            let text = zeroize::Zeroizing::new(read_file(&path)?);
+            let parsed = import::parse(&text);
+            Ok::<_, SharedString>((text, parsed))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.reading = false;
+                this.locked = None;
                 match result {
-                    Ok(parsed) => {
-                        let duplicate = parsed
-                            .items
-                            .iter()
-                            .map(|i| import::already_in(&this.vault, &i.item))
-                            .collect();
-                        this.loaded = Some(Loaded {
-                            file_name,
-                            parsed,
-                            duplicate,
-                        });
+                    Ok((_, Ok(parsed))) => this.show(file_name, parsed),
+                    // Protected: keep the file in memory and ask for its password.
+                    Ok((text, Err(ImportError::NeedsPassword))) => {
+                        this.loaded = None;
+                        this.locked = Some(Locked { file_name, text });
+                    }
+                    Ok((_, Err(e))) => {
+                        this.loaded = None;
+                        this.error = Some(describe(&e));
                     }
                     Err(e) => {
                         this.loaded = None;
@@ -413,8 +487,57 @@ impl Render for ImportView {
                     ),
             );
         let busy = self.reading;
-        let body: AnyElement = match &self.loaded {
-            Some(l) if !busy => self.summary(l, cx).into_any_element(),
+        let body: AnyElement = match (&self.loaded, &self.locked) {
+            (Some(l), _) if !busy => self.summary(l, cx).into_any_element(),
+            (None, Some(locked)) => v_flex()
+                .gap_3()
+                .p_5()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .child(ui::icon_chip(IconName::LockKeyhole, px(36.), true, cx))
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .font_semibold()
+                                        .truncate()
+                                        .child(locked.file_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(t!("import.needs_password")),
+                                ),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div().flex_1().child(
+                                Input::new(&self.password)
+                                    .id("import-password")
+                                    .mask_toggle()
+                                    .disabled(busy),
+                            ),
+                        )
+                        .child(
+                            Button::new("import-unlock")
+                                .primary()
+                                .icon(IconName::LockOpen)
+                                .label(t!("import.unlock"))
+                                .loading(busy)
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.unlock(cx))),
+                        ),
+                )
+                .into_any_element(),
             _ => ui::drop_zone(
                 "import-zone",
                 busy,

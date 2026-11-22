@@ -489,6 +489,11 @@ pub struct VaultView {
     sidebar_icons: std::collections::HashMap<String, crate::item_icons::CustomIcon>,
     /// The sidebar entry whose icon menu is open.
     sidebar_icon_menu: Option<String>,
+    /// Search box of the icon pickers (the item's and the sidebar's).
+    icon_search: Entity<InputState>,
+    /// A picker just opened: the next draw empties the search and focuses it.
+    icon_search_reset: bool,
+    _icon_search_sub: Subscription,
     /// Attachment being downloaded right now.
     downloading: Option<String>,
     /// Temporary copies opened with another program; deleted on lock.
@@ -567,6 +572,13 @@ impl VaultView {
                 break;
             }
         });
+        let icon_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("icons.search_placeholder")));
+        let _icon_search_sub = cx.subscribe(&icon_search, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         let icon_color = cx.new(|cx| ColorPickerState::new(window, cx));
         let _icon_color_sub = cx.subscribe(&icon_color, |this, _, event: &ColorPickerEvent, cx| {
             let ColorPickerEvent::Change(Some(color)) = event else {
@@ -591,6 +603,9 @@ impl VaultView {
             collapsed: HashSet::new(),
             sidebar_icons: Default::default(),
             sidebar_icon_menu: None,
+            icon_search,
+            icon_search_reset: false,
+            _icon_search_sub,
             sync_feedback: None,
             new_folder: None,
             pinned: Vec::new(),
@@ -1174,6 +1189,7 @@ impl VaultView {
             Some(open) if open == entry => None,
             _ => Some(entry.to_owned()),
         };
+        self.icon_search_reset = self.sidebar_icon_menu.is_some();
         cx.notify();
     }
 
@@ -1298,8 +1314,13 @@ impl VaultView {
         );
         let accent = appearance::accent(cx);
         let current = self.sidebar_icons.get(entry).cloned().unwrap_or_default();
+        let query = self.icon_search.read(cx).value().to_string();
+        let mut shown = 0;
         let mut grid = h_flex().flex_wrap().gap_0p5();
-        for (name, icon) in crate::item_icons::CHOICES {
+        for (name, icon) in crate::item_icons::CHOICES.iter().filter(|(name, _)| {
+            crate::item_icons::matches(&query, &crate::item_icons::search_text(name))
+        }) {
+            shown += 1;
             let chosen = current.icon == *name;
             let entry_id = entry.to_owned();
             grid = grid.child(
@@ -1358,6 +1379,22 @@ impl VaultView {
                 .border_color(border)
                 .bg(bg)
                 .shadow_md()
+                .child(
+                    Input::new(&self.icon_search)
+                        .id("sidebar-icon-search")
+                        .small()
+                        .prefix(Icon::new(IconName::Search).small()),
+                )
+                .when(shown == 0, |el| {
+                    el.child(
+                        div()
+                            .id("sidebar-icon-search-empty")
+                            .test_support()
+                            .text_xs()
+                            .text_color(theme_fg(cx).opacity(0.6))
+                            .child(t!("icons.no_match", q = query.trim())),
+                    )
+                })
                 .child(grid)
                 .child(colors)
                 .child(
@@ -1605,6 +1642,7 @@ impl VaultView {
             self.icon_picker = true;
             self.icon_picker_closing = false;
             self.icon_picker_anim += 1;
+            self.icon_search_reset = true;
             cx.notify();
         }
     }
@@ -1699,10 +1737,14 @@ impl VaultView {
         let current_color = current.as_ref().and_then(|c| c.color.clone());
         let tint = crate::item_icons::color_for(item, cx).unwrap_or(accent);
 
+        let query = self.icon_search.read(cx).value().to_string();
         // (stored name, element id, icon, label)
         let lucide: Vec<(String, String, crate::item_icons::ItemIcon, String)> =
             crate::item_icons::CHOICES
                 .iter()
+                .filter(|(name, _)| {
+                    crate::item_icons::matches(&query, &crate::item_icons::search_text(name))
+                })
                 .map(|(name, icon)| {
                     (
                         (*name).to_owned(),
@@ -1715,6 +1757,9 @@ impl VaultView {
         let brands: Vec<(String, String, crate::item_icons::ItemIcon, String)> =
             crate::item_icons::BRANDS
                 .iter()
+                .filter(|b| {
+                    crate::item_icons::matches(&query, &crate::item_icons::brand_search_text(b))
+                })
                 .map(|b| {
                     (
                         crate::item_icons::brand_choice_name(b.slug),
@@ -1724,6 +1769,7 @@ impl VaultView {
                     )
                 })
                 .collect();
+        let (no_icons, no_brands) = (lucide.is_empty(), brands.is_empty());
         let mut grids = Vec::new();
         for entries in [lucide, brands] {
             let mut grid = h_flex().flex_wrap().gap_1p5();
@@ -1880,6 +1926,7 @@ impl VaultView {
                                     .ghost()
                                     .small()
                                     .icon(IconName::Close)
+                                    .accessibility_label(t!("common.close"))
                                     .tooltip(t!("common.close"))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.toggle_icon_picker(cx)),
@@ -1888,15 +1935,33 @@ impl VaultView {
                     ),
             )
             .child(colors)
-            .child(grid)
             .child(
-                div()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(muted)
-                    .child(t!("icons.brands")),
+                Input::new(&self.icon_search)
+                    .id("icon-search")
+                    .small()
+                    .prefix(Icon::new(IconName::Search).small()),
             )
-            .child(brands_grid)
+            .when(no_icons && no_brands, |el| {
+                el.child(
+                    div()
+                        .id("icon-search-empty")
+                        .test_support()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(t!("icons.no_match", q = query.trim())),
+                )
+            })
+            .when(!no_icons, |el| el.child(grid))
+            .when(!no_brands, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(muted)
+                        .child(t!("icons.brands")),
+                )
+                .child(brands_grid)
+            })
             // Measures the panel, so the next animation knows how tall it is.
             .child(
                 canvas(
@@ -2270,6 +2335,7 @@ impl VaultView {
                         .ghost()
                         .small()
                         .icon(IconName::ExternalLink)
+                        .accessibility_label(t!("common.open"))
                         .tooltip(t!("common.open"))
                         .disabled(busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -2281,6 +2347,7 @@ impl VaultView {
                         .ghost()
                         .small()
                         .icon(IconName::Download)
+                        .accessibility_label(t!("vault.save_as"))
                         .tooltip(t!("vault.save_as"))
                         .disabled(busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -2924,6 +2991,7 @@ impl VaultView {
                         .ghost()
                         .xsmall()
                         .icon(IconName::Plus)
+                        .accessibility_label(t!("vault.new_folder"))
                         .tooltip(t!("vault.new_folder"))
                         .disabled(self.syncing)
                         .on_click(
@@ -2949,6 +3017,7 @@ impl VaultView {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Check)
+                            .accessibility_label(t!("vault.create_enter"))
                             .tooltip(t!("vault.create_enter"))
                             .disabled(self.syncing)
                             .on_click(cx.listener(|this, _, _, cx| this.save_new_folder(cx))),
@@ -2958,6 +3027,7 @@ impl VaultView {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
+                            .accessibility_label(t!("common.cancel"))
                             .tooltip(t!("common.cancel"))
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_folder_edit(cx))),
                     ),
@@ -3103,6 +3173,7 @@ impl VaultView {
                     .small()
                     .icon(IconName::Download)
                     .text_color(appearance::accent(cx))
+                    .accessibility_label(t!("update.available", v = v))
                     .tooltip(t!("update.available", v = v))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings)))
             }))
@@ -3111,6 +3182,7 @@ impl VaultView {
                     .ghost()
                     .small()
                     .icon(IconName::ShieldCheck)
+                    .accessibility_label(t!("vault.health_tooltip"))
                     .tooltip(t!("vault.health_tooltip"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenHealth))),
             )
@@ -3119,6 +3191,7 @@ impl VaultView {
                     .ghost()
                     .small()
                     .icon(IconName::Dices)
+                    .accessibility_label(t!("vault.generator_tooltip"))
                     .tooltip(t!("vault.generator_tooltip"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenGenerator))),
             )
@@ -3127,6 +3200,7 @@ impl VaultView {
                     .ghost()
                     .small()
                     .icon(IconName::Settings)
+                    .accessibility_label(t!("vault.settings_tooltip"))
                     .tooltip(t!("vault.settings_tooltip"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(VaultEvent::OpenSettings))),
             )
@@ -3135,6 +3209,7 @@ impl VaultView {
                     .ghost()
                     .small()
                     .icon(IconName::Lock)
+                    .accessibility_label(t!("vault.lock_tooltip"))
                     .tooltip(t!("vault.lock_tooltip"))
                     .on_click(cx.listener(|this, _, _, cx| this.request_lock(cx))),
             )
@@ -3175,6 +3250,7 @@ impl VaultView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Check)
+                                    .accessibility_label(t!("vault.save_enter"))
                                     .tooltip(t!("vault.save_enter"))
                                     .disabled(self.syncing)
                                     .on_click(
@@ -3186,6 +3262,7 @@ impl VaultView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Close)
+                                    .accessibility_label(t!("common.cancel"))
                                     .tooltip(t!("common.cancel"))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.cancel_folder_edit(cx)),
@@ -3210,6 +3287,7 @@ impl VaultView {
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Pencil)
+                                    .accessibility_label(t!("vault.rename_folder"))
                                     .tooltip(t!("vault.rename_folder"))
                                     .disabled(self.syncing)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -3247,6 +3325,7 @@ impl VaultView {
                             .ghost()
                             .small()
                             .icon(IconName::Plus)
+                            .accessibility_label(t!("vault.new_item_tooltip"))
                             .tooltip(t!("vault.new_item_tooltip"))
                             .disabled(self.syncing)
                             .on_click(cx.listener(|this, _, window, cx| this.new_item(window, cx))),
@@ -3469,6 +3548,11 @@ impl VaultView {
                         } else {
                             IconName::Pin
                         })
+                        .accessibility_label(if pinned {
+                            t!("vault.unpin")
+                        } else {
+                            t!("vault.pin")
+                        })
                         .tooltip(if pinned {
                             t!("vault.unpin")
                         } else {
@@ -3493,6 +3577,7 @@ impl VaultView {
                         .ghost()
                         .small()
                         .icon(IconName::Trash)
+                        .accessibility_label(t!("vault.move_to_trash"))
                         .tooltip(t!("vault.move_to_trash"))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| this.trash_selected(cx))),
@@ -3711,6 +3796,11 @@ impl VaultView {
                             } else {
                                 IconName::Eye
                             })
+                            .accessibility_label(if revealed {
+                                t!("vault.hide")
+                            } else {
+                                t!("vault.show")
+                            })
                             .tooltip(if revealed {
                                 t!("vault.hide")
                             } else {
@@ -3735,6 +3825,7 @@ impl VaultView {
                         } else {
                             IconName::Copy
                         })
+                        .accessibility_label(t!("common.copy"))
                         .tooltip(t!("common.copy"))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.copy_field(&copy_key, window, cx)
@@ -3792,6 +3883,13 @@ impl VaultView {
 
 impl Render for VaultView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // An icon picker just opened: empty search, ready to type.
+        if std::mem::take(&mut self.icon_search_reset) {
+            self.icon_search.update(cx, |s, cx| {
+                s.set_value("", window, cx);
+                s.focus(window, cx);
+            });
+        }
         if let Some(filter) = self.pending_filter.take() {
             self.set_filter(filter, window, cx);
         }

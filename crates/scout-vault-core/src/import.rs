@@ -8,7 +8,8 @@
 //! - **Browser CSV** (Chrome, Edge, Brave, Opera, Firefox, Safari) and other CSVs with
 //!   the usual columns (`name`/`title`, `url`, `username`, `password`, `notes`, `otpauth`).
 //!
-//! Password-protected exports aren't read yet ([`ImportError::Encrypted`]).
+//! Password-protected Bitwarden exports are read with [`parse_with_password`]; exports
+//! encrypted with the account's own key ([`ImportError::AccountEncrypted`]) aren't yet.
 
 use std::collections::HashMap;
 
@@ -72,8 +73,14 @@ pub struct Parsed {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ImportError {
+    /// A password-protected export: [`parse_with_password`] opens it.
     #[error("the export is protected by a password")]
-    Encrypted,
+    NeedsPassword,
+    #[error("wrong password for this export")]
+    WrongPassword,
+    /// Encrypted with the Bitwarden account's key (not with a password).
+    #[error("the export is encrypted with an account key")]
+    AccountEncrypted,
     #[error("unknown file format")]
     Unknown,
     #[error("the file is damaged: {0}")]
@@ -119,10 +126,55 @@ fn secret(s: &str) -> Option<Secret> {
 // ---------------------------------------------------------------------------
 // Bitwarden JSON
 
+/// Like [`parse`], opening a password-protected Bitwarden export with `password`
+/// (other files don't need it and are read as usual).
+pub fn parse_with_password(text: &str, password: &str) -> Result<Parsed, ImportError> {
+    let text = text.trim_start_matches('\u{feff}');
+    let Ok(v) = serde_json::from_str::<Value>(text) else {
+        return parse(text);
+    };
+    if v["passwordProtected"].as_bool() != Some(true) {
+        return parse(text);
+    }
+    let get = |k: &str| {
+        v[k].as_str()
+            .ok_or_else(|| ImportError::Invalid(format!("missing {k}")))
+    };
+    let kdf = match v["kdfType"].as_u64() {
+        Some(0) | None => crate::Kdf::Pbkdf2Sha256 {
+            iterations: v["kdfIterations"].as_u64().unwrap_or(600_000) as u32,
+        },
+        Some(1) => crate::Kdf::Argon2id {
+            iterations: v["kdfIterations"].as_u64().unwrap_or(3) as u32,
+            memory_mib: v["kdfMemory"].as_u64().unwrap_or(64) as u32,
+            parallelism: v["kdfParallelism"].as_u64().unwrap_or(4) as u32,
+        },
+        Some(n) => return Err(ImportError::Invalid(format!("KDF {n}"))),
+    };
+    let key = crate::export::file_key(password, get("salt")?, kdf)
+        .map_err(|e| ImportError::Invalid(e.to_string()))?;
+    let enc = |k: &str| -> Result<crate::EncString, ImportError> {
+        get(k)?
+            .parse()
+            .map_err(|_| ImportError::Invalid(format!("bad {k}")))
+    };
+    // The validation string first: a wrong password fails there, cheaply.
+    key.decrypt(&enc("encKeyValidation_DO_NOT_EDIT")?)
+        .map_err(|_| ImportError::WrongPassword)?;
+    let data = key
+        .decrypt_str(&enc("data")?)
+        .map_err(|_| ImportError::WrongPassword)?;
+    parse(data.expose())
+}
+
 fn parse_bitwarden_json(text: &str) -> Result<Parsed, ImportError> {
     let v: Value = serde_json::from_str(text).map_err(|e| ImportError::Invalid(e.to_string()))?;
     if v["encrypted"].as_bool() == Some(true) {
-        return Err(ImportError::Encrypted);
+        return Err(if v["passwordProtected"].as_bool() == Some(true) {
+            ImportError::NeedsPassword
+        } else {
+            ImportError::AccountEncrypted
+        });
     }
     let Some(list) = v["items"].as_array() else {
         return Err(ImportError::Unknown);
@@ -611,7 +663,11 @@ mod tests {
     fn protected_and_unknown_files_are_refused() {
         assert_eq!(
             parse(r#"{"encrypted":true,"passwordProtected":true,"data":"2.x"}"#).err(),
-            Some(ImportError::Encrypted)
+            Some(ImportError::NeedsPassword)
+        );
+        assert_eq!(
+            parse(r#"{"encrypted":true,"encKeyValidation_DO_NOT_EDIT":"2.x","items":[]}"#).err(),
+            Some(ImportError::AccountEncrypted)
         );
         assert_eq!(parse("hello world").err(), Some(ImportError::Unknown));
         assert_eq!(parse("a,b\n1,2").err(), Some(ImportError::Unknown));

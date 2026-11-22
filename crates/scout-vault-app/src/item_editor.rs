@@ -1147,6 +1147,7 @@ impl ItemEditor {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
+                            .accessibility_label(t!("editor.remove_from_list"))
                             .tooltip(t!("editor.remove_from_list"))
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1236,6 +1237,7 @@ impl ItemEditor {
                     .ghost()
                     .small()
                     .icon(IconName::Dices)
+                    .accessibility_label(t!("editor.generate_password"))
                     .tooltip(t!("editor.generate_password"))
                     .disabled(busy)
                     .on_click(
@@ -1580,6 +1582,7 @@ impl Render for ItemEditor {
                                     .ghost()
                                     .small()
                                     .icon(IconName::Close)
+                                    .accessibility_label(t!("editor.remove_uri"))
                                     .tooltip(t!("editor.remove_uri"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if ix < this.uris.len() {
@@ -1633,6 +1636,7 @@ impl Render for ItemEditor {
                             .ghost()
                             .small()
                             .icon(IconName::Close)
+                            .accessibility_label(t!("editor.remove_field"))
                             .tooltip(t!("editor.remove_field"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if ix < this.fields.len() {

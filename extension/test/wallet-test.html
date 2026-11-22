@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scout Vault — card and identity filling test</title>
+    <style>
+      body { font: 14px system-ui; margin: 24px; }
+      form { border: 1px solid #ccc; padding: 12px; margin-bottom: 16px; display: grid; gap: 6px; max-width: 420px; }
+      #result { white-space: pre; font-family: monospace; }
+    </style>
+  </head>
+  <body>
+    <!-- Portuguese labels, no autocomplete, month/year as selects -->
+    <form id="checkout-pt">
+      <label>Número do cartão <input id="num" /></label>
+      <label>Nome impresso no cartão <input id="titular" /></label>
+      <label>Mês
+        <select id="mes"><option value="">--</option><option>01</option><option>07</option><option>12</option></select>
+      </label>
+      <label>Ano
+        <select id="ano"><option value="">--</option><option>29</option><option>30</option></select>
+      </label>
+      <label>CVV <input id="cvv" /></label>
+    </form>
+    <!-- autocomplete tokens, combined expiry -->
+    <form id="checkout-en">
+      <input autocomplete="cc-number" id="n2" />
+      <input autocomplete="cc-name" id="h2" />
+      <input autocomplete="cc-exp" id="e2" placeholder="MM/YY" />
+      <input autocomplete="cc-csc" id="c2" />
+    </form>
+    <!-- Brazilian address form -->
+    <form id="address">
+      <label>Nome <input id="nome" /></label>
+      <label>Sobrenome <input id="sobrenome" /></label>
+      <label>E-mail <input id="email" type="email" /></label>
+      <label>Celular <input id="cel" type="tel" /></label>
+      <label>CEP <input id="cep" /></label>
+      <label>Endereço <input id="rua" /></label>
+      <label>Cidade <input id="cidade" /></label>
+      <label>Estado <input id="uf" /></label>
+    </form>
+    <div id="result"></div>
+    <script src="../fill.js"></script>
+    <script>
+      const card = {
+        cardholderName: "Ana Souza", brand: "Visa", number: "4111 1111 1111 1234",
+        expMonth: "7", expYear: "2030", code: "321",
+      };
+      const identity = {
+        firstName: "Ana", lastName: "Souza", email: "ana@example.com", phone: "81 99999-0000",
+        postalCode: "50000-000", address1: "Rua do Sol, 10", city: "Recife", state: "PE",
+      };
+      const filledCard = scoutVaultFillWallet("card", card);
+      const filledIdentity = scoutVaultFillWallet("identity", identity);
+      const v = (id) => document.getElementById(id).value;
+      const result = {
+        filledCard, filledIdentity,
+        pt: [v("num"), v("titular"), v("mes"), v("ano"), v("cvv")],
+        en: [v("n2"), v("h2"), v("e2"), v("c2")],
+        address: [v("nome"), v("sobrenome"), v("email"), v("cel"), v("cep"), v("rua"), v("cidade"), v("uf")],
+      };
+      document.getElementById("result").textContent = JSON.stringify(result, null, 2);
+    </script>
+  </body>
+</html>

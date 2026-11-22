@@ -65,10 +65,16 @@ impl MasterKey {
     /// Derives the master key. **Slow on purpose** (hundreds of ms to seconds):
     /// call it off the UI thread.
     pub fn derive(password: &str, email: &str, kdf: Kdf) -> Result<Self, CryptoError> {
+        Self::derive_with_salt(password, &email.trim().to_lowercase(), kdf)
+    }
+
+    /// Like [`Self::derive`], with any salt taken as is (password-protected exports use a
+    /// random one, case included).
+    pub fn derive_with_salt(password: &str, salt: &str, kdf: Kdf) -> Result<Self, CryptoError> {
         // Also covers a KDF read from a saved session, not just the prelogin one.
         kdf.validate()
             .map_err(|e| CryptoError::Kdf(e.to_string()))?;
-        let email = email.trim().to_lowercase();
+        let email = salt;
         let mut out = Zeroizing::new([0u8; 32]);
 
         match kdf {

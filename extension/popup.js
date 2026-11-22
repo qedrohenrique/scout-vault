@@ -71,6 +71,7 @@ async function main() {
     show(explain(response));
     return;
   }
+  wallet(tab);
   if (!response.items.length) {
     show(tr("popupNoLogins"));
     return;
@@ -95,6 +96,62 @@ async function main() {
     list.append(li);
   }
   list.querySelector("button").focus();
+}
+
+// A list entry: name and a detail line.
+function entry(name, detail, onClick) {
+  const li = document.createElement("li");
+  const button = document.createElement("button");
+  const title = document.createElement("span");
+  title.className = "name";
+  title.textContent = name;
+  button.append(title);
+  if (detail) {
+    const sub = document.createElement("span");
+    sub.className = "user";
+    sub.textContent = detail;
+    button.append(sub);
+  }
+  button.addEventListener("click", onClick);
+  li.append(button);
+  return li;
+}
+
+// Cards and identities: the app sends names only; the data comes after a click.
+async function fillWallet(tab, kind, id) {
+  const data = await ask({ type: kind === "card" ? "fillcard" : "fillidentity", id });
+  if (data.error || data.locked) {
+    show(explain(data));
+    return;
+  }
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: scoutVaultFillWallet,
+    args: [kind, data],
+  });
+  if (result && result.result > 0) {
+    window.close();
+  } else {
+    show(tr("popupNoWalletForm"));
+  }
+}
+
+async function wallet(tab) {
+  const response = await ask({ type: "wallet" });
+  if (response.error || response.locked) return;
+  const cards = response.cards || [];
+  const identities = response.identities || [];
+  if (!cards.length && !identities.length) return;
+  $("#wallet").hidden = false;
+  $("#cards-title").hidden = !cards.length;
+  $("#identities-title").hidden = !identities.length;
+  for (const c of cards) {
+    const detail = [c.brand, c.last4 ? `•••• ${c.last4}` : ""].filter(Boolean).join(" ");
+    $("#cards").append(entry(c.name, detail, () => fillWallet(tab, "card", c.id)));
+  }
+  for (const i of identities) {
+    $("#identities").append(entry(i.name, i.detail, () => fillWallet(tab, "identity", i.id)));
+  }
 }
 
 // Inline menu switch (inline.js): on by default.

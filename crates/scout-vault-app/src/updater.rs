@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui_kit::{App, Global};
+use gpui_kit::{App, Global, SharedString};
 use scout_vault_core::update::{self, Release, Version};
 
 /// Downloads only happen in the real app (the UI tests stay offline).
@@ -116,11 +116,32 @@ pub fn check(quiet: bool, cx: &mut App) {
     .detach();
 }
 
+/// Says why the app can't close right now (unsaved edit, a change being sent…).
+type QuitCheck = Box<dyn Fn(&App) -> Option<SharedString>>;
+
+struct Guard(QuitCheck);
+
+impl Global for Guard {}
+
+/// Who answers "can the app close now?" before an update closes it.
+pub fn set_quit_check(check: impl Fn(&App) -> Option<SharedString> + 'static, cx: &mut App) {
+    cx.set_global(Guard(Box::new(check)));
+}
+
+fn blocked(cx: &App) -> Option<SharedString> {
+    cx.try_global::<Guard>().and_then(|g| (g.0)(cx))
+}
+
 /// Updates to the version found: installer (installed app) or the release page (zip).
+/// Refused while closing would lose something (an item being edited, a change being sent).
 pub fn install(cx: &mut App) {
     let State::Available(release) = state(cx) else {
         return;
     };
+    if let Some(reason) = blocked(cx) {
+        crate::toast::error(reason, cx);
+        return;
+    }
     if !is_installed() {
         if let Err(e) = crate::sso::open_browser(&release.page) {
             crate::toast::error(e, cx);
@@ -138,22 +159,34 @@ pub fn install(cx: &mut App) {
             Ok::<_, update::UpdateError>(path)
         })
         .await;
-        let started = cx.update(|cx| match result.map(|path| run_installer(&path)) {
-            Ok(Ok(())) => {
-                set_state(State::Installing(version), cx);
-                true
-            }
-            Ok(Err(e)) => {
-                set_state(State::Failed(t!("update.run_failed", e = e)), cx);
-                false
-            }
-            Err(update::UpdateError::Checksum) => {
-                set_state(State::Failed(t!("update.checksum_failed").into()), cx);
-                false
-            }
-            Err(e) => {
-                set_state(State::Failed(t!("update.download_failed", e = e)), cx);
-                false
+        let started = cx.update(|cx| {
+            match result.map(|path| {
+                // Checked again: the person may have started editing during the download.
+                match blocked(cx) {
+                    Some(reason) => Err(reason.to_string()),
+                    None => run_installer(&path),
+                }
+            }) {
+                Ok(Ok(())) => {
+                    set_state(State::Installing(version), cx);
+                    true
+                }
+                Ok(Err(e)) => {
+                    set_state(State::Failed(t!("update.run_failed", e = e)), cx);
+                    false
+                }
+                Err(update::UpdateError::Signature) => {
+                    set_state(State::Failed(t!("update.signature_failed").into()), cx);
+                    false
+                }
+                Err(update::UpdateError::Checksum) => {
+                    set_state(State::Failed(t!("update.checksum_failed").into()), cx);
+                    false
+                }
+                Err(e) => {
+                    set_state(State::Failed(t!("update.download_failed", e = e)), cx);
+                    false
+                }
             }
         });
         // The app closes itself (the installer's `--quit` only reaches it when the tray

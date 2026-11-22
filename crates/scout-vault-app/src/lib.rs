@@ -26,6 +26,7 @@ pub mod browser;
 pub mod clipboard;
 pub mod colors;
 pub mod dnd;
+pub mod export_view;
 pub mod flow;
 pub mod generator_view;
 pub mod health_view;

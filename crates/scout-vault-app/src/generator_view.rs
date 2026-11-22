@@ -695,6 +695,7 @@ impl Render for GeneratorView {
                             .ghost()
                             .small()
                             .icon(IconName::RefreshCw)
+                            .accessibility_label(t!("generator.again"))
                             .tooltip(t!("generator.again"))
                             .on_click(cx.listener(|this, _, _, cx| this.regenerate(cx))),
                     )
