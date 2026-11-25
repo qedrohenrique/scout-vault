@@ -950,6 +950,47 @@ fn confirm_autotype_hud(cx: &mut TestAppContext, app: &Entity<ScoutVaultApp>) {
         .unwrap();
 }
 
+/// An attachment whose name (chosen by whoever attached it, maybe someone else in a shared
+/// organization) is a program, script or shortcut is never opened — not even fetched.
+#[gpui_kit::test]
+fn executable_attachments_are_not_opened(cx: &mut TestAppContext) {
+    use scout_vault_core::vault::{Attachment, Item, ItemKind};
+    let mut unlocked = unlocked_fixture();
+    unlocked.vault.items.push(Item {
+        id: "item-anexo".into(),
+        organization_id: None,
+        folder_id: None,
+        name: "Contrato".into(),
+        notes: None,
+        favorite: false,
+        reprompt: false,
+        deleted: false,
+        revision_date: None,
+        // Shows as "contratoexe.pdf"; really "contratofdp.exe".
+        attachments: vec![Attachment {
+            id: "att-exe".into(),
+            file_name: "contrato\u{202E}fdp.exe".into(),
+            size: Some(1),
+        }],
+        collection_ids: Vec::new(),
+        fields: Vec::new(),
+        kind: ItemKind::SecureNote,
+    });
+    let (handle, app) = open_app(cx, Some(unlocked));
+    let vault = cx.update(|cx| app.read(cx).vault_view().cloned().unwrap());
+    cx.update_window(handle, |_, window, cx| {
+        vault.update(cx, |v, cx| v.select_item("item-anexo", window, cx));
+        vault.update(cx, |v, cx| v.open_attachment("att-exe".into(), cx));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let texts = cx.update(|cx| app.read(cx).toasts().read(cx).texts());
+    assert!(
+        texts.iter().any(|t| t.contains("contratofdp.exe") && t.contains("não abre")),
+        "{texts:?}"
+    );
+}
+
 #[gpui_kit::test]
 fn autotype_confirms_even_the_only_matching_login(cx: &mut TestAppContext) {
     cx.executor().allow_parking();

@@ -618,6 +618,7 @@
   "update.whats_new": "What's new",
   "vault.all_items": "All items",
   "vault.attach_prompt": "Attach",
+  "vault.attachment_blocked": "For safety, Scout Vault won't open “{name}”: it is a program, script or shortcut. If you trust the file, use Save as.",
   "vault.attachment_not_sent": "Attachment not uploaded — {w}",
   "vault.attachment_removed": "Attachment removed.",
   "vault.attachments": "ATTACHMENTS",

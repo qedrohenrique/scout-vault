@@ -618,6 +618,7 @@
   "update.whats_new": "Novidades",
   "vault.all_items": "Todos os itens",
   "vault.attach_prompt": "Anexar",
+  "vault.attachment_blocked": "Por segurança, o Scout Vault não abre “{name}”: é um programa, script ou atalho. Se você confia no arquivo, use Salvar como.",
   "vault.attachment_not_sent": "Anexo não enviado — {w}",
   "vault.attachment_removed": "Anexo removido.",
   "vault.attachments": "ANEXOS",

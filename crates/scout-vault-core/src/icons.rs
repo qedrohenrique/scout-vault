@@ -140,8 +140,14 @@ mod tests {
 
     #[test]
     fn only_addresses_with_a_scheme_get_an_icon() {
-        assert_eq!(site_host("https://www.GitHub.com/login").as_deref(), Some("github.com"));
-        assert_eq!(site_host(" http://banco.example.com:8443/x ").as_deref(), Some("banco.example.com"));
+        assert_eq!(
+            site_host("https://www.GitHub.com/login").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            site_host(" http://banco.example.com:8443/x ").as_deref(),
+            Some("banco.example.com")
+        );
         // A password moved into the URI field by a malicious server: never asked for.
         for text in [
             "Verao.2024",

@@ -2245,17 +2245,51 @@ impl VaultView {
 
     /// Opens the attachment with the default program (temporary copy, deleted on lock).
     pub fn open_attachment(&mut self, attachment_id: String, cx: &mut Context<Self>) {
+        // Whoever attached it chose the name: never run a program, script or shortcut
+        // by "opening" it. "Save as…" is still there for someone who trusts the file.
+        let name = self.selected.as_ref().and_then(|i| {
+            i.attachments
+                .iter()
+                .find(|a| a.id == attachment_id)
+                .map(|a| a.file_name.clone())
+        });
+        if name
+            .as_deref()
+            .is_some_and(crate::attachments::is_dangerous)
+        {
+            crate::toast::error(
+                t!(
+                    "vault.attachment_blocked",
+                    name = crate::attachments::safe_name(name.as_deref().unwrap_or_default())
+                ),
+                cx,
+            );
+            return;
+        }
         self.fetch_attachment(
             attachment_id,
-            |this, name, bytes, cx| match crate::attachments::write_temp(&name, &bytes) {
-                Ok(path) => {
-                    if crate::attachments::system_open_enabled() {
-                        cx.open_with_system(&path);
-                    }
-                    this.temp_files.push(path);
-                    crate::toast::success(t!("vault.file_opened", name = name), cx);
+            |this, name, bytes, cx| {
+                // The decrypted name is checked again (the list's could differ).
+                if crate::attachments::is_dangerous(&name) {
+                    crate::toast::error(
+                        t!(
+                            "vault.attachment_blocked",
+                            name = crate::attachments::safe_name(&name)
+                        ),
+                        cx,
+                    );
+                    return;
                 }
-                Err(e) => crate::toast::error(t!("vault.open_failed", e = e), cx),
+                match crate::attachments::write_temp(&name, &bytes) {
+                    Ok(path) => {
+                        if crate::attachments::system_open_enabled() {
+                            cx.open_with_system(&path);
+                        }
+                        this.temp_files.push(path);
+                        crate::toast::success(t!("vault.file_opened", name = name), cx);
+                    }
+                    Err(e) => crate::toast::error(t!("vault.open_failed", e = e), cx),
+                }
             },
             cx,
         );
@@ -2274,6 +2308,9 @@ impl VaultView {
                         _ => return,
                     };
                     let result = std::fs::write(&path, &bytes[..]);
+                    if result.is_ok() {
+                        crate::attachments::mark_of_the_web(&path);
+                    }
                     this.update(cx, |_, cx| match result {
                         Ok(()) => {
                             crate::toast::success(t!("vault.saved_to", path = path.display()), cx)
