@@ -29,6 +29,24 @@ pub fn service_url(urls: &ServerUrls) -> String {
     }
 }
 
+/// The site whose icon a saved address shows, or `None`.
+///
+/// Only addresses that **say** `http://` or `https://` and parse as a real URL count.
+/// The server can move encrypted fields around inside an item (the format doesn't bind
+/// a value to its field), so a "URI" may really be the password: guessing a scheme for
+/// text like `Verao.2024` would send it to the icon service. With the scheme required,
+/// such text is never asked for.
+pub fn site_host(uri: &str) -> Option<String> {
+    let url = reqwest::Url::parse(uri.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    // IPs (and IPv6's `[…]`) are turned down by `is_fetchable_host`.
+    let host = url.host_str()?.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_owned();
+    is_fetchable_host(&host).then_some(host)
+}
+
 /// A domain that is worth asking for: `example.com`, not `localhost`, an IP or garbage.
 pub fn is_fetchable_host(host: &str) -> bool {
     host.len() <= 253
@@ -119,6 +137,26 @@ pub fn is_usable(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_addresses_with_a_scheme_get_an_icon() {
+        assert_eq!(site_host("https://www.GitHub.com/login").as_deref(), Some("github.com"));
+        assert_eq!(site_host(" http://banco.example.com:8443/x ").as_deref(), Some("banco.example.com"));
+        // A password moved into the URI field by a malicious server: never asked for.
+        for text in [
+            "Verao.2024",
+            "minha.senha.secreta",
+            "github.com",
+            "user@banco.example.com",
+            "androidapp://com.example",
+            "ftp://files.example.com",
+            "https://192.168.0.1/",
+            "https://[::1]/",
+            "https://localhost/",
+        ] {
+            assert_eq!(site_host(text), None, "{text}");
+        }
+    }
 
     #[test]
     fn service_follows_the_server() {

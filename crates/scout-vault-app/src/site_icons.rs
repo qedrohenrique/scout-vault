@@ -56,16 +56,14 @@ pub fn enabled(cx: &App) -> bool {
     cx.try_global::<SiteIcons>().is_none_or(|s| s.enabled)
 }
 
-/// Domain whose icon the item would show, if it has one worth asking for.
+/// Domain whose icon the item would show, if it has one worth asking for. Only saved
+/// addresses with an explicit `http(s)://` count ([`icons::site_host`]): text without a
+/// scheme might be a secret the server moved into the URI field.
 pub fn host_of_item(item: &Item) -> Option<String> {
     let ItemKind::Login(login) = &item.kind else {
         return None;
     };
-    login
-        .uris
-        .iter()
-        .filter_map(|u| crate::browser::host_of(u))
-        .find(|h| icons::is_fetchable_host(h))
+    login.uris.iter().find_map(|u| icons::site_host(u))
 }
 
 /// Icon already downloaded for `host`.
