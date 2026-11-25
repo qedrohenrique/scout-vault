@@ -17,6 +17,19 @@ Every change that matters to Scout Vault users. The format follows
   environment, that compiles and installs nothing; the build job no longer sees it. All GitHub
   Actions are pinned to commit SHAs.
 - `url` updated to 2.5.9 (RUSTSEC-2026-0592).
+- **Auto-type always asks first**: `Ctrl+Alt+A` opens the HUD even when a single login matches,
+  names the program it will type into, and warns in web browsers, where the window title is the
+  page's `<title>` and a phishing page can pretend to be any site.
+- **Attachments**: programs, scripts, shortcuts and macro documents are never opened (use
+  "Save as" if you trust them); invisible direction characters are removed from file names; the
+  copies get the Mark-of-the-Web, so SmartScreen and Office's Protected View treat them as
+  downloaded.
+- **Website icons** are only asked for addresses that start with `http://` or `https://`, so a
+  compromised server can't make the app send it a password moved into the address field.
+- **Browser channel**: requests for passwords, cards and identities are limited (12 a minute)
+  and the app warns when the limit trips; requests from the browser no longer keep the vault
+  from locking by itself.
+- The [threat model](docs/THREAT-MODEL.md) now says plainly what malware running as you can do.
 
 ## [0.13.0] - 2026-11-21
 
