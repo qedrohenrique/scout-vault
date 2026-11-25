@@ -5,7 +5,7 @@ Every change that matters to Scout Vault users. The format follows
 [Semantic Versioning](https://semver.org/). Downloads are on the
 [GitHub Releases](https://github.com/qedrohenrique/scout-vault/releases) page.
 
-## [Unreleased]
+## [0.14.0] - 2026-11-25
 
 ### Security
 - **Updates can't be downgraded**: the release signature (`.release.sig`) now covers the file's
