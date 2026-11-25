@@ -466,6 +466,5 @@ published.
 
 ## Roadmap
 See [docs/ROADMAP.md](docs/ROADMAP.md), which includes a comparison with Bitwarden, 1Password,
-KeePassXC and Proton Pass, and the **road to 1.0**: an external security review, code signing
-(with signed updates), validation on the official Bitwarden cloud, the extension in the browser
-stores and a beta with a frozen scope.
+KeePassXC and Proton Pass, and the **road to 1.0**: a security review, with signed updates
+already in place.

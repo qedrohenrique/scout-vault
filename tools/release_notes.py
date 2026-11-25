@@ -66,7 +66,10 @@ def notes(version: str) -> str:
     cargo = cargo_version()
     if cargo != version:
         sys.exit(f"The tag is {version}, but Cargo.toml is at {cargo}. Fix one of them.")
-    return "\n".join([HEADER, changelog_section(version), "", FOOTER.format(version=version)])
+    # The "test version" notice is for 0.x and pre-releases (`1.1.0-rc.1`), not 1.0 on.
+    test = version.startswith("0.") or "-" in version
+    parts = [HEADER] if test else []
+    return "\n".join([*parts, changelog_section(version), "", FOOTER.format(version=version)])
 
 
 def main() -> None:
