@@ -925,21 +925,67 @@ fn request(title: &str) -> scout_vault_app::autotype::Request {
     scout_vault_app::autotype::Request {
         window: 42,
         title: title.into(),
+        program: "notepad.exe".into(),
         own_window: false,
     }
 }
 
+/// Auto-type always asks first: waits for the HUD and confirms the suggested login (Enter).
+fn confirm_autotype_hud(cx: &mut TestAppContext, app: &Entity<ScoutVaultApp>) {
+    // The typing HUD (the one naming the target), not the unlock/login one.
+    wait_until(cx, |cx| {
+        let Some((popup, _)) = cx.update(|cx| app.read(cx).quick_search()) else {
+            return false;
+        };
+        popup
+            .update(cx, |_, window, cx| {
+                window.render_frame(cx);
+                window.try_find("quick-search-target").is_some()
+            })
+            .unwrap_or(false)
+    });
+    let (popup, _) = cx.update(|cx| app.read(cx).quick_search()).unwrap();
+    popup
+        .update(cx, |_, window, cx| window.press("enter", cx))
+        .unwrap();
+}
+
 #[gpui_kit::test]
-fn autotype_types_the_only_matching_login(cx: &mut TestAppContext) {
+fn autotype_confirms_even_the_only_matching_login(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (handle, app) = open_app(cx, Some(unlocked_fixture()));
     let typed = fake_typer(&app, cx);
+    // The title is the page's `<title>` in a browser: a phishing page can claim to be
+    // the bank. A single match still opens the HUD, naming the program, and types nothing
+    // until the person confirms.
+    let mut browser = request("Entrar — banco.example.com — Firefox");
+    browser.program = "firefox.exe".into();
     cx.update_window(handle, |_, window, cx| {
-        app.update(cx, |app, cx| {
-            app.handle_autotype(request("Entrar — banco.example.com — Firefox"), window, cx)
-        })
+        app.update(cx, |app, cx| app.handle_autotype(browser, window, cx))
     })
     .unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|cx| app.read(cx).quick_search().is_some())
+    });
+    cx.run_until_parked();
+    assert!(
+        typed.lock().unwrap().is_empty(),
+        "nothing typed before Enter"
+    );
+    let (popup, _) = cx.update(|cx| app.read(cx).quick_search()).unwrap();
+    popup
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            let target = window
+                .find("quick-search-target")
+                .label()
+                .unwrap()
+                .to_owned();
+            assert!(target.contains("firefox.exe"), "{target}");
+            assert!(window.try_find("quick-search-browser-warning").is_some());
+        })
+        .unwrap();
+    confirm_autotype_hud(cx, &app);
     wait_until(cx, |_| !typed.lock().unwrap().is_empty());
     assert_eq!(
         typed.lock().unwrap()[0],
@@ -1062,7 +1108,8 @@ fn autotype_waits_for_unlock_and_ignores_own_window(cx: &mut TestAppContext) {
         window.click("unlock-submit", cx);
     })
     .unwrap();
-    // On unlock, the stored request is handled.
+    // On unlock, the stored request is handled (and confirmed in the HUD).
+    confirm_autotype_hud(cx, &app);
     wait_until(cx, |_| !typed.lock().unwrap().is_empty());
     assert_eq!(typed.lock().unwrap().len(), 1);
     assert_eq!(typed.lock().unwrap()[0].1[0], "pessoa");
@@ -1105,6 +1152,7 @@ fn autotype_can_be_turned_off_and_skip_enter(cx: &mut TestAppContext) {
         })
     })
     .unwrap();
+    confirm_autotype_hud(cx, &app);
     wait_until(cx, |_| !typed.lock().unwrap().is_empty());
     assert_eq!(typed.lock().unwrap()[0].1.last().unwrap(), "s3nh@-ção");
 
@@ -5288,6 +5336,7 @@ fn autotype_asks_before_typing_where_it_cant_check_the_field(cx: &mut TestAppCon
         })
     })
     .unwrap();
+    confirm_autotype_hud(cx, &app);
     wait_until(cx, |cx| {
         cx.update(|cx| {
             app.read(cx)
@@ -5332,6 +5381,7 @@ fn autotype_asks_before_typing_where_it_cant_check_the_field(cx: &mut TestAppCon
         })
     })
     .unwrap();
+    confirm_autotype_hud(cx, &app);
     wait_until(cx, |cx| {
         cx.update(|cx| {
             app.read(cx).quick_search().is_some_and(|(_, q)| {

@@ -166,6 +166,9 @@ pub struct QuickSearch {
     can_fill: bool,
     /// Title of the target app.
     target: String,
+    /// Executable of the target window (auto-type), shown so the person can tell
+    /// where the password will go; empty if unknown.
+    program: String,
     /// Opened by the auto-type shortcut (Ctrl+Alt+A): a HUD with only the
     /// search, the logins and a close button; Enter types into the target app.
     autotype: bool,
@@ -324,13 +327,21 @@ impl QuickSearch {
     pub fn autotype(
         items: Vec<QuickItem>,
         target: String,
+        program: String,
         suggested: Vec<String>,
         tx: UnboundedSender<Command>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let items = items.into_iter().filter(|i| i.typeable).collect();
-        Self::build(items, Some(target), true, suggested, tx, window, cx)
+        let mut this = Self::build(items, Some(target), true, suggested, tx, window, cx);
+        this.program = program;
+        this
+    }
+
+    /// The program auto-type would type into (empty if unknown).
+    pub fn target_program(&self) -> &str {
+        &self.program
     }
 
     fn build(
@@ -365,6 +376,7 @@ impl QuickSearch {
             query,
             can_fill: target.is_some(),
             target: target.unwrap_or_default(),
+            program: String::new(),
             autotype,
             suggested,
             locked: None,
@@ -732,12 +744,56 @@ impl Render for QuickSearch {
             .bg(popover.opacity(opacity(cx)))
             .text_color(fg)
             .overflow_hidden()
+            .when(self.autotype, |el| {
+                // Where the password will go: the program (which a site can't fake)
+                // and the title (which it can). In a browser, say so.
+                let program = if self.program.is_empty() {
+                    "?".to_owned()
+                } else {
+                    self.program.clone()
+                };
+                let line: SharedString = t!(
+                    "autotype.target",
+                    program = program,
+                    title = self.target.trim()
+                )
+                .into();
+                let browser = crate::autotype::is_browser(&self.program);
+                el.child(
+                    v_flex()
+                        .px_4()
+                        .pt_3()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id("quick-search-target")
+                                .test_support()
+                                .aria_label(line.clone())
+                                .text_xs()
+                                .text_color(muted)
+                                .truncate()
+                                .child(line),
+                        )
+                        .when(browser, |el| {
+                            el.child(
+                                div()
+                                    .id("quick-search-browser-warning")
+                                    .test_support()
+                                    .aria_label(SharedString::from(t!("autotype.browser_warning")))
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .whitespace_normal()
+                                    .child(t!("autotype.browser_warning")),
+                            )
+                        }),
+                )
+            })
             .child(if self.autotype {
                 // HUD: only the search and the close button.
                 h_flex()
                     .gap_2()
                     .px_3()
-                    .pt_3()
+                    .pt_2()
                     .pb_2()
                     .child(
                         div().flex_1().child(

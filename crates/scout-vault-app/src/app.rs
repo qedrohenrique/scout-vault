@@ -1272,9 +1272,12 @@ impl ScoutVaultApp {
             return;
         };
         let target = request.title.clone();
+        let program = request.program.clone();
         self.quick_target = Some(request);
         self.open_quick_window(crate::quick_search::HEIGHT, cx, move |tx, window, cx| {
-            crate::quick_search::QuickSearch::autotype(items, target, suggested, tx, window, cx)
+            crate::quick_search::QuickSearch::autotype(
+                items, target, program, suggested, tx, window, cx,
+            )
         });
     }
 
@@ -1556,12 +1559,10 @@ impl ScoutVaultApp {
             .vault()
             .items
             .clone();
+        // Always confirm in the HUD, even with a single candidate: the window title is
+        // chosen by whoever made the window (a site's `<title>` in a browser), so it
+        // only suggests — the person checks the target program and presses Enter.
         let found = autotype::candidates(&items, &request.title);
-        if let [only] = found.as_slice() {
-            let item = (*only).clone();
-            self.type_item(&item, request, window, cx);
-            return;
-        }
         let suggested = found.iter().map(|i| i.id.clone()).collect();
         self.open_autotype_hud(request, suggested, cx);
     }

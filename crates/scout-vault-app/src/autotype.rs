@@ -1,9 +1,11 @@
 //! Filling in Windows apps ("auto-type").
 //!
-//! With the vault open, `Ctrl+Alt+A` in any window makes Scout Vault pick the
-//! login by the window title and **type** `username ⇥ password ↵` into it — like
-//! KeePass. If there is more than one candidate (or none), Scout Vault shows up with the
-//! list to choose from. Nothing goes through the clipboard.
+//! With the vault open, `Ctrl+Alt+A` in any window makes Scout Vault suggest the
+//! login by the window title and, once the person confirms it (Enter), **type**
+//! `username ⇥ password ↵` into it — like KeePass. The HUD always asks, even with a
+//! single candidate, and names the target program: a window title is chosen by
+//! whoever made the window (in a browser, by the site), so it can't decide alone where
+//! a password goes. Nothing goes through the clipboard.
 //!
 //! Security: before each typed part, we check that the focused window is
 //! still the target; if it changed, we stop without typing the rest. Before
@@ -23,6 +25,9 @@ pub struct Request {
     /// `HWND` of the target window (as a number, to cross threads).
     pub window: isize,
     pub title: String,
+    /// The target window's executable, file name only (`chrome.exe`); empty if
+    /// Windows won't say.
+    pub program: String,
     /// The focused window was Scout Vault itself.
     pub own_window: bool,
 }
@@ -92,6 +97,27 @@ pub fn sequence(item: &Item, press_enter: bool) -> Vec<Key> {
         keys.push(Key::Enter);
     }
     keys
+}
+
+/// Web browsers: there the window title is the page's `<title>`, which any site
+/// chooses — the extension, which sees the real address, is the safe way to fill.
+const BROWSERS: &[&str] = &[
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "vivaldi.exe",
+    "arc.exe",
+    "librewolf.exe",
+    "waterfox.exe",
+    "iexplore.exe",
+];
+
+/// The target program is a web browser.
+pub fn is_browser(program: &str) -> bool {
+    let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+    BROWSERS.iter().any(|b| name.eq_ignore_ascii_case(b))
 }
 
 /// Can be typed: a login outside the trash, with a username or password.
@@ -283,6 +309,38 @@ mod platform {
         String::from_utf16_lossy(&buf[..n.max(0) as usize])
     }
 
+    /// File name of the window's executable (`chrome.exe`), or empty.
+    fn program_of(hwnd: HWND) -> String {
+        use windows::core::PWSTR;
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let mut pid = 0u32;
+        // SAFETY: pointer to a local variable; the process handle is closed.
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return String::new();
+            };
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(
+                process,
+                PROCESS_NAME_WIN32,
+                PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            );
+            let _ = CloseHandle(process);
+            if ok.is_err() {
+                return String::new();
+            }
+            let path = String::from_utf16_lossy(&buf[..len as usize]);
+            path.rsplit('\\').next().unwrap_or_default().to_owned()
+        }
+    }
+
     fn is_own(hwnd: HWND) -> bool {
         let mut pid = 0u32;
         // SAFETY: pointer to a local variable.
@@ -329,6 +387,7 @@ mod platform {
                         let request = Request {
                             window: hwnd.0 as isize,
                             title: title_of(hwnd),
+                            program: program_of(hwnd),
                             own_window: is_own(hwnd),
                         };
                         if tx.send(request).is_err() {
