@@ -986,7 +986,9 @@ fn executable_attachments_are_not_opened(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let texts = cx.update(|cx| app.read(cx).toasts().read(cx).texts());
     assert!(
-        texts.iter().any(|t| t.contains("contratofdp.exe") && t.contains("não abre")),
+        texts
+            .iter()
+            .any(|t| t.contains("contratofdp.exe") && t.contains("não abre")),
         "{texts:?}"
     );
 }

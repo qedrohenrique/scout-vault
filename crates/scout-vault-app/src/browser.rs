@@ -253,6 +253,68 @@ fn last_four(number: &str) -> String {
     digits[digits.len().saturating_sub(4)..].iter().collect()
 }
 
+/// Requests that hand out (or test) a secret, per minute. A person fills a few logins a
+/// minute at most; a script dumping the vault through the pipe asks for hundreds.
+pub const SECRETS_PER_MINUTE: usize = 12;
+/// Lists (logins of a site, cards and identities), per minute: the popup and the inline
+/// menu ask on every page with a login form.
+pub const LOOKUPS_PER_MINUTE: usize = 120;
+
+/// Rate limits on the local pipe.
+///
+/// The pipe only accepts the current Windows user, but it can't tell the browser
+/// extension from another program running as that user (see THREAT-MODEL, *Residual
+/// risks*). The limits don't stop such a program; they make a silent dump of the whole
+/// vault slow, and the app warns when they trip.
+#[derive(Debug, Default)]
+pub struct Limits {
+    secrets: std::collections::VecDeque<std::time::Instant>,
+    lookups: std::collections::VecDeque<std::time::Instant>,
+    warned_at: Option<std::time::Instant>,
+}
+
+/// What the limiter decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Allow,
+    /// Refused; `warn` the first time in a minute.
+    Refuse {
+        warn: bool,
+    },
+}
+
+impl Limits {
+    pub fn check(&mut self, request: &Request, now: std::time::Instant) -> Verdict {
+        let minute = std::time::Duration::from_secs(60);
+        let (queue, max) = match request {
+            Request::Fill { .. }
+            | Request::FillCard { .. }
+            | Request::FillIdentity { .. }
+            | Request::Check { .. }
+            | Request::Save { .. } => (&mut self.secrets, SECRETS_PER_MINUTE),
+            Request::List { .. } | Request::Wallet => (&mut self.lookups, LOOKUPS_PER_MINUTE),
+            Request::Status => return Verdict::Allow,
+        };
+        while queue
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= minute)
+        {
+            queue.pop_front();
+        }
+        if queue.len() < max {
+            queue.push_back(now);
+            return Verdict::Allow;
+        }
+        let warn = self
+            .warned_at
+            .is_none_or(|t| now.duration_since(t) >= minute);
+        if warn {
+            self.warned_at = Some(now);
+        }
+        Verdict::Refuse { warn }
+    }
+}
+
 /// Answers a request. `items` is `None` with the vault locked.
 pub fn handle(request: &Request, items: Option<&[Item]>) -> Value {
     let Some(items) = items else {
@@ -862,6 +924,42 @@ mod tests {
                 uris: uris.iter().map(|u| u.to_string()).collect(),
             }),
         }
+    }
+
+    #[test]
+    fn the_pipe_is_rate_limited() {
+        use std::time::{Duration, Instant};
+        let mut limits = Limits::default();
+        let t0 = Instant::now();
+        let fill = Request::Fill {
+            id: "a".into(),
+            url: "https://github.com".into(),
+        };
+        let card = Request::FillCard { id: "c".into() };
+        let list = Request::List {
+            url: "https://github.com".into(),
+        };
+        // Secrets share one budget (fill, cards, the "check" oracle…).
+        for i in 0..SECRETS_PER_MINUTE {
+            let r = if i % 2 == 0 { &fill } else { &card };
+            assert_eq!(limits.check(r, t0), Verdict::Allow);
+        }
+        assert_eq!(limits.check(&fill, t0), Verdict::Refuse { warn: true });
+        // Warned once a minute, not on every refusal.
+        assert_eq!(limits.check(&card, t0), Verdict::Refuse { warn: false });
+        // Lists have their own (bigger) budget; status is never limited.
+        assert_eq!(limits.check(&list, t0), Verdict::Allow);
+        assert_eq!(limits.check(&Request::Status, t0), Verdict::Allow);
+        // A minute later, there is room again.
+        let later = t0 + Duration::from_secs(61);
+        assert_eq!(limits.check(&fill, later), Verdict::Allow);
+        for _ in 0..LOOKUPS_PER_MINUTE {
+            limits.check(&list, later);
+        }
+        assert!(matches!(
+            limits.check(&Request::Wallet, later),
+            Verdict::Refuse { .. }
+        ));
     }
 
     #[test]

@@ -12,6 +12,7 @@
   "app.autotype_own_window": "Open the app you want to sign in to and press {hotkey} there.",
   "app.autotype_reprompt": "This item asks for your vault password. Confirm it and it will be typed.",
   "app.browser_disabled": "Browser filling is turned off in Scout Vault.",
+  "app.browser_too_many": "Too many password requests through the browser channel in a short time. Refused for a minute. If it wasn't you, lock the vault and check the programs running.",
   "app.hello_enabled": "Windows Hello is on",
   "app.hello_next_unlock": "Windows Hello will turn on the next time you unlock with your vault password.",
   "app.hello_not_ready": "Windows Hello isn't ready. Use your vault password.",

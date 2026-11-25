@@ -29,16 +29,30 @@ implements it.
    an ACL for the current user only and refuse remote clients (`browser::server`, `ssh_agent`).
    Credential Manager entries belong to the Windows user.
 3. **Other programs running as the same user, without admin rights** (malware the person ran, a
-   malicious browser extension). Partially: see *Residual risks*. What we do:
-   - The browser bridge only starts for the registered extension id, and passwords only go to a
-     tab whose site matches the item's address, after the person clicks (`browser`).
+   malicious browser extension). **Only partially, and mostly not:** such a program can read the
+   app's memory while it is unlocked, and it can talk to the local pipes like a legitimate
+   client. The protections below raise the cost or make it visible; they are not a boundary.
+   See *Residual risks*. What we do:
+   - **Browser pipe.** The browser only starts the bridge for the registered extension id, and
+     the *extension* only fills a tab whose site matches the item's address, after the person
+     clicks. But the pipe can't tell the extension from another program of the same user: such
+     a program can ask for the logins of any site it names, and for cards (with the security
+     code) and identities, without a click. The app limits requests that hand out a secret to
+     12 a minute (lists to 120) and warns when the limit trips, and a request through the pipe
+     never postpones the idle lock (`browser::Limits`, `app::handle_browser`).
    - The SSH agent asks before every signature, naming the program by its **full path** and its
-     parent; keys whose item asks for the master password need it for each signature; it refuses
-     to add, remove or export keys (`ssh_agent`, `core::ssh_agent`).
-   - Auto-type checks before every part that the focused window is still the target and, before
-     the password, that the focused field **is a password field** (UI Automation) (`autotype`).
+     parent ("Remember" is per path, for 10 minutes); keys whose item asks for the master
+     password need it for each signature; it refuses to add, remove or export keys
+     (`ssh_agent`, `core::ssh_agent`). A program of the same user can still click "Allow"
+     itself (synthetic input); Windows Hello confirmation is the stronger option.
+   - **Auto-type** always asks in the HUD before typing, even with a single match, and names
+     the target **program** next to the window title, with a warning in web browsers (where
+     the title is the page's `<title>`, which any site chooses). Before every part it checks
+     the focused window is still the target and, before the password, that the focused field
+     **is a password field** (UI Automation) (`autotype`, `quick_search`).
    - Copied secrets are marked to stay out of clipboard history and the cloud clipboard, and the
-     clipboard clears itself after a configurable time (`clipboard`).
+     clipboard clears itself after a configurable time (`clipboard`), unless the app is closed
+     first.
 4. **Someone with the unlocked computer for a moment.** Idle lock, lock with Windows (Win+L,
    sleep), lock on minimize, and re-prompt (master password) for marked items before revealing,
    copying, editing, typing or exporting. Export always asks for the master password.
@@ -71,13 +85,37 @@ implements it.
   Manager: anyone logged in as the user — or malware running as them — opens the vault without
   the password until it expires. Off by default; discarded when the master password changes.
 - **Opening an attachment in another program** writes it decrypted to
-  `%TEMP%\ScoutVault-anexos\<random>\`; it is deleted when the vault locks or on the next start
-  after a crash, but the other program may keep its own copies (recent files, thumbnails).
+  `%TEMP%\ScoutVault-anexos\<random>\` (with Mark-of-the-Web); it is deleted when the vault locks
+  or on the next start after a crash, but the other program may keep its own copies (recent
+  files, thumbnails). Attachments whose name is a program, script, shortcut or macro document
+  are never opened (only "Save as"), and invisible direction characters are removed from names
+  (`attachments`): the name is chosen by whoever attached it.
 - **Exports** in plain JSON/CSV are unencrypted by design (with a warning); the password-protected
   JSON is the default.
-- **Same-user malware** can read the process memory while unlocked, inject keystrokes, or talk to
-  the pipes like a legitimate client (the browser bridge trusts the extension id the browser
-  vouches for; the SSH agent trusts the person's "Allow").
+- **Same-user malware** can read the process memory while unlocked, inject keystrokes (including
+  answering the SSH agent's or the auto-type HUD's prompt), or talk to the pipes like a
+  legitimate client: through the browser pipe it gets logins of any site it names, cards and
+  identities, at the rate limit above. The installed app and the unpacked extension live in
+  folders the user can write to, so such malware can also replace them. No desktop password
+  manager defends against this; we only make it slower and louder.
+- **Moved fields.** The Bitwarden format doesn't bind an encrypted value to its field: a
+  malicious server can swap values inside an item (for example, show the password as the
+  username) and, for items without their own key (items Scout Vault creates don't have one
+  yet), between items. It can't read them. Website icons are only asked for addresses with an
+  explicit `http(s)://`, so a moved secret isn't sent to the icon service.
+- **Key derivation has minimums but no maximum**: a malicious server (or an imported file) can
+  ask for very expensive parameters and make unlocking hang.
+- **Windows Hello unlock** uses a key in the TPM when the computer has one, but that isn't
+  checked; the Hello credential belongs to the Windows user.
+- **Not every decrypted value is wiped** on lock: secrets (`Secret`) are zeroed, but names,
+  usernames, addresses and other plain fields may stay in freed memory until reused.
+- **Credential Manager entries** (refresh token, quick unlock, Hello) use the default
+  persistence (they can roam with a roaming profile) and aren't removed by the uninstaller; an
+  expired quick-unlock key stays stored until the next unlock attempt.
+- **Browser extension**: a page can tell that Scout Vault is installed (the save bar), and
+  learns whether a password it submits is already saved (the bar doesn't show); a login saved
+  for `https://` is offered on `http://` pages of the same site; WebAuthn's `rpId` from the
+  server isn't checked against the vault's address.
 - The executable and installer aren't **Authenticode-signed** yet (SmartScreen warning, and a
   first install downloaded by hand has nothing but the `.sha256`/`.sig` to check). Whoever holds
   the release signing key (the GitHub secret and the owner's backup) can sign updates.

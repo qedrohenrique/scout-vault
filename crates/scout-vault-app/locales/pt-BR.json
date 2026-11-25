@@ -12,6 +12,7 @@
   "app.autotype_own_window": "Abra o app em que você quer entrar e aperte {hotkey} lá.",
   "app.autotype_reprompt": "Este item pede a senha do cofre. Confirme e ele será digitado.",
   "app.browser_disabled": "O preenchimento no navegador está desligado no Scout Vault.",
+  "app.browser_too_many": "Muitos pedidos de senhas pelo canal do navegador em pouco tempo. Recusei por um minuto. Se não foi você, bloqueie o cofre e verifique os programas abertos.",
   "app.hello_enabled": "Windows Hello ligado",
   "app.hello_next_unlock": "O Windows Hello será ativado na próxima vez que você desbloquear com a senha do cofre.",
   "app.hello_not_ready": "O Windows Hello não está pronto. Use a senha do cofre.",

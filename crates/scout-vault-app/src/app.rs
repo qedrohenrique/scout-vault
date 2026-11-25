@@ -91,6 +91,8 @@ pub struct ScoutVaultApp {
     pending_type_anyway: Option<(Item, Request)>,
     /// Browser login waiting for unlock to be saved (url, username, password).
     pending_browser_save: Option<(String, String, zeroize::Zeroizing<String>)>,
+    /// Rate limits on the browser pipe (see `browser::Limits`).
+    browser_limits: crate::browser::Limits,
     /// Typing waiting for the master password of an item that asks for it (request number).
     reprompt_autotype: Option<(u64, Item, Request)>,
     reprompt_counter: u64,
@@ -358,6 +360,7 @@ impl ScoutVaultApp {
             _ssh_task: ssh_task,
             _update_task: update_task,
             pending_browser_save: None,
+            browser_limits: Default::default(),
             reprompt_autotype: None,
             reprompt_counter: 0,
             hotkey: None,
@@ -1088,6 +1091,20 @@ impl ScoutVaultApp {
             return;
         }
         use crate::browser::Request as BrowserRequest;
+        // Anything running as this Windows user can talk to the pipe: too many requests
+        // for secrets in a minute are refused, and the person is told.
+        if let crate::browser::Verdict::Refuse { warn } = self
+            .browser_limits
+            .check(&incoming.request, std::time::Instant::now())
+        {
+            if warn {
+                crate::toast::error(t!("app.browser_too_many"), cx);
+            }
+            let _ = incoming
+                .reply
+                .send(serde_json::json!({ "error": t!("app.browser_too_many") }));
+            return;
+        }
         // Saving a login: the app decides and saves (or keeps it for after unlock).
         if let BrowserRequest::Save {
             url,
@@ -1128,9 +1145,8 @@ impl ScoutVaultApp {
                 crate::browser::handle(&incoming.request, None)
             }
         };
-        if matches!(incoming.request, crate::browser::Request::Fill { .. }) {
-            self.record_activity();
-        }
+        // A fill doesn't count as activity: a program asking through the pipe must not
+        // keep the vault from locking when the person walks away.
         let _ = incoming.reply.send(response);
     }
 
@@ -1171,7 +1187,7 @@ impl ScoutVaultApp {
                 )
             }
         };
-        self.record_activity();
+        // Not activity either: it comes through the pipe (see `handle_browser`).
         match view.update(cx, |v, cx| v.save_external(item, message, cx)) {
             Ok(()) => serde_json::json!({ "ok": true }),
             Err(e) => {
