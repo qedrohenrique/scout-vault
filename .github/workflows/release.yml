@@ -28,10 +28,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       # Notes first: if the tag doesn't match Cargo.toml or the CHANGELOG section
@@ -71,48 +71,75 @@ jobs:
           $name = "scout-vault-$version-setup.exe"
           $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
           "$hash *$name" | Out-File -Encoding ascii -NoNewline "dist\$name.sha256"
-      # Ed25519 signature of the installer and the zip (`.sig`): the in-app updater only
-      # runs an installer whose signature matches the public key built into the app.
-      # Without the secret the step fails, so nothing is published unsigned.
-      - name: Sign (Ed25519)
-        shell: bash
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: |
-          python -m pip install --disable-pip-version-check --quiet cryptography
-          python tools/sign_release.py dist
       # winget manifests (submitted by hand to microsoft/winget-pkgs), kept as a workflow artifact.
       - name: winget manifests
         shell: bash
         run: python tools/winget_manifest.py "${GITHUB_REF_NAME}" --out winget
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: winget
           path: winget/
           if-no-files-found: error
-      - uses: actions/upload-artifact@v7
+      # Unsigned: this job compiles third-party code, so it never sees the signing key.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
           path: |
             dist/*.zip
             dist/*.exe
             dist/*.sha256
-            dist/*.sig
             release-notes.md
+          if-no-files-found: error
+
+  sign:
+    name: Sign (Ed25519)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The key is a secret of the `release` environment (Settings → Environments: required
+    # reviewers, deployments only from `v*` tags). This job builds, caches and installs
+    # nothing: it takes the build's files, signs them with OpenSSL (tools/sign_release.sh)
+    # and hands back only the `.sig` files. The in-app updater runs only an installer whose
+    # `.release.sig` matches its name and version; without the key this job fails, so
+    # nothing is published unsigned.
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/sign_release.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+      - name: Sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: bash tools/sign_release.sh "${GITHUB_REF_NAME}" dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signatures
+          path: dist/*.sig
           if-no-files-found: error
 
   publish:
     name: Publish on GitHub
-    needs: build
+    needs: [build, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only this job writes to the repository (it creates the release).
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signatures
+          path: dist
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

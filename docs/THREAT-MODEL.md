@@ -46,9 +46,14 @@ implements it.
    ciphertext, except the items listed in *Residual risks* (quick unlock, attachment temp files).
 6. **A tampered update.** The updater only downloads from the project's own GitHub release URLs,
    checks the published SHA-256 and runs the installer only if its **Ed25519 signature** matches
-   the public key built into the app (`core::update::RELEASE_PUBLIC_KEY`). The private key is a
-   secret of the release workflow (`tools/sign_release.py`), so replacing files on the release
-   page isn't enough to push an update.
+   the public key built into the app (`core::update::RELEASE_PUBLIC_KEY`). The signature covers
+   the file's **name, version and SHA-256** (`core::update::release_message`), so an old signed
+   installer can't be offered as a newer version (no downgrade by editing a release), and from
+   1.0 on pre-releases are only offered to people already on one. The private key is a secret
+   of the `release` environment, used only by a separate workflow job that compiles and
+   installs nothing (`tools/sign_release.sh`); the build job never sees it. Replacing or
+   renaming files on the release page isn't enough to push an update. Apps up to 0.13 check an
+   older signature over the bytes only, so they stay open to such a downgrade until they update.
 
 ## Not in scope
 

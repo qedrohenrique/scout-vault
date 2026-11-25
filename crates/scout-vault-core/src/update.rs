@@ -5,11 +5,16 @@
 //! (`https://github.com/qedrohenrique/scout-vault/releases/download/…`), and nothing
 //! about the vault is sent: GitHub sees an ordinary request for the release list.
 //!
-//! Every installer also comes with a `.sig`: an **Ed25519 signature** made in the release
-//! workflow with a key kept as a GitHub secret. The app has the public key built in
-//! ([`RELEASE_PUBLIC_KEY`]) and runs nothing whose signature doesn't match — so someone
-//! who could replace the files on the release page still can't make the app install them.
+//! Every installer also comes with a `.release.sig`: an **Ed25519 signature** made in the
+//! release workflow with a key kept as a GitHub secret, over the file's **name, version and
+//! SHA-256** ([`release_message`]). The app has the public key built in
+//! ([`RELEASE_PUBLIC_KEY`]) and runs nothing whose signature doesn't match the release it is
+//! offered as — so someone who could edit the release page still can't make the app install
+//! other files, nor pass an old signed installer off as a new version (a downgrade).
 //! The SHA-256 next to it only catches broken downloads.
+//!
+//! (Releases also keep a plain `.sig` over the file's bytes, for apps up to 0.13 that only
+//! know that one. This version doesn't accept it.)
 
 use std::cmp::Ordering;
 use std::time::Duration;
@@ -104,8 +109,10 @@ pub struct Release {
     pub installer: Option<Asset>,
     /// `<sha256> *<file name>`, next to the installer.
     pub installer_sha256: Option<Asset>,
-    /// The installer's Ed25519 signature (base64), next to it.
+    /// Ed25519 signature (base64) of [`release_message`] for the installer, next to it.
     pub installer_sig: Option<Asset>,
+    /// GitHub marks it as a pre-release.
+    pub prerelease: bool,
 }
 
 fn download_prefix() -> String {
@@ -148,7 +155,8 @@ pub fn parse_releases(json: &str) -> Vec<Release> {
                 notes: r["body"].as_str().unwrap_or_default().to_owned(),
                 installer: find(&installer_name),
                 installer_sha256: find(&format!("{installer_name}.sha256")),
-                installer_sig: find(&format!("{installer_name}.sig")),
+                installer_sig: find(&format!("{installer_name}.release.sig")),
+                prerelease: r["prerelease"].as_bool().unwrap_or(false),
                 version,
             })
         })
@@ -156,10 +164,19 @@ pub fn parse_releases(json: &str) -> Vec<Release> {
 }
 
 /// The newest release above `current` (none if this is already the newest).
+///
+/// Test versions are only offered to people already on one: a `-suffix` version
+/// (`1.1.0-rc.1`) needs `current` to have a suffix too, and from 1.0 on a release GitHub
+/// marks as a pre-release isn't offered to a stable version. (Every 0.x is a pre-release,
+/// so 0.x apps still get them.)
 pub fn newer_than(releases: Vec<Release>, current: &Version) -> Option<Release> {
+    let on_test = current.pre.is_some();
+    let stable = current.parts[0] >= 1 && !on_test;
     releases
         .into_iter()
         .filter(|r| r.version > *current)
+        .filter(|r| r.version.pre.is_none() || on_test)
+        .filter(|r| !(stable && r.prerelease))
         .max_by(|a, b| a.version.cmp(&b.version))
 }
 
@@ -188,7 +205,31 @@ pub fn matches(bytes: &[u8], expected: &[u8; 32]) -> bool {
     Sha256::digest(bytes).as_slice() == expected
 }
 
-/// Is `signature` (a `.sig` file: base64 of 64 bytes) a valid Ed25519 signature of `bytes`
+/// What the release workflow signs for each file (`tools/sign_release.sh` builds the same
+/// bytes): the file's name, the release's version and the file's SHA-256, so a signature
+/// is only good for that file **as that version**.
+pub fn release_message(file: &str, version: &Version, sha256: &[u8; 32]) -> Vec<u8> {
+    let hex: String = sha256.iter().map(|b| format!("{b:02x}")).collect();
+    format!("scout-vault-release-v1\nfile={file}\nversion={version}\nsha256={hex}\n").into_bytes()
+}
+
+/// Is `signature` (a `.release.sig`) valid for `bytes` published as `file` of `version`?
+pub fn release_signature_ok(
+    file: &str,
+    version: &Version,
+    bytes: &[u8],
+    signature: &str,
+    public_key: &str,
+) -> bool {
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    signature_ok(
+        &release_message(file, version, &digest),
+        signature,
+        public_key,
+    )
+}
+
+/// Is `signature` (base64 of 64 bytes) a valid Ed25519 signature of `bytes`
 /// by `public_key` (base64 of 32 bytes)?
 pub fn signature_ok(bytes: &[u8], signature: &str, public_key: &str) -> bool {
     use base64::engine::general_purpose::STANDARD;
@@ -273,12 +314,13 @@ async fn fetch(url: &str, max: usize) -> Result<Vec<u8>, UpdateError> {
 }
 
 /// Downloads the release's installer and checks it against its `.sha256` and its
-/// Ed25519 signature ([`RELEASE_PUBLIC_KEY`]).
+/// Ed25519 signature ([`RELEASE_PUBLIC_KEY`]) for this file name **and this version**.
 pub async fn download_installer(release: &Release) -> Result<(String, Vec<u8>), UpdateError> {
     let (Some(installer), Some(sum)) = (&release.installer, &release.installer_sha256) else {
         return Err(UpdateError::NoInstaller);
     };
-    // No signature, no update (releases from before signing existed).
+    // No signature, no update (releases from before signing existed, or before the
+    // signature covered the version).
     let Some(sig) = &release.installer_sig else {
         return Err(UpdateError::Signature);
     };
@@ -290,7 +332,9 @@ pub async fn download_installer(release: &Release) -> Result<(String, Vec<u8>), 
     if !matches(&bytes, &expected) {
         return Err(UpdateError::Checksum);
     }
-    if !signature_ok(
+    if !release_signature_ok(
+        &installer.name,
+        &release.version,
         &bytes,
         &String::from_utf8_lossy(&sig_text),
         RELEASE_PUBLIC_KEY,
@@ -330,8 +374,8 @@ mod tests {
           "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe"},
          {"name":"scout-vault-0.11.4-setup.exe.sha256","size":94,
           "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe.sha256"},
-         {"name":"scout-vault-0.11.4-setup.exe.sig","size":89,
-          "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe.sig"}]},
+         {"name":"scout-vault-0.11.4-setup.exe.release.sig","size":89,
+          "browser_download_url":"https://github.com/qedrohenrique/scout-vault/releases/download/v0.11.4/scout-vault-0.11.4-setup.exe.release.sig"}]},
       {"tag_name":"v0.11.3","draft":false,"html_url":"y",
        "assets":[{"name":"scout-vault-0.11.3-setup.exe","size":1,
           "browser_download_url":"https://evil.example/scout-vault-0.11.3-setup.exe"}]},
@@ -386,6 +430,100 @@ mod tests {
         // The built-in key is a valid Ed25519 public key.
         let built_in = STANDARD.decode(RELEASE_PUBLIC_KEY).unwrap();
         assert!(ed25519_dalek::VerifyingKey::from_bytes(&built_in.try_into().unwrap()).is_ok());
+    }
+
+    /// Made by `tools/sign_release.sh v1.2.3` with the test seed `[7; 32]` over a file
+    /// `scout-vault-1.2.3-setup.exe` containing `installer bytes`: the script and the app
+    /// build the same message.
+    const SCRIPT_RELEASE_SIG: &str =
+        "lrBxIYsG23mDtGbadiPB6f43ThU9c799UixGzeOvzDlzBTBFXjZBU3Z4BAIm/6CTk1qb9zRf6L4X7OJVEIVoDA==";
+    const SCRIPT_LEGACY_SIG: &str =
+        "tTK2vRIfmPWVf1Gk/Sy6at+EdxoByDxMpXA5uItYbTSN0rCLatEX80n/lw/DCeXTwMvpwD0LI/C5nEcODhOPBQ==";
+
+    #[test]
+    fn release_signatures_cover_name_and_version() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        let public = STANDARD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let bytes = b"installer bytes";
+        let name = "scout-vault-1.2.3-setup.exe";
+        assert!(release_signature_ok(
+            name,
+            &v("1.2.3"),
+            bytes,
+            SCRIPT_RELEASE_SIG,
+            &public
+        ));
+        // The plain `.sig` (for apps up to 0.13) still signs the bytes.
+        assert!(signature_ok(bytes, SCRIPT_LEGACY_SIG, &public));
+        // Downgrade: the same signed file offered as another version, or renamed.
+        assert!(!release_signature_ok(
+            name,
+            &v("9.9.9"),
+            bytes,
+            SCRIPT_RELEASE_SIG,
+            &public
+        ));
+        assert!(!release_signature_ok(
+            "scout-vault-9.9.9-setup.exe",
+            &v("1.2.3"),
+            bytes,
+            SCRIPT_RELEASE_SIG,
+            &public
+        ));
+        // Other bytes, or the old kind of signature where the new one is expected: no.
+        assert!(!release_signature_ok(
+            name,
+            &v("1.2.3"),
+            b"other",
+            SCRIPT_RELEASE_SIG,
+            &public
+        ));
+        assert!(!release_signature_ok(
+            name,
+            &v("1.2.3"),
+            bytes,
+            SCRIPT_LEGACY_SIG,
+            &public
+        ));
+    }
+
+    #[test]
+    fn test_versions_are_only_offered_to_testers() {
+        let release = |version: &str, prerelease: bool| Release {
+            version: v(version),
+            page: String::new(),
+            notes: String::new(),
+            installer: None,
+            installer_sha256: None,
+            installer_sig: None,
+            prerelease,
+        };
+        let list = vec![
+            release("1.0.0", false),
+            release("1.1.0-rc.1", true),
+            release("1.2.0", true),
+        ];
+        // A stable 1.x skips pre-releases and `-rc` versions.
+        assert_eq!(newer_than(list.clone(), &v("1.0.0")), None);
+        // On a test version, they're offered.
+        assert_eq!(
+            newer_than(list.clone(), &v("1.0.1-rc.1")).map(|r| r.version),
+            Some(v("1.2.0"))
+        );
+        // 0.x: every release is a pre-release on GitHub; still offered (not `-rc`).
+        assert_eq!(
+            newer_than(list, &v("0.13.0")).map(|r| r.version),
+            Some(v("1.2.0"))
+        );
+        // The release list says whether GitHub marks it as a pre-release.
+        assert!(parse_releases(RELEASES)
+            .iter()
+            .any(|r| r.version == v("0.11.4") && r.prerelease));
     }
 
     #[test]

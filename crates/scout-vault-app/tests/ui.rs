@@ -1954,6 +1954,7 @@ fn a_new_version_shows_in_the_title_bar_and_in_about(cx: &mut TestAppContext) {
         installer: None,
         installer_sha256: None,
         installer_sig: None,
+        prerelease: false,
     };
     cx.update(|cx| updater::set_state(State::Available(Box::new(release)), cx));
     cx.update(|cx| assert_eq!(updater::available(cx).unwrap().to_string(), "99.0.0"));

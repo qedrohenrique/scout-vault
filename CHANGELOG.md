@@ -5,6 +5,19 @@ Every change that matters to Scout Vault users. The format follows
 [Semantic Versioning](https://semver.org/). Downloads are on the
 [GitHub Releases](https://github.com/qedrohenrique/scout-vault/releases) page.
 
+## [Unreleased]
+
+### Security
+- **Updates can't be downgraded**: the release signature (`.release.sig`) now covers the file's
+  name, version and SHA-256, and the updater only installs a file whose signature matches the
+  version it is offered as. Someone who can edit the release page can no longer pass an old
+  signed installer off as a new version. (The plain `.sig` is still published for apps up to 0.13.)
+- From 1.0 on, the updater only offers pre-releases (`-rc` versions) to people already on one.
+- The release signing key is used only by a separate workflow job, in a protected `release`
+  environment, that compiles and installs nothing; the build job no longer sees it. All GitHub
+  Actions are pinned to commit SHAs.
+- `url` updated to 2.5.9 (RUSTSEC-2026-0592).
+
 ## [0.13.0] - 2026-11-21
 
 ### Security
